@@ -1,0 +1,283 @@
+'use client';
+import { useState, useEffect } from 'react';
+import { createClient } from '@/lib/supabase';
+
+// === INSUMOS (Inventário) ===
+export type StockStatus = 'ok' | 'acabando' | 'zerado';
+
+export interface InventoryItem {
+  id: string;
+  name: string;
+  category: string;
+  unit: string;
+  costPerUnit: number;
+  currentStock: number;
+  status: StockStatus;
+}
+
+// === PRODUTOS (Lanches/Combos) ===
+export interface RecipeIngredient {
+  ingredientId: string;
+  quantity: number;
+}
+
+export interface Product {
+  id: string;
+  name: string;
+  category: 'lanche' | 'bebida' | 'porcao' | 'combo';
+  priceBalcao: number;
+  priceIfood: number;
+  recipe: RecipeIngredient[];
+}
+
+// === VENDAS ===
+export interface SaleItem {
+  productId: string;
+  productName: string;
+  quantity: number;
+  unitPrice: number;
+}
+
+export interface Sale {
+  id: string;
+  channel: 'balcao' | 'ifood';
+  total: number;
+  paymentMethod: string;
+  items: SaleItem[];
+  date: string;
+  status: 'completed' | 'cancelled';
+}
+
+export interface CashMovement {
+  id: string;
+  type: 'sangria' | 'suprimento';
+  amount: number;
+  description: string;
+  date: string;
+}
+
+export function useInventory() {
+  const [items, setItems] = useState<InventoryItem[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
+  const [isLoaded, setIsLoaded] = useState(false);
+  
+  // Caixa State
+  const [isOpen, setIsOpen] = useState(false);
+  const [sales, setSales] = useState<Sale[]>([]);
+  const [movements, setMovements] = useState<CashMovement[]>([]);
+
+  const supabase = createClient();
+
+  useEffect(() => {
+    const loadData = async () => {
+      // 1. Fetch Inventory
+      const { data: invData } = await supabase.from('inventory').select('*');
+      if (invData) {
+        setItems(invData.map(i => ({
+          id: i.id, name: i.name, category: i.category, unit: i.unit, 
+          costPerUnit: i.cost_per_unit, currentStock: i.current_stock, status: i.status
+        })));
+      }
+
+      // 2. Fetch Products & Recipes
+      const { data: prodData } = await supabase.from('products').select('*');
+      const { data: recData } = await supabase.from('recipes').select('*');
+      
+      if (prodData) {
+        setProducts(prodData.map(p => ({
+          id: p.id, name: p.name, category: p.category, 
+          priceBalcao: p.price_balcao, priceIfood: p.price_ifood,
+          recipe: (recData || []).filter(r => r.product_id === p.id).map(r => ({
+            ingredientId: r.ingredient_id,
+            quantity: r.quantity
+          }))
+        })));
+      }
+
+      // 3. Fetch Sales
+      const { data: salesData } = await supabase.from('sales').select('*').order('created_at', { ascending: false });
+      const { data: saleItemsData } = await supabase.from('sale_items').select('*');
+      
+      if (salesData) {
+        setSales(salesData.map(s => ({
+          id: s.id, channel: s.channel, total: s.total, paymentMethod: s.payment_method, 
+          date: s.created_at, status: s.status,
+          items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
+            productId: i.product_id, productName: i.product_name, quantity: i.quantity, unitPrice: i.unit_price
+          }))
+        })));
+      }
+
+      // Caixa Status (still local storage since it's device specific usually, or we could use a DB table)
+      const storedCaixa = localStorage.getItem('hum_vicio_caixa_status_v2');
+      if (storedCaixa) setIsOpen(JSON.parse(storedCaixa));
+
+      setIsLoaded(true);
+    };
+
+    loadData();
+  }, []);
+
+  // --- INSUMOS ACTIONS ---
+  const addInventoryItem = async (item: Omit<InventoryItem, 'id'>) => {
+    const { data, error } = await supabase.from('inventory').insert({
+      name: item.name, category: item.category, unit: item.unit, 
+      cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status
+    }).select().single();
+    if (data) setItems([...items, { ...item, id: data.id }]);
+  };
+  
+  const updateInventoryItem = async (id: string, updates: Partial<InventoryItem>) => {
+    const dbUpdates: any = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.category !== undefined) dbUpdates.category = updates.category;
+    if (updates.unit !== undefined) dbUpdates.unit = updates.unit;
+    if (updates.costPerUnit !== undefined) dbUpdates.cost_per_unit = updates.costPerUnit;
+    if (updates.currentStock !== undefined) dbUpdates.current_stock = updates.currentStock;
+    if (updates.status !== undefined) dbUpdates.status = updates.status;
+
+    await supabase.from('inventory').update(dbUpdates).eq('id', id);
+    setItems(items.map(i => i.id === id ? { ...i, ...updates } : i));
+  };
+
+  const removeInventoryItem = async (id: string) => {
+    await supabase.from('inventory').delete().eq('id', id);
+    setItems(items.filter(i => i.id !== id));
+  };
+
+  const updateStatus = async (id: string, newStatus: StockStatus, remainingQuantity?: number) => {
+    const updates: Partial<InventoryItem> = { status: newStatus };
+    if (remainingQuantity !== undefined) updates.currentStock = remainingQuantity;
+    await updateInventoryItem(id, updates);
+  };
+
+  const registerPurchase = async (id: string, quantity: number, newCost: number) => {
+    const item = items.find(i => i.id === id);
+    if(item) {
+      await updateInventoryItem(id, { currentStock: item.currentStock + quantity, costPerUnit: newCost, status: 'ok' });
+    }
+  };
+
+  // --- PRODUTOS ACTIONS ---
+  const addProduct = async (prod: Omit<Product, 'id'>) => {
+    const { data: pData } = await supabase.from('products').insert({
+      name: prod.name, category: prod.category, price_balcao: prod.priceBalcao, price_ifood: prod.priceIfood
+    }).select().single();
+    
+    if (pData) {
+      if (prod.recipe && prod.recipe.length > 0) {
+        const recipeInserts = prod.recipe.map(r => ({
+          product_id: pData.id, ingredient_id: r.ingredientId, quantity: r.quantity
+        }));
+        await supabase.from('recipes').insert(recipeInserts);
+      }
+      setProducts([...products, { ...prod, id: pData.id }]);
+    }
+  };
+
+  const updateProduct = async (id: string, updates: Partial<Product>) => {
+    // Update product table
+    await supabase.from('products').update({
+      name: updates.name, category: updates.category, 
+      price_balcao: updates.priceBalcao, price_ifood: updates.priceIfood
+    }).eq('id', id);
+
+    // Update recipe (delete old, insert new)
+    if (updates.recipe) {
+      await supabase.from('recipes').delete().eq('product_id', id);
+      if (updates.recipe.length > 0) {
+        const recipeInserts = updates.recipe.map(r => ({
+          product_id: id, ingredient_id: r.ingredientId, quantity: r.quantity
+        }));
+        await supabase.from('recipes').insert(recipeInserts);
+      }
+    }
+
+    setProducts(products.map(p => p.id === id ? { ...p, ...updates } : p));
+  };
+
+  const removeProduct = async (id: string) => {
+    await supabase.from('products').delete().eq('id', id);
+    setProducts(products.filter(p => p.id !== id));
+  };
+
+  const getProductCmv = (recipe: RecipeIngredient[]) => {
+    return recipe.reduce((total, recipeItem) => {
+      const ing = items.find(i => i.id === recipeItem.ingredientId);
+      if (ing) return total + (ing.costPerUnit * recipeItem.quantity);
+      return total;
+    }, 0);
+  };
+
+  // --- CAIXA ACTIONS ---
+  const toggleCaixa = (status: boolean) => {
+    setIsOpen(status);
+    localStorage.setItem('hum_vicio_caixa_status_v2', JSON.stringify(status));
+  };
+
+  const addSale = async (sale: Omit<Sale, 'id' | 'date' | 'status'>) => {
+    const { data: sData } = await supabase.from('sales').insert({
+      channel: sale.channel, total: sale.total, payment_method: sale.paymentMethod
+    }).select().single();
+
+    if (sData) {
+      if (sale.items && sale.items.length > 0) {
+        const saleItems = sale.items.map(i => ({
+          sale_id: sData.id, product_id: i.productId, product_name: i.productName,
+          quantity: i.quantity, unit_price: i.unitPrice
+        }));
+        await supabase.from('sale_items').insert(saleItems);
+        
+        // Simular o trigger localmente para refletir na UI imediatamente
+        // O trigger no DB já fará isso no backend.
+        const newItems = [...items];
+        sale.items.forEach(si => {
+          const prod = products.find(p => p.id === si.productId);
+          if (prod) {
+            prod.recipe.forEach(r => {
+              const invIdx = newItems.findIndex(inv => inv.id === r.ingredientId);
+              if (invIdx > -1) {
+                newItems[invIdx] = { ...newItems[invIdx], currentStock: newItems[invIdx].currentStock - (r.quantity * si.quantity) };
+              }
+            });
+          }
+        });
+        setItems(newItems);
+      }
+      
+      const newSaleLocal: Sale = {
+        ...sale,
+        id: sData.id,
+        date: sData.created_at,
+        status: 'completed'
+      };
+      setSales([newSaleLocal, ...sales]);
+    }
+  };
+
+  const cancelSale = async (id: string) => {
+    await supabase.from('sales').update({ status: 'cancelled' }).eq('id', id);
+    setSales(sales.map(s => s.id === id ? { ...s, status: 'cancelled' } : s));
+  };
+
+  const addMovement = (mov: Omit<CashMovement, 'id' | 'date'>) => {
+    // Para simplificar, movimentos de caixa mantive em localstorage por agora
+    // (idealmente criaria uma tabela 'cash_movements')
+    const newMov: CashMovement = {
+      ...mov,
+      id: Math.random().toString(36).substr(2, 9),
+      date: new Date().toISOString()
+    };
+    const newMovs = [newMov, ...movements];
+    setMovements(newMovs);
+    localStorage.setItem('hum_vicio_movements_v2', JSON.stringify(newMovs));
+  };
+
+  return { 
+    items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
+    products, addProduct, updateProduct, removeProduct, getProductCmv,
+    isLoaded, isOpen, toggleCaixa,
+    sales, addSale, cancelSale,
+    movements, addMovement
+  };
+}
