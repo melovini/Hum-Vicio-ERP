@@ -120,11 +120,22 @@ export function useInventory() {
 
   // --- INSUMOS ACTIONS ---
   const addInventoryItem = async (item: Omit<InventoryItem, 'id'>) => {
-    const { data, error } = await supabase.from('inventory').insert({
-      name: item.name, category: item.category, unit: item.unit, 
-      cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status
-    }).select().single();
-    if (data) setItems([...items, { ...item, id: data.id }]);
+    try {
+      const { data, error } = await supabase.from('inventory').insert({
+        name: item.name, category: item.category, unit: item.unit, 
+        cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status
+      }).select().single();
+      
+      if (error) {
+        console.error('Erro detalhado do Supabase:', error);
+        alert(`Erro ao salvar no banco: ${error.message}`);
+        return;
+      }
+      
+      if (data) setItems([...items, { ...item, id: data.id }]);
+    } catch (err: any) {
+      alert(`Erro inesperado: ${err.message}`);
+    }
   };
   
   const updateInventoryItem = async (id: string, updates: Partial<InventoryItem>) => {
