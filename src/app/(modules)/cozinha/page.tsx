@@ -10,7 +10,9 @@ export default function CozinhaPage() {
 
   // Agrupar itens por categoria
   const groupedItems = items.reduce((acc, item) => {
-    const cat = item.category || 'Geral';
+    let rawCat = (item.category || 'Geral').trim().toLowerCase();
+    const cat = rawCat.charAt(0).toUpperCase() + rawCat.slice(1);
+    
     if (!acc[cat]) acc[cat] = [];
     acc[cat].push(item);
     return acc;

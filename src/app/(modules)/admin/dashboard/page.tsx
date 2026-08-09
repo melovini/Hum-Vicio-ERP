@@ -17,10 +17,23 @@ export default function DashboardPage() {
 
   // Despesas Fixas Mockadas (Aluguel, Folha, Impostos)
   const fixedExpenses = 4500;
-  // Custo Variável Estimado (Mockado 35% do faturamento para exemplo do DRE)
-  const variableCost = totalRevenue * 0.35;
   
-  const netProfit = totalRevenue - fixedExpenses - variableCost;
+  // Cálculo exato de Taxas (Cartões / iFood)
+  const totalFees = validSales.reduce((acc, sale) => {
+    let feeRate = 0;
+    if (sale.channel === 'ifood') {
+      feeRate = 0.30; // 30% para iFood independente do meio de pagamento
+    } else {
+      if (sale.paymentMethod === 'credito') feeRate = 0.03;
+      else if (sale.paymentMethod === 'debito' || sale.paymentMethod === 'pix') feeRate = 0.01;
+    }
+    return acc + (sale.total * feeRate);
+  }, 0);
+
+  // Custo de Mercadoria Vendida (CMV) - Estimado 35% para exemplo
+  const estimatedCmv = totalRevenue * 0.35;
+  
+  const netProfit = totalRevenue - fixedExpenses - totalFees - estimatedCmv;
 
   return (
     <div className="min-h-screen relative p-4 md:p-8 overflow-hidden">
@@ -85,13 +98,18 @@ export default function DashboardPage() {
             </div>
             
             <div className="flex justify-between p-4 border-b border-slate-800/50">
-              <span className="text-slate-400 pl-4">(-) Custo Variável Estimado (CMV + Taxas)</span>
-              <span className="font-mono text-red-400">- R$ {variableCost.toFixed(2)}</span>
+              <span className="text-slate-400 pl-4">(-) CMV (Custo de Mercadoria) - Estimado</span>
+              <span className="font-mono text-red-400">- R$ {estimatedCmv.toFixed(2)}</span>
+            </div>
+
+            <div className="flex justify-between p-4 border-b border-slate-800/50">
+              <span className="text-slate-400 pl-4">(-) Taxas (iFood 30% / Crédito 3% / Pix-Déb 1%)</span>
+              <span className="font-mono text-red-400">- R$ {totalFees.toFixed(2)}</span>
             </div>
             
             <div className="flex justify-between p-4 bg-slate-900/50 rounded-xl">
               <span className="font-bold text-slate-300">(=) Margem de Contribuição</span>
-              <span className="font-mono text-blue-400">R$ {(totalRevenue - variableCost).toFixed(2)}</span>
+              <span className="font-mono text-blue-400">R$ {(totalRevenue - estimatedCmv - totalFees).toFixed(2)}</span>
             </div>
 
             <div className="flex justify-between p-4 border-b border-slate-800/50">

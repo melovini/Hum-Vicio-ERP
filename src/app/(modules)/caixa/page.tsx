@@ -191,16 +191,11 @@ export default function CaixaPage() {
                       
                       <div className="grid grid-cols-2 gap-4">
                         <select value={saleMethod} onChange={e => setSaleMethod(e.target.value)} className="w-full bg-slate-950/50 border border-slate-700/50 rounded-2xl p-4 text-slate-200 outline-none focus:border-emerald-500 appearance-none">
-                          {saleChannel === 'ifood' ? (
-                            <option value="ifood_online">iFood Online</option>
-                          ) : (
-                            <>
-                              <option value="credito">Crédito</option>
-                              <option value="debito">Débito</option>
-                              <option value="pix">Pix</option>
-                              <option value="dinheiro">Dinheiro</option>
-                            </>
-                          )}
+                          <option value="credito">Cartão de Crédito</option>
+                          <option value="debito">Cartão de Débito</option>
+                          <option value="pix">Pix</option>
+                          <option value="dinheiro">Dinheiro</option>
+                          <option value="ifood_online">iFood Online (Já pago no App)</option>
                         </select>
                         <button onClick={handleCheckout} disabled={cart.length === 0} className={`w-full py-4 rounded-2xl font-bold shadow-[0_0_20px_rgba(16,185,129,0.2)] transition-all flex justify-center items-center gap-2 ${cart.length === 0 ? 'bg-slate-800 text-slate-500 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500 text-white'}`}>
                           <Send size={20} /> Finalizar
