@@ -76,6 +76,7 @@ const defaultChecklistTasks: ChecklistTask[] = [
   { id: '2', label: 'Verificar os pães e a integridade deles', checked: false },
   { id: '3', label: 'Verificar a quantidade de carne', checked: false },
   { id: '4', label: 'Verificar a lista de compras', checked: false },
+  { id: '5', label: 'Verificar o freezer de verduras e queijos', checked: false },
 ];
 
 export function useInventory() {
