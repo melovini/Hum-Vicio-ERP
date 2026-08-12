@@ -56,6 +56,28 @@ export interface CashMovement {
   date: string;
 }
 
+// === CHECKLIST DE COZINHA ===
+export interface ChecklistTask {
+  id: string;
+  label: string;
+  checked: boolean;
+  checkedBy?: string;
+}
+
+export interface DailyChecklist {
+  id: string;
+  date: string;
+  tasks: ChecklistTask[];
+  signedBy?: string;
+}
+
+const defaultChecklistTasks: ChecklistTask[] = [
+  { id: '1', label: 'Verificar o conteúdo do freezer e geladeiras e ver o que será necessário', checked: false },
+  { id: '2', label: 'Verificar os pães e a integridade deles', checked: false },
+  { id: '3', label: 'Verificar a quantidade de carne', checked: false },
+  { id: '4', label: 'Verificar a lista de compras', checked: false },
+];
+
 export function useInventory() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -65,6 +87,9 @@ export function useInventory() {
   const [isOpen, setIsOpen] = useState(false);
   const [sales, setSales] = useState<Sale[]>([]);
   const [movements, setMovements] = useState<CashMovement[]>([]);
+
+  // Checklist State
+  const [checklist, setChecklist] = useState<DailyChecklist | null>(null);
 
   const supabase = createClient();
 
@@ -111,6 +136,24 @@ export function useInventory() {
       // Caixa Status (still local storage since it's device specific usually, or we could use a DB table)
       const storedCaixa = localStorage.getItem('hum_vicio_caixa_status_v2');
       if (storedCaixa) setIsOpen(JSON.parse(storedCaixa));
+
+      // 4. Fetch Daily Checklist
+      const today = new Date().toLocaleDateString('en-CA'); // format YYYY-MM-DD
+      const { data: checkData } = await supabase.from('kitchen_checklists').select('*').eq('date', today).maybeSingle();
+      if (checkData) {
+        setChecklist({
+          id: checkData.id,
+          date: checkData.date,
+          tasks: checkData.tasks,
+          signedBy: checkData.signed_by
+        });
+      } else {
+        setChecklist({
+          id: '',
+          date: today,
+          tasks: defaultChecklistTasks
+        });
+      }
 
       setIsLoaded(true);
     };
@@ -284,11 +327,45 @@ export function useInventory() {
     localStorage.setItem('hum_vicio_movements_v2', JSON.stringify(newMovs));
   };
 
+  // --- CHECKLIST ACTIONS ---
+  const toggleChecklistTask = async (taskId: string, personName: string) => {
+    if (!checklist) return;
+    
+    const updatedTasks = checklist.tasks.map(t => 
+      t.id === taskId 
+        ? { ...t, checked: !t.checked, checkedBy: !t.checked ? personName : undefined } 
+        : t
+    );
+    
+    const newChecklist = { ...checklist, tasks: updatedTasks };
+    setChecklist(newChecklist);
+
+    if (checklist.id === '') {
+      const { data, error } = await supabase.from('kitchen_checklists').insert({
+        date: checklist.date,
+        tasks: updatedTasks
+      }).select().single();
+      
+      if (data) setChecklist({ ...newChecklist, id: data.id });
+      if (error) console.error(error);
+    } else {
+      await supabase.from('kitchen_checklists').update({ tasks: updatedTasks }).eq('id', checklist.id);
+    }
+  };
+
+  const signChecklist = async (personName: string) => {
+    if (!checklist || checklist.id === '') return;
+    const newChecklist = { ...checklist, signedBy: personName };
+    setChecklist(newChecklist);
+    await supabase.from('kitchen_checklists').update({ signed_by: personName }).eq('id', checklist.id);
+  };
+
   return { 
     items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
     products, addProduct, updateProduct, removeProduct, getProductCmv,
     isLoaded, isOpen, toggleCaixa,
     sales, addSale, cancelSale,
-    movements, addMovement
+    movements, addMovement,
+    checklist, toggleChecklistTask, signChecklist
   };
 }

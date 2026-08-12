@@ -4,7 +4,7 @@ import { ChefHat, AlertTriangle, CheckCircle, ArrowLeft } from 'lucide-react';
 import Link from 'next/link';
 
 export default function CozinhaPage() {
-  const { items, updateStatus, isLoaded } = useInventory();
+  const { items, updateStatus, isLoaded, checklist, toggleChecklistTask, signChecklist } = useInventory();
 
   if (!isLoaded) return null;
 
@@ -90,6 +90,85 @@ export default function CozinhaPage() {
             </div>
           </div>
         ))}
+
+        {/* --- CHECKLIST DIÁRIO --- */}
+        <div className="mt-16 border-t-2 border-slate-800 pt-12 mb-20">
+          <h2 className="text-3xl font-bold text-white mb-2 flex items-center gap-3">
+            <CheckCircle className="text-emerald-500" /> Checklist de Encerramento
+          </h2>
+          <p className="text-slate-400 mb-8">Marque as tarefas verificadas ao final do expediente. Este documento ficará salvo por 15 dias.</p>
+          
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8">
+            <div className="flex justify-between items-center mb-6 pb-6 border-b border-slate-800">
+              <span className="text-lg font-bold text-slate-300">
+                Data Referência: {checklist?.date ? new Date(checklist.date + 'T00:00:00').toLocaleDateString('pt-BR') : 'Hoje'}
+              </span>
+              {checklist?.signedBy && (
+                <div className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-xl font-bold text-sm">
+                  Encerrado por: {checklist.signedBy}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-4">
+              {checklist?.tasks.map(task => (
+                <div key={task.id} className={`flex items-start md:items-center justify-between gap-4 p-5 rounded-2xl border transition-all ${
+                  task.checked ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-950/50 border-slate-800'
+                }`}>
+                  <div className="flex items-start md:items-center gap-4 flex-1">
+                    <button 
+                      disabled={!!checklist.signedBy}
+                      onClick={() => {
+                        if (!task.checked) {
+                          const name = prompt('Qual o seu nome para confirmar esta verificação?');
+                          if (name?.trim()) toggleChecklistTask(task.id, name.trim());
+                        } else {
+                          // Uncheck (apenas se não estiver assinado)
+                          toggleChecklistTask(task.id, '');
+                        }
+                      }}
+                      className={`mt-1 md:mt-0 flex-shrink-0 w-8 h-8 rounded-lg border-2 flex items-center justify-center transition-all ${
+                        task.checked 
+                          ? 'bg-emerald-500 border-emerald-500 text-white' 
+                          : 'border-slate-600 text-transparent hover:border-emerald-500'
+                      } ${checklist.signedBy ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
+                    >
+                      <CheckCircle size={20} />
+                    </button>
+                    <div>
+                      <p className={`font-bold text-lg ${task.checked ? 'text-slate-300' : 'text-slate-200'}`}>{task.label}</p>
+                      {task.checked && (
+                        <p className="text-sm text-emerald-500 mt-1">Verificado por: {task.checkedBy}</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-8 pt-8 border-t border-slate-800 flex justify-end">
+              {!checklist?.signedBy ? (
+                <button
+                  onClick={() => {
+                    const allChecked = checklist?.tasks.every(t => t.checked);
+                    if (!allChecked) {
+                      alert('Atenção: Nem todas as tarefas foram verificadas ainda!');
+                    }
+                    const name = prompt('Assinatura do Responsável do Dia (Seu Nome):');
+                    if (name?.trim()) signChecklist(name.trim());
+                  }}
+                  className="px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold text-lg shadow-[0_0_20px_rgba(16,185,129,0.2)] transition-all flex items-center gap-3"
+                >
+                  <CheckCircle size={24} /> Assinar e Encerrar Dia
+                </button>
+              ) : (
+                <div className="px-8 py-4 bg-slate-800 text-slate-400 rounded-2xl font-bold text-lg flex items-center gap-3 cursor-not-allowed">
+                  <CheckCircle size={24} /> Dia Encerrado Oficialmente
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
