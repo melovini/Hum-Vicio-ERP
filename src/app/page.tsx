@@ -101,6 +101,9 @@ export default function Home() {
                 <Link href="/admin/simulador" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
                   <ChevronRight size={16} /> Simulador de Combos
                 </Link>
+                <Link href="/admin/checklists" className="text-emerald-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
+                  <ChevronRight size={16} /> Relatórios de Checklists
+                </Link>
               </div>
             </div>
           </div>

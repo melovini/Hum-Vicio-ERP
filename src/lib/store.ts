@@ -90,6 +90,7 @@ export function useInventory() {
 
   // Checklist State
   const [checklist, setChecklist] = useState<DailyChecklist | null>(null);
+  const [allChecklists, setAllChecklists] = useState<DailyChecklist[]>([]);
 
   const supabase = createClient();
 
@@ -137,22 +138,28 @@ export function useInventory() {
       const storedCaixa = localStorage.getItem('hum_vicio_caixa_status_v2');
       if (storedCaixa) setIsOpen(JSON.parse(storedCaixa));
 
-      // 4. Fetch Daily Checklist
+      // 4. Fetch Daily Checklist & All Checklists
       const today = new Date().toLocaleDateString('en-CA'); // format YYYY-MM-DD
-      const { data: checkData } = await supabase.from('kitchen_checklists').select('*').eq('date', today).maybeSingle();
-      if (checkData) {
-        setChecklist({
-          id: checkData.id,
-          date: checkData.date,
-          tasks: checkData.tasks,
-          signedBy: checkData.signed_by
-        });
+      
+      const { data: allChecks } = await supabase.from('kitchen_checklists').select('*').order('date', { ascending: false });
+      
+      if (allChecks) {
+        const mappedChecks = allChecks.map(c => ({
+          id: c.id,
+          date: c.date,
+          tasks: c.tasks,
+          signedBy: c.signed_by
+        }));
+        setAllChecklists(mappedChecks);
+        
+        const todayCheck = mappedChecks.find(c => c.date === today);
+        if (todayCheck) {
+          setChecklist(todayCheck);
+        } else {
+          setChecklist({ id: '', date: today, tasks: defaultChecklistTasks });
+        }
       } else {
-        setChecklist({
-          id: '',
-          date: today,
-          tasks: defaultChecklistTasks
-        });
+        setChecklist({ id: '', date: today, tasks: defaultChecklistTasks });
       }
 
       setIsLoaded(true);
@@ -366,6 +373,6 @@ export function useInventory() {
     isLoaded, isOpen, toggleCaixa,
     sales, addSale, cancelSale,
     movements, addMovement,
-    checklist, toggleChecklistTask, signChecklist
+    checklist, toggleChecklistTask, signChecklist, allChecklists
   };
 }
