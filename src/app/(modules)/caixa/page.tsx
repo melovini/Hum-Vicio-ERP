@@ -1,11 +1,12 @@
 'use client';
 import { useState, useMemo } from 'react';
-import { useInventory, Product, SaleItem, Sale } from '@/lib/store';
+import { useInventory, Product, SaleItem, Sale, ProductionStatus } from '@/lib/store';
 import { 
   MonitorDot, ArrowLeft, Lock, Unlock, DollarSign, History, 
   Send, XCircle, ShoppingCart as CartIcon, Plus, Minus, Trash2, 
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
-  Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed
+  Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed,
+  Clock, Play, Pause, AlertOctagon
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -14,10 +15,12 @@ export default function CaixaPage() {
   const { 
     products, items, isOpen, activeCashSession, 
     openCaixa, closeCaixa, sales, addSale, cancelSale, 
-    movements, addMovement 
+    movements, addMovement,
+    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus 
   } = useInventory();
 
-  const [activeTab, setActiveTab] = useState<'pdv' | 'historico' | 'sangria'>('pdv');
+  const [activeTab, setActiveTab] = useState<'pdv' | 'producao' | 'historico' | 'sangria'>('pdv');
+  const [productionFilter, setProductionFilter] = useState<'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido'>('todos');
   
   // Modais de Abertura e Fechamento
   const [showOpenModal, setShowOpenModal] = useState(false);
@@ -39,6 +42,7 @@ export default function CaixaPage() {
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [saleChannel, setSaleChannel] = useState<'balcao' | 'ifood'>('balcao');
   const [saleMethod, setSaleMethod] = useState('credito');
+  const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_producao');
 
   // Customizer Modal do Hambúrguer
   const [selectedBurgerForConfig, setSelectedBurgerForConfig] = useState<Product | null>(null);
@@ -248,11 +252,14 @@ export default function CaixaPage() {
       channel: saleChannel,
       total: cartTotal,
       paymentMethod: saleMethod,
-      items: cart
+      items: cart,
+      productionStatus: orderProductionStatus,
+      targetPrepMinutes
     });
 
     setCart([]);
     setCustomerName('');
+    setOrderProductionStatus('em_producao');
   };
 
   const handleAddMovement = (e: React.FormEvent) => {
@@ -495,6 +502,25 @@ export default function CaixaPage() {
               >
                 <CartIcon size={20} /> Pedidos
               </button>
+
+              <button 
+                onClick={() => setActiveTab('producao')} 
+                className={`w-full flex items-center justify-between p-4 rounded-2xl font-bold transition-all text-left cursor-pointer ${
+                  activeTab === 'producao' 
+                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 shadow-lg' 
+                    : 'bg-slate-900/50 text-slate-400 hover:bg-slate-800 border border-slate-800/50'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <Flame size={20} /> Produção / KDS
+                </div>
+                {sales.filter(s => s.status === 'completed' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length > 0 && (
+                  <span className="px-2 py-0.5 bg-amber-500 text-slate-950 text-[10px] font-black rounded-full">
+                    {sales.filter(s => s.status === 'completed' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length}
+                  </span>
+                )}
+              </button>
+
               <button 
                 onClick={() => setActiveTab('historico')} 
                 className={`w-full flex items-center gap-3 p-4 rounded-2xl font-bold transition-all text-left cursor-pointer ${
@@ -505,6 +531,7 @@ export default function CaixaPage() {
               >
                 <History size={20} /> Histórico ({sales.filter(s => s.status === 'completed').length})
               </button>
+
               <button 
                 onClick={() => setActiveTab('sangria')} 
                 className={`w-full flex items-center gap-3 p-4 rounded-2xl font-bold transition-all text-left cursor-pointer ${
@@ -515,6 +542,34 @@ export default function CaixaPage() {
               >
                 <DollarSign size={20} /> Gaveta
               </button>
+
+              {/* Slider de Tempo Dinâmico para a Cozinha Solicitado */}
+              <div className="bg-slate-900/90 border border-slate-800 p-4 rounded-2xl space-y-2 mt-4">
+                <div className="flex justify-between items-center text-xs">
+                  <span className="font-bold text-slate-300 flex items-center gap-1.5">
+                    <Clock size={15} className="text-amber-400" /> Meta Cozinha:
+                  </span>
+                  <span className="font-mono font-black text-amber-400 text-sm">
+                    {targetPrepMinutes} min
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="10"
+                  max="45"
+                  step="5"
+                  value={targetPrepMinutes}
+                  onChange={e => setTargetPrepMinutes(Number(e.target.value))}
+                  className="w-full accent-amber-500 cursor-pointer"
+                />
+                <div className="flex justify-between text-[10px] text-slate-500 font-mono">
+                  <span>10m (Rápido)</span>
+                  <span>45m (Pico)</span>
+                </div>
+                <p className="text-[10px] text-slate-400 leading-tight">
+                  Tempo limite de produção ajustável conforme a demanda da noite.
+                </p>
+              </div>
             </div>
 
             {/* Conteúdo Principal */}
@@ -714,6 +769,48 @@ export default function CaixaPage() {
                         />
                       </div>
 
+                      {/* Direcionamento da Produção Solicitado */}
+                      <div className="mb-4">
+                        <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center gap-1.5">
+                          <Flame size={14} className="text-amber-400" /> Direcionamento da Produção:
+                        </label>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setOrderProductionStatus('em_producao')}
+                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
+                              orderProductionStatus === 'em_producao'
+                                ? 'bg-emerald-600 text-white font-black shadow-md ring-2 ring-emerald-400'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            🟢 Chapa / Agora
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOrderProductionStatus('em_espera')}
+                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
+                              orderProductionStatus === 'em_espera'
+                                ? 'bg-amber-600 text-white font-black shadow-md ring-2 ring-amber-400'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            ⏳ Em Espera
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOrderProductionStatus('agendado')}
+                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
+                              orderProductionStatus === 'agendado'
+                                ? 'bg-purple-600 text-white font-black shadow-md ring-2 ring-purple-400'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            📅 Agendado
+                          </button>
+                        </div>
+                      </div>
+
                       {/* Itens do Carrinho */}
                       <div className="overflow-y-auto space-y-2.5 max-h-[38vh] pr-1">
                         {cart.length === 0 ? (
@@ -833,6 +930,176 @@ export default function CaixaPage() {
                     </div>
                   </div>
 
+                </div>
+              )}
+
+              {/* ABA GESTÃO DE PRODUÇÃO & EXPEDIÇÃO (CONTROLE DO BALCÃO) */}
+              {activeTab === 'producao' && (
+                <div className="glass-card rounded-3xl p-8 border-t-4 border-amber-500 space-y-6">
+                  <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                    <div>
+                      <h2 className="text-2xl font-extrabold text-white flex items-center gap-2">
+                        <Flame className="text-amber-500" /> Fila de Produção & Expedição
+                      </h2>
+                      <p className="text-xs text-slate-400 mt-1">
+                        Controle do Balcão: libere os pedidos para a chapa da cozinha conforme rotas de entrega e liberação de mesas.
+                      </p>
+                    </div>
+
+                    {/* Filtro de Status de Produção */}
+                    <div className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
+                      {[
+                        { id: 'todos', label: 'Todos' },
+                        { id: 'em_espera', label: '⏳ Em Espera' },
+                        { id: 'agendado', label: '📅 Agendados' },
+                        { id: 'em_producao', label: '🔥 Na Chapa' },
+                        { id: 'concluido', label: '✅ Concluídos' }
+                      ].map(tab => (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => setProductionFilter(tab.id as any)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                            productionFilter === tab.id
+                              ? 'bg-amber-500 text-slate-950 font-black shadow-md'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          {tab.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Lista de Pedidos de Produção */}
+                  {sales.filter(s => {
+                    if (s.status === 'cancelled') return false;
+                    if (productionFilter === 'todos') return true;
+                    return (s.productionStatus || 'em_producao') === productionFilter;
+                  }).length === 0 ? (
+                    <div className="py-16 text-center text-slate-500">
+                      <Flame size={44} className="mx-auto mb-2 opacity-20 text-amber-500" />
+                      <p className="text-sm">Nenhum pedido encontrado nesta categoria de produção.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {sales
+                        .filter(s => {
+                          if (s.status === 'cancelled') return false;
+                          if (productionFilter === 'todos') return true;
+                          return (s.productionStatus || 'em_producao') === productionFilter;
+                        })
+                        .map(sale => {
+                          const status = sale.productionStatus || 'em_producao';
+                          const isWaiting = status === 'em_espera' || status === 'agendado';
+                          const isCooking = status === 'em_producao';
+                          const isDone = status === 'concluido';
+
+                          return (
+                            <div 
+                              key={sale.id} 
+                              className={`p-5 rounded-2xl border transition-all flex flex-col justify-between space-y-4 ${
+                                isCooking 
+                                  ? 'bg-amber-950/20 border-amber-500/40 shadow-lg' 
+                                  : isWaiting 
+                                    ? 'bg-slate-950/70 border-slate-800' 
+                                    : 'bg-emerald-950/15 border-emerald-500/30'
+                              }`}
+                            >
+                              <div>
+                                <div className="flex justify-between items-start pb-3 mb-2 border-b border-slate-800/80">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono font-bold text-white text-base">
+                                        #{sale.id.slice(0, 5).toUpperCase()}
+                                      </span>
+                                      <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                                        isCooking
+                                          ? 'bg-amber-500 text-slate-950 animate-pulse'
+                                          : isWaiting
+                                            ? status === 'agendado' ? 'bg-purple-600 text-white' : 'bg-slate-700 text-slate-200'
+                                            : 'bg-emerald-600 text-white'
+                                      }`}>
+                                        {isCooking ? '🔥 NA CHAPA' : isWaiting ? (status === 'agendado' ? '📅 AGENDADO' : '⏳ EM ESPERA') : '✅ CONCLUÍDO'}
+                                      </span>
+                                    </div>
+                                    <p className="text-sm font-black text-amber-300 mt-1 uppercase">
+                                      {sale.customerName || 'Cliente'}
+                                    </p>
+                                    <span className="text-[10px] text-slate-400">
+                                      Modalidade: {sale.orderType?.toUpperCase() || 'BALCÃO'} • {new Date(sale.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedSaleToPrint(sale)}
+                                    className="p-2 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl border border-slate-800 cursor-pointer"
+                                    title="Imprimir Comanda"
+                                  >
+                                    <Printer size={16} />
+                                  </button>
+                                </div>
+
+                                {/* Itens do Pedido */}
+                                <div className="space-y-1.5 my-2">
+                                  {sale.items?.map((i, idx) => (
+                                    <div key={idx} className="text-xs text-slate-200 flex justify-between">
+                                      <span>[{i.quantity}x] {i.productName}</span>
+                                      {i.combo && <span className="text-[10px] text-amber-400 pl-2">+{i.combo}</span>}
+                                    </div>
+                                  ))}
+                                </div>
+
+                                {/* Atraso registrado se houver */}
+                                {sale.delayReason && (
+                                  <div className="p-2 rounded-xl bg-red-950/40 border border-red-500/30 text-xs text-red-300 mt-2 space-y-0.5">
+                                    <p className="font-bold flex items-center gap-1.5">
+                                      <AlertOctagon size={13} className="text-red-400" />
+                                      Justificativa da Cozinha: {
+                                        sale.delayReason === 'erro_producao' ? 'Erro na Produção' :
+                                        sale.delayReason === 'falta_insumo' ? 'Falta de Insumo' :
+                                        sale.delayReason === 'falta_atencao' ? 'Falta de Atenção' : 'Desperdício'
+                                      }
+                                    </p>
+                                    {sale.delayNotes && <p className="italic text-[10px]">Obs: {sale.delayNotes}</p>}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Ações do Balcão */}
+                              <div className="pt-2 border-t border-slate-800/80 flex gap-2">
+                                {isWaiting && (
+                                  <button
+                                    type="button"
+                                    onClick={() => updateOrderProductionStatus(sale.id, 'em_producao')}
+                                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-md transition-all"
+                                  >
+                                    <Play size={15} /> Liberar para Produção na Chapa
+                                  </button>
+                                )}
+
+                                {isCooking && (
+                                  <button
+                                    type="button"
+                                    onClick={() => updateOrderProductionStatus(sale.id, 'em_espera')}
+                                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                                  >
+                                    <Pause size={14} /> Pausar / Voltar para Espera
+                                  </button>
+                                )}
+
+                                {isDone && (
+                                  <div className="w-full text-center py-2 text-xs font-bold text-emerald-400 bg-emerald-950/40 rounded-xl border border-emerald-500/20">
+                                    Pronto para Servir / Rota do Entregador
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
                 </div>
               )}
 

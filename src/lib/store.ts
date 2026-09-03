@@ -51,6 +51,9 @@ export interface SaleItem {
   notes?: string;
 }
 
+export type ProductionStatus = 'em_producao' | 'em_espera' | 'agendado' | 'concluido';
+export type DelayReason = 'erro_producao' | 'falta_insumo' | 'falta_atencao' | 'desperdicio';
+
 export interface Sale {
   id: string;
   customerName?: string;
@@ -61,6 +64,14 @@ export interface Sale {
   items: SaleItem[];
   date: string;
   status: 'completed' | 'cancelled';
+  // Campos KDS & Produção:
+  productionStatus?: ProductionStatus;
+  productionStartedAt?: string;
+  productionCompletedAt?: string;
+  productionTimeMinutes?: number;
+  targetPrepMinutes?: number;
+  delayReason?: DelayReason;
+  delayNotes?: string;
 }
 
 // === CAIXA EM NUVEM ===
@@ -173,6 +184,21 @@ export function useInventory() {
   // Caixa State (em Nuvem)
   const [isOpen, setIsOpen] = useState(false);
   const [activeCashSession, setActiveCashSession] = useState<CashSession | null>(null);
+
+  // Tempo Médio Dinâmico de Preparo (KDS / Balcão)
+  const [targetPrepMinutes, setTargetPrepMinutesState] = useState<number>(20);
+
+  useEffect(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('hum_vicio_target_prep_minutes') : null;
+    if (saved) setTargetPrepMinutesState(Number(saved) || 20);
+  }, []);
+
+  const setTargetPrepMinutes = (mins: number) => {
+    setTargetPrepMinutesState(mins);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('hum_vicio_target_prep_minutes', mins.toString());
+    }
+  };
   const [sales, setSales] = useState<Sale[]>([]);
   const [movements, setMovements] = useState<CashMovement[]>([]);
 
@@ -236,6 +262,13 @@ export function useInventory() {
           paymentMethod: s.payment_method, 
           date: s.created_at, 
           status: s.status,
+          productionStatus: (s.production_status || 'em_producao') as any,
+          productionStartedAt: s.production_started_at || s.created_at,
+          productionCompletedAt: s.production_completed_at || undefined,
+          productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
+          targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
+          delayReason: s.delay_reason || undefined,
+          delayNotes: s.delay_notes || undefined,
           items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
             id: i.id,
             productId: i.product_id, 
@@ -858,21 +891,30 @@ export function useInventory() {
 
   const addSale = async (sale: Omit<Sale, 'id' | 'date' | 'status'>) => {
     let sData: any = null;
+    const initialProductionStatus = sale.productionStatus || 'em_producao';
+    const initialProductionStarted = sale.productionStartedAt || new Date().toISOString();
+    const initialTargetPrep = sale.targetPrepMinutes || targetPrepMinutes;
+
     const payload: any = {
       channel: sale.channel, 
       total: sale.total, 
       payment_method: sale.paymentMethod,
       customer_name: sale.customerName || 'Balcão',
-      order_type: sale.orderType || 'mesa'
+      order_type: sale.orderType || 'mesa',
+      production_status: initialProductionStatus,
+      production_started_at: initialProductionStarted,
+      target_prep_minutes: initialTargetPrep
     };
 
     const { data, error } = await supabase.from('sales').insert(payload).select().single();
     if (error) {
-      // Fallback seguro caso a coluna customer_name ainda não exista
+      // Fallback seguro caso as novas colunas ainda não existam
       const { data: retryData } = await supabase.from('sales').insert({
         channel: sale.channel, 
         total: sale.total, 
-        payment_method: sale.paymentMethod
+        payment_method: sale.paymentMethod,
+        customer_name: sale.customerName || 'Balcão',
+        order_type: sale.orderType || 'mesa'
       }).select().single();
       sData = retryData;
     } else {
@@ -920,11 +962,79 @@ export function useInventory() {
         id: sData.id,
         customerName: sale.customerName || 'Balcão',
         orderType: sale.orderType || 'mesa',
+        productionStatus: initialProductionStatus,
+        productionStartedAt: initialProductionStarted,
+        targetPrepMinutes: initialTargetPrep,
         date: sData.created_at || new Date().toISOString(),
         status: 'completed'
       };
       setSales([newSaleLocal, ...sales]);
     }
+  };
+
+  // Ação do Balcão: alterar status de produção (para chapa, em espera, agendado)
+  const updateOrderProductionStatus = async (saleId: string, newStatus: ProductionStatus) => {
+    const startedAt = newStatus === 'em_producao' ? new Date().toISOString() : undefined;
+    
+    try {
+      const updateData: any = { production_status: newStatus };
+      if (startedAt) updateData.production_started_at = startedAt;
+      await supabase.from('sales').update(updateData).eq('id', saleId);
+    } catch (err) {
+      console.warn('Erro ao atualizar status de produção no Supabase:', err);
+    }
+
+    setSales(sales.map(s => {
+      if (s.id === saleId) {
+        return {
+          ...s,
+          productionStatus: newStatus,
+          productionStartedAt: startedAt || s.productionStartedAt || s.date
+        };
+      }
+      return s;
+    }));
+  };
+
+  // Ação da Cozinha: concluir pedido (com justificativa de atraso se aplicável)
+  const completeOrderProduction = async (saleId: string, delayReason?: DelayReason, delayNotes?: string) => {
+    const completedAt = new Date().toISOString();
+    const existing = sales.find(s => s.id === saleId);
+    let timeMinutes = 0;
+    if (existing?.productionStartedAt) {
+      const startMs = new Date(existing.productionStartedAt).getTime();
+      const endMs = new Date(completedAt).getTime();
+      timeMinutes = Math.max(1, Math.round((endMs - startMs) / 60000));
+    }
+
+    try {
+      const updateData: any = {
+        production_status: 'concluido',
+        production_completed_at: completedAt,
+        production_time_minutes: timeMinutes
+      };
+      if (delayReason) {
+        updateData.delay_reason = delayReason;
+        updateData.delay_notes = delayNotes;
+      }
+      await supabase.from('sales').update(updateData).eq('id', saleId);
+    } catch (err) {
+      console.warn('Erro ao concluir produção no Supabase:', err);
+    }
+
+    setSales(sales.map(s => {
+      if (s.id === saleId) {
+        return {
+          ...s,
+          productionStatus: 'concluido',
+          productionCompletedAt: completedAt,
+          productionTimeMinutes: timeMinutes,
+          delayReason: delayReason || s.delayReason,
+          delayNotes: delayNotes || s.delayNotes
+        };
+      }
+      return s;
+    }));
   };
 
   const cancelSale = async (id: string) => {
@@ -1027,6 +1137,7 @@ export function useInventory() {
     suppliers, addSupplier, updateSupplier, removeSupplier,
     purchaseRecords, recordPurchaseWithSupplier,
     stockAudits, saveStockAudit,
-    subRecipes, saveSubRecipe, removeSubRecipe, getIngredientTrueCost
+    subRecipes, saveSubRecipe, removeSubRecipe, getIngredientTrueCost,
+    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, completeOrderProduction
   };
 }

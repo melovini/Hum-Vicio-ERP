@@ -1,188 +1,676 @@
 'use client';
-import { useInventory, InventoryItem } from '@/lib/store';
-import { ChefHat, AlertTriangle, CheckCircle, ArrowLeft, Trash2, ClipboardList } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { useInventory, Sale, DelayReason, InventoryItem } from '@/lib/store';
+import { 
+  ChefHat, AlertTriangle, CheckCircle, Trash2, 
+  Flame, Clock, Calendar, AlertOctagon,
+  Eye, Check, ListChecks, MessageSquare, Utensils
+} from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
 
-export default function CozinhaPage() {
-  const { items, updateStatus, isLoaded, checklist, toggleChecklistTask, signChecklist } = useInventory();
+export default function CozinhaKDSPage() {
+  const { 
+    sales, items, updateStatus, isLoaded, 
+    checklist, toggleChecklistTask, signChecklist,
+    targetPrepMinutes, completeOrderProduction 
+  } = useInventory();
+
+  const [activeTab, setActiveTab] = useState<'chapa' | 'previsao' | 'faltas' | 'checklist'>('chapa');
+  const [now, setNow] = useState(Date.now());
+
+  // Modal de Justificativa de Atraso
+  const [selectedDelayedSale, setSelectedDelayedSale] = useState<Sale | null>(null);
+  const [selectedReason, setSelectedReason] = useState<DelayReason>('erro_producao');
+  const [delayNotes, setDelayNotes] = useState('');
+  const [isSubmittingDelay, setIsSubmittingDelay] = useState(false);
+
+  // Timer ao vivo para o cronômetro da chapa (atualiza a cada segundo)
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // 1. Pedidos Ativos na Chapa (Em Produção)
+  const productionOrders = useMemo(() => {
+    return sales
+      .filter(s => s.status === 'completed' && s.productionStatus === 'em_producao')
+      .sort((a, b) => {
+        const timeA = new Date(a.productionStartedAt || a.date).getTime();
+        const timeB = new Date(b.productionStartedAt || b.date).getTime();
+        return timeA - timeB; // Mais antigos primeiro
+      });
+  }, [sales]);
+
+  // 2. Pedidos em Espera ou Agendados (Previsão de Demanda)
+  const queueOrders = useMemo(() => {
+    return sales
+      .filter(s => s.status === 'completed' && (s.productionStatus === 'em_espera' || s.productionStatus === 'agendado'))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+  }, [sales]);
+
+  // 3. Previsão Agregada de Insumos/Molhos dos Próximos Pedidos
+  const upcomingPrepSummary = useMemo(() => {
+    const productCounts: Record<string, number> = {};
+    const additionalsCounts: Record<string, number> = {};
+    const notesSummary: string[] = [];
+
+    queueOrders.forEach(o => {
+      o.items?.forEach(item => {
+        productCounts[item.productName] = (productCounts[item.productName] || 0) + item.quantity;
+        
+        item.additionals?.forEach(add => {
+          additionalsCounts[add.name] = (additionalsCounts[add.name] || 0) + item.quantity;
+        });
+
+        if (item.notes) {
+          notesSummary.push(`[${o.customerName || 'Cliente'}]: ${item.notes}`);
+        }
+      });
+    });
+
+    return {
+      productCounts,
+      additionalsCounts,
+      notesSummary,
+      totalBurgers: Object.values(productCounts).reduce((a, b) => a + b, 0)
+    };
+  }, [queueOrders]);
+
+  // 4. Concluir pedido com verificação de atraso
+  const handleConcludeClick = (sale: Sale, isDelayed: boolean) => {
+    if (isDelayed) {
+      setSelectedDelayedSale(sale);
+      setSelectedReason('erro_producao');
+      setDelayNotes('');
+    } else {
+      completeOrderProduction(sale.id);
+    }
+  };
+
+  const handleConfirmDelayAndComplete = async () => {
+    if (!selectedDelayedSale) return;
+    setIsSubmittingDelay(true);
+    await completeOrderProduction(selectedDelayedSale.id, selectedReason, delayNotes.trim() || undefined);
+    setIsSubmittingDelay(false);
+    setSelectedDelayedSale(null);
+  };
+
+  // Agrupar itens do Painel de Faltas
+  const groupedItems = useMemo(() => {
+    return items.reduce((acc, item) => {
+      let rawCat = (item.category || 'Geral').trim().toLowerCase();
+      const cat = rawCat.charAt(0).toUpperCase() + rawCat.slice(1);
+      if (!acc[cat]) acc[cat] = [];
+      acc[cat].push(item);
+      return acc;
+    }, {} as Record<string, InventoryItem[]>);
+  }, [items]);
 
   if (!isLoaded) return null;
 
-  // Agrupar itens por categoria
-  const groupedItems = items.reduce((acc, item) => {
-    let rawCat = (item.category || 'Geral').trim().toLowerCase();
-    const cat = rawCat.charAt(0).toUpperCase() + rawCat.slice(1);
-    
-    if (!acc[cat]) acc[cat] = [];
-    acc[cat].push(item);
-    return acc;
-  }, {} as Record<string, InventoryItem[]>);
-
   return (
-    <div className="min-h-screen bg-slate-950 p-4 md:p-8">
-      <div className="max-w-5xl mx-auto">
-        <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 pb-6 border-b border-slate-800">
-          <div className="flex items-center gap-4">
-            <Link href="/" className="p-3 bg-slate-900 rounded-2xl hover:bg-slate-800 text-slate-400 transition-colors">
-              <ArrowLeft size={24} />
-            </Link>
-            <div>
-              <h1 className="text-3xl md:text-4xl font-bold text-slate-100 mb-1 flex items-center gap-3">
-                <ChefHat className="text-amber-500" /> Operação Cozinha
-              </h1>
-              <p className="text-slate-500 text-sm">Sinalize rupturas, registre perdas de insumos e preencha o checklist diário.</p>
+    <div className="min-h-screen bg-slate-950 text-slate-100 p-3 md:p-6 select-none">
+      
+      {/* HEADER KDS TABLET */}
+      <header className="flex flex-wrap items-center justify-between gap-4 pb-4 mb-6 border-b border-slate-800">
+        
+        <div className="flex items-center gap-3">
+          <div className="p-3 bg-amber-500/10 text-amber-400 rounded-2xl border border-amber-500/20 shadow-[0_0_20px_rgba(245,158,11,0.15)]">
+            <Flame size={28} className="animate-pulse" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-extrabold text-lg md:text-xl tracking-wider uppercase text-white">
+                HUM VÍCIO HAMBURGUERIA
+              </span>
+              <span className="px-2 py-0.5 bg-red-600 text-white font-black text-[10px] rounded uppercase tracking-widest">
+                KDS CHAPA
+              </span>
+            </div>
+            <p className="text-xs text-slate-400">
+              Tempo Alvo do Balcão: <strong className="text-amber-400 font-mono">{targetPrepMinutes} min</strong> • {productionOrders.length} pedidos em produção
+            </p>
+          </div>
+        </div>
+
+        {/* NAVEGAÇÃO DE MÓDULOS DA COZINHA */}
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab('chapa')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs md:text-sm flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'chapa'
+                ? 'bg-amber-500 text-slate-950 font-black shadow-lg shadow-amber-500/30'
+                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <Flame size={16} /> Chapa Ativa ({productionOrders.length})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('previsao')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs md:text-sm flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'previsao'
+                ? 'bg-blue-600 text-white font-black shadow-lg shadow-blue-600/30'
+                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <Eye size={16} /> Fila Futura & Previsão ({queueOrders.length})
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('faltas')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs md:text-sm flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'faltas'
+                ? 'bg-amber-600 text-white font-black shadow-lg shadow-amber-600/30'
+                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <AlertTriangle size={16} /> Faltas de Insumos
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('checklist')}
+            className={`px-4 py-2.5 rounded-xl font-bold text-xs md:text-sm flex items-center gap-2 transition-all cursor-pointer ${
+              activeTab === 'checklist'
+                ? 'bg-emerald-600 text-white font-black shadow-lg shadow-emerald-600/30'
+                : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border border-slate-800'
+            }`}
+          >
+            <ListChecks size={16} /> Checklist
+          </button>
+
+          <Link
+            href="/cozinha/perdas"
+            className="px-4 py-2.5 bg-red-600/20 hover:bg-red-600 text-red-300 hover:text-white border border-red-500/40 rounded-xl font-bold text-xs md:text-sm flex items-center gap-2 transition-all"
+          >
+            <Trash2 size={16} /> Lançar Perdas
+          </Link>
+
+          <LogoutButton />
+        </div>
+
+      </header>
+
+      {/* ========================================================================= */}
+      {/* ABA 1: CHAPA ATIVA (KDS TEMPO REAL) */}
+      {/* ========================================================================= */}
+      {activeTab === 'chapa' && (
+        <div>
+          {productionOrders.length === 0 ? (
+            <div className="glass-card rounded-3xl p-16 text-center border border-slate-800 my-8">
+              <div className="w-20 h-20 mx-auto bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mb-4">
+                <CheckCircle size={44} />
+              </div>
+              <h2 className="text-3xl font-extrabold text-white mb-2">Chapa Limpa & Organizada!</h2>
+              <p className="text-slate-400 max-w-md mx-auto text-sm">
+                Nenhum pedido aguardando preparo na chapa neste momento. Aproveite para conferir a aba de <strong>Fila Futura & Previsão</strong> para adiantar maioneses e porções.
+              </p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {productionOrders.map(order => {
+                const startTime = new Date(order.productionStartedAt || order.date).getTime();
+                const elapsedSeconds = Math.max(0, Math.floor((now - startTime) / 1000));
+                const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+                const secondsRemainder = elapsedSeconds % 60;
+                const formattedTimer = `${String(elapsedMinutes).padStart(2, '0')}:${String(secondsRemainder).padStart(2, '0')}`;
+
+                const target = order.targetPrepMinutes || targetPrepMinutes || 20;
+                const isDelayed = elapsedMinutes >= target;
+                const isWarning = !isDelayed && elapsedMinutes >= Math.floor(target * 0.75);
+
+                return (
+                  <div
+                    key={order.id}
+                    className={`rounded-3xl p-5 border-2 flex flex-col justify-between transition-all shadow-xl ${
+                      isDelayed
+                        ? 'bg-red-950/40 border-red-500 ring-2 ring-red-500/50 animate-pulse'
+                        : isWarning
+                          ? 'bg-amber-950/25 border-amber-500/70'
+                          : 'bg-slate-900/90 border-slate-800'
+                    }`}
+                  >
+                    <div>
+                      {/* Topo do Card: Pedido #, Modalidade e Cronômetro */}
+                      <div className="flex justify-between items-start pb-3 mb-3 border-b border-slate-800">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-black text-xl text-white">
+                              #{order.id.slice(0, 5).toUpperCase()}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                              order.orderType === 'delivery' 
+                                ? 'bg-blue-600 text-white' 
+                                : order.orderType === 'retirada' 
+                                  ? 'bg-amber-600 text-white' 
+                                  : 'bg-emerald-600 text-white'
+                            }`}>
+                              {order.orderType === 'delivery' ? '🛵 DELIVERY' : order.orderType === 'retirada' ? '🥡 BALCÃO' : '🍽️ MESA'}
+                            </span>
+                          </div>
+                          <p className="text-sm font-extrabold text-amber-300 mt-1 uppercase">
+                            {order.customerName || 'Cliente'}
+                          </p>
+                        </div>
+
+                        {/* Cronômetro */}
+                        <div className={`text-right px-3 py-1.5 rounded-2xl font-mono ${
+                          isDelayed
+                            ? 'bg-red-600 text-white shadow-lg shadow-red-600/50'
+                            : isWarning
+                              ? 'bg-amber-500 text-slate-950 font-black'
+                              : 'bg-slate-800 text-slate-200'
+                        }`}>
+                          <div className="flex items-center gap-1.5 text-lg font-black tracking-wider">
+                            <Clock size={16} /> {formattedTimer}
+                          </div>
+                          <span className="text-[10px] font-bold block uppercase tracking-tighter">
+                            {isDelayed ? `ATRASADO (+${elapsedMinutes - target}m)` : `Meta: ${target}m`}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Lista de Itens da Comanda */}
+                      <div className="space-y-3 mb-4">
+                        {order.items?.map((item, idx) => (
+                          <div key={idx} className="bg-slate-950/70 p-3 rounded-2xl border border-slate-800/80 space-y-1">
+                            <div className="flex justify-between items-start">
+                              <span className="font-extrabold text-base text-white">
+                                [{item.quantity}x] {item.productName}
+                              </span>
+                            </div>
+
+                            {item.combo && (
+                              <p className="text-xs font-bold text-amber-400 pl-2">
+                                + COMBO: {item.combo.toUpperCase()}
+                              </p>
+                            )}
+
+                            {item.additionals && item.additionals.length > 0 && (
+                              <p className="text-xs font-semibold text-emerald-300 pl-2">
+                                + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
+                              </p>
+                            )}
+
+                            {item.notes && (
+                              <div className="mt-1 p-1.5 bg-amber-500/20 border border-amber-500/40 rounded-xl text-xs font-black text-amber-200 flex items-center gap-1.5 uppercase">
+                                <AlertOctagon size={14} className="text-amber-400 shrink-0" />
+                                <span>OBS: {item.notes}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Botão de Concluir Pedido */}
+                    <button
+                      type="button"
+                      onClick={() => handleConcludeClick(order, isDelayed)}
+                      className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg active:scale-95 ${
+                        isDelayed
+                          ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30 ring-2 ring-red-400'
+                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
+                      }`}
+                    >
+                      <Check size={20} /> Concluir Pedido
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* ABA 2: FILA FUTURA & PREVISÃO DE INSUMOS */}
+      {/* ========================================================================= */}
+      {activeTab === 'previsao' && (
+        <div className="space-y-6">
+          {/* Banner Explicativo */}
+          <div className="glass-card rounded-3xl p-6 border border-blue-500/30 bg-blue-950/20">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h2 className="text-2xl font-extrabold text-blue-400 flex items-center gap-2">
+                  <Eye size={24} /> Fila Futura & Previsão de Demanda
+                </h2>
+                <p className="text-sm text-slate-300 mt-1 max-w-2xl">
+                  Estes pedidos estão <strong>Em Espera</strong> (aguardando rota do entregador ou liberação da mesa) ou <strong>Agendados</strong> pelo Balcão.
+                  A cozinha pode consultar esta previsão para <strong>adiantar porções, carnes e maioneses</strong> antes de entrarem na chapa!
+                </p>
+              </div>
+              <div className="px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded-2xl text-center">
+                <span className="text-xs text-blue-300 font-bold block uppercase">Na Fila Futura</span>
+                <strong className="text-2xl font-mono text-white">{queueOrders.length} pedidos</strong>
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            <Link 
-              href="/cozinha/perdas" 
-              className="px-5 py-3 bg-red-600/20 hover:bg-red-600 border border-red-500/40 text-red-300 hover:text-white rounded-2xl font-bold text-sm flex items-center gap-2 transition-all shadow-lg shadow-red-600/10 cursor-pointer"
-            >
-              <Trash2 size={18} /> Lançar Perdas
-            </Link>
-            <LogoutButton />
-          </div>
-        </header>
-
-        {Object.entries(groupedItems).map(([catName, catItems]) => (
-          <div key={catName} className="mb-12">
-            <h2 className="text-2xl font-bold text-slate-200 mb-6 px-2 border-l-4 border-amber-500 uppercase tracking-wider">{catName}</h2>
+          {/* Resumo de Insumos e Pré-Preparos Necessários */}
+          {queueOrders.length > 0 && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {catItems.map(item => (
-                <div key={item.id} className={`p-6 rounded-3xl border transition-all ${
-                  item.status === 'zerado' ? 'bg-red-500/10 border-red-500/30' :
-                  item.status === 'acabando' ? 'bg-amber-500/10 border-amber-500/30' :
-                  'bg-slate-900 border-slate-800'
-                }`}>
-                  <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <h3 className="text-2xl font-bold text-slate-200">{item.name}</h3>
-                      <p className="text-slate-500 mt-1">Estoque atual: {item.currentStock} {item.unit}</p>
+              
+              {/* Lanches Previstos */}
+              <div className="glass-card rounded-3xl p-6 border border-slate-800">
+                <h3 className="font-extrabold text-base text-amber-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                  <Utensils size={18} /> Lanches nos Próximos Pedidos ({upcomingPrepSummary.totalBurgers} un)
+                </h3>
+                <div className="space-y-2">
+                  {Object.entries(upcomingPrepSummary.productCounts).map(([name, qty]) => (
+                    <div key={name} className="flex justify-between items-center p-3 rounded-xl bg-slate-900 border border-slate-800">
+                      <span className="font-bold text-white text-sm">{name}</span>
+                      <span className="px-3 py-1 bg-amber-500/20 text-amber-300 font-mono font-black text-sm rounded-lg">
+                        {qty}x
+                      </span>
                     </div>
-                    
-                    {item.status !== 'ok' && (
-                      <button 
-                        onClick={() => updateStatus(item.id, 'ok')}
-                        className="text-sm px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl flex items-center gap-2"
-                      >
-                        <CheckCircle size={16} /> Desfazer Alerta
-                      </button>
-                    )}
+                  ))}
+                </div>
+              </div>
+
+              {/* Maioneses e Adicionais dos Próximos */}
+              <div className="glass-card rounded-3xl p-6 border border-slate-800">
+                <h3 className="font-extrabold text-base text-emerald-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                  🥫 Adicionais & Maioneses Solicitadas
+                </h3>
+                {Object.keys(upcomingPrepSummary.additionalsCounts).length === 0 ? (
+                  <p className="text-slate-500 text-xs py-4 text-center">Nenhum adicional específico nos próximos pedidos.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {Object.entries(upcomingPrepSummary.additionalsCounts).map(([name, qty]) => (
+                      <div key={name} className="flex justify-between items-center p-3 rounded-xl bg-slate-900 border border-slate-800">
+                        <span className="font-bold text-slate-200 text-sm">{name}</span>
+                        <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 font-mono font-black text-sm rounded-lg">
+                          {qty}x
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+            </div>
+          )}
+
+          {/* Cards dos Pedidos em Espera */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {queueOrders.map(order => (
+              <div key={order.id} className="rounded-3xl p-5 border border-slate-800 bg-slate-900/60 flex flex-col justify-between">
+                <div>
+                  <div className="flex justify-between items-start pb-3 mb-3 border-b border-slate-800">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-black text-lg text-slate-300">
+                          #{order.id.slice(0, 5).toUpperCase()}
+                        </span>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                          order.productionStatus === 'agendado' ? 'bg-purple-600 text-white' : 'bg-amber-600 text-white'
+                        }`}>
+                          {order.productionStatus === 'agendado' ? '📅 AGENDADO' : '⏳ EM ESPERA'}
+                        </span>
+                      </div>
+                      <p className="text-sm font-bold text-white mt-1 uppercase">
+                        {order.customerName || 'Cliente'}
+                      </p>
+                    </div>
+
+                    <span className="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-1 rounded-lg">
+                      Balcão
+                    </span>
                   </div>
 
-                  {item.status === 'ok' ? (
-                    <div className="flex gap-4">
-                      <button 
-                        onClick={() => {
-                          const qty = prompt(`Quantos ${item.unit} restam de ${item.name}?`);
-                          if (qty !== null) updateStatus(item.id, 'acabando', Number(qty));
-                        }}
-                        className="flex-1 py-4 bg-amber-600/20 hover:bg-amber-500/30 text-amber-500 rounded-2xl font-bold border border-amber-500/20 transition-all flex justify-center items-center gap-2"
-                      >
-                        <AlertTriangle size={20} /> Acabando
-                      </button>
-                      <button 
-                        onClick={() => updateStatus(item.id, 'zerado', 0)}
-                        className="flex-1 py-4 bg-red-600/20 hover:bg-red-500/30 text-red-500 rounded-2xl font-bold border border-red-500/20 transition-all flex justify-center items-center gap-2"
-                      >
-                        Zerado!
-                      </button>
+                  <div className="space-y-2 mb-3">
+                    {order.items?.map((item, idx) => (
+                      <div key={idx} className="text-xs text-slate-300 bg-slate-950/60 p-2 rounded-xl">
+                        <span className="font-bold text-white">[{item.quantity}x] {item.productName}</span>
+                        {item.combo && <p className="text-[10px] text-amber-400">+ Combo: {item.combo}</p>}
+                        {item.additionals && item.additionals.length > 0 && (
+                          <p className="text-[10px] text-emerald-300">+ Adicionais: {item.additionals.map(a => a.name).join(', ')}</p>
+                        )}
+                        {item.notes && <p className="text-[10px] text-amber-200 italic">Obs: {item.notes}</p>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="text-center p-2 rounded-xl bg-slate-950/80 border border-slate-800/80 text-[11px] text-slate-400 font-semibold">
+                  Aguardando liberação oficial do Balcão
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* ABA 3: PAINEL DE FALTAS & RUPTURAS */}
+      {/* ========================================================================= */}
+      {activeTab === 'faltas' && (
+        <div className="space-y-6">
+          <div className="glass-card rounded-3xl p-6 border border-slate-800">
+            <h2 className="text-2xl font-bold text-slate-100 mb-1 flex items-center gap-2">
+              <AlertTriangle className="text-amber-500" /> Sinalização de Rupturas e Estoque Crítico
+            </h2>
+            <p className="text-slate-400 text-xs">
+              Sinalize quando um ingrediente estiver acabando ou zerado. O alerta reflete imediatamente para a Gestão de Compras.
+            </p>
+          </div>
+
+          {Object.entries(groupedItems).map(([catName, catItems]) => (
+            <div key={catName} className="mb-8">
+              <h3 className="text-xl font-bold text-slate-200 mb-4 px-3 border-l-4 border-amber-500 uppercase tracking-wider">
+                {catName}
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {catItems.map(item => (
+                  <div key={item.id} className={`p-5 rounded-2xl border transition-all ${
+                    item.status === 'zerado' ? 'bg-red-500/10 border-red-500/30' :
+                    item.status === 'acabando' ? 'bg-amber-500/10 border-amber-500/30' :
+                    'bg-slate-900 border-slate-800'
+                  }`}>
+                    <div className="flex justify-between items-start mb-4">
+                      <div>
+                        <h4 className="text-lg font-bold text-white">{item.name}</h4>
+                        <p className="text-slate-400 text-xs mt-0.5">Estoque: {item.currentStock} {item.unit}</p>
+                      </div>
+                      
+                      {item.status !== 'ok' && (
+                        <button 
+                          onClick={() => updateStatus(item.id, 'ok')}
+                          className="text-xs px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <CheckCircle size={14} /> Normalizar
+                        </button>
+                      )}
                     </div>
-                  ) : (
-                    <div className={`p-4 rounded-2xl flex items-center gap-3 font-bold ${
-                      item.status === 'zerado' ? 'bg-red-500 text-white' : 'bg-amber-500 text-amber-950'
+
+                    {item.status === 'ok' ? (
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => {
+                            const qty = prompt(`Quantos ${item.unit} restam de ${item.name}?`);
+                            if (qty !== null) updateStatus(item.id, 'acabando', Number(qty));
+                          }}
+                          className="flex-1 py-3 bg-amber-600/20 hover:bg-amber-500/30 text-amber-400 rounded-xl font-bold text-xs border border-amber-500/20 transition-all flex justify-center items-center gap-1.5 cursor-pointer"
+                        >
+                          <AlertTriangle size={15} /> Acabando
+                        </button>
+                        <button 
+                          onClick={() => updateStatus(item.id, 'zerado', 0)}
+                          className="flex-1 py-3 bg-red-600/20 hover:bg-red-500/30 text-red-400 rounded-xl font-bold text-xs border border-red-500/20 transition-all flex justify-center items-center gap-1.5 cursor-pointer"
+                        >
+                          Zerado!
+                        </button>
+                      </div>
+                    ) : (
+                      <div className={`p-3 rounded-xl flex items-center gap-2 font-bold text-xs ${
+                        item.status === 'zerado' ? 'bg-red-600 text-white' : 'bg-amber-500 text-slate-950 font-black'
+                      }`}>
+                        <AlertTriangle size={16} />
+                        ALERTA ATIVO NA GESTÃO
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* ABA 4: CHECKLIST OPERACIONAL */}
+      {/* ========================================================================= */}
+      {activeTab === 'checklist' && (
+        <div className="max-w-4xl mx-auto space-y-6">
+          <div className="glass-card rounded-3xl p-6 border border-slate-800">
+            <h2 className="text-2xl font-bold text-slate-100 mb-1 flex items-center gap-2">
+              <ListChecks className="text-emerald-400" /> Checklist Operacional Diário
+            </h2>
+            <p className="text-slate-400 text-xs">
+              Realize a conferência diária de rotina da cozinha.
+            </p>
+          </div>
+
+          {checklist && (
+            <div className="glass-card rounded-3xl p-6 border border-slate-800 space-y-3">
+              {checklist.tasks.map(task => (
+                <div 
+                  key={task.id} 
+                  onClick={() => {
+                    const person = task.checked ? '' : (prompt('Seu nome para marcar a tarefa:') || 'Cozinha');
+                    if (person !== null) toggleChecklistTask(task.id, person);
+                  }}
+                  className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
+                    task.checked 
+                      ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200' 
+                      : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center border ${
+                      task.checked ? 'bg-emerald-600 border-emerald-500 text-white' : 'border-slate-600'
                     }`}>
-                      <AlertTriangle size={24} />
-                      ALERTA ENVIADO À GESTÃO
+                      {task.checked && <Check size={16} />}
                     </div>
+                    <span className="font-semibold text-sm">{task.label}</span>
+                  </div>
+                  {task.checkedBy && (
+                    <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/60 px-2.5 py-1 rounded-lg">
+                      Feito por: {task.checkedBy}
+                    </span>
                   )}
                 </div>
               ))}
-            </div>
-          </div>
-        ))}
 
-        {/* --- CHECKLIST DIÁRIO --- */}
-        <div className="mt-16 border-t-2 border-slate-800 pt-12 mb-20">
-          <h2 className="text-3xl font-bold text-white mb-2 flex items-center gap-3">
-            <CheckCircle className="text-emerald-500" /> Checklist de Encerramento
-          </h2>
-          <p className="text-slate-400 mb-8">Marque as tarefas verificadas ao final do expediente. Este documento ficará salvo por 15 dias.</p>
-          
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8">
-            <div className="flex justify-between items-center mb-6 pb-6 border-b border-slate-800">
-              <span className="text-lg font-bold text-slate-300">
-                Data Referência: {checklist?.date ? new Date(checklist.date + 'T00:00:00').toLocaleDateString('pt-BR') : 'Hoje'}
-              </span>
-              {checklist?.signedBy && (
-                <div className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-xl font-bold text-sm">
-                  Encerrado por: {checklist.signedBy}
-                </div>
-              )}
+              <div className="pt-4 flex justify-between items-center border-t border-slate-800">
+                <span className="text-xs text-slate-400">
+                  Assinado por: <strong className="text-white">{checklist.signedBy || 'Pendente'}</strong>
+                </span>
+                {!checklist.signedBy && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const name = prompt('Nome do responsável pelo fechamento:');
+                      if (name) signChecklist(name);
+                    }}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                  >
+                    Assinar Checklist de Hoje
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL TOUCH DE JUSTIFICATIVA DE ATRASO (> TARGET PREP MINUTES) */}
+      {/* ========================================================================= */}
+      {selectedDelayedSale && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="glass-card rounded-3xl p-6 md:p-8 max-w-lg w-full border-2 border-red-500/60 shadow-[0_0_50px_rgba(239,68,68,0.2)] space-y-6 animate-scale-in">
+            
+            <div className="text-center space-y-1 pb-4 border-b border-slate-800">
+              <div className="w-16 h-16 mx-auto bg-red-600/20 text-red-400 rounded-2xl flex items-center justify-center border border-red-500/30 mb-2">
+                <AlertOctagon size={36} />
+              </div>
+              <h3 className="text-2xl font-black text-white">
+                Justificativa de Atraso na Chapa
+              </h3>
+              <p className="text-xs text-slate-400">
+                Pedido <strong>#{selectedDelayedSale.id.slice(0, 5).toUpperCase()}</strong> ultrapassou a meta de {selectedDelayedSale.targetPrepMinutes || targetPrepMinutes} min do balcão.
+                Selecione o motivo para fins de gestão:
+              </p>
             </div>
 
-            <div className="space-y-4">
-              {checklist?.tasks.map(task => (
-                <div key={task.id} className={`flex items-start md:items-center justify-between gap-4 p-5 rounded-2xl border transition-all ${
-                  task.checked ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-slate-950/50 border-slate-800'
-                }`}>
-                  <div className="flex items-start md:items-center gap-4 flex-1">
-                    <button 
-                      disabled={!!checklist.signedBy}
-                      onClick={() => {
-                        if (!task.checked) {
-                          const name = prompt('Qual o seu nome para confirmar esta verificação?');
-                          if (name?.trim()) toggleChecklistTask(task.id, name.trim());
-                        } else {
-                          // Uncheck (apenas se não estiver assinado)
-                          toggleChecklistTask(task.id, '');
-                        }
-                      }}
-                      className={`mt-1 md:mt-0 flex-shrink-0 w-8 h-8 rounded-lg border-2 flex items-center justify-center transition-all ${
-                        task.checked 
-                          ? 'bg-emerald-500 border-emerald-500 text-white' 
-                          : 'border-slate-600 text-transparent hover:border-emerald-500'
-                      } ${checklist.signedBy ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}
-                    >
-                      <CheckCircle size={20} />
-                    </button>
-                    <div>
-                      <p className={`font-bold text-lg ${task.checked ? 'text-slate-300' : 'text-slate-200'}`}>{task.label}</p>
-                      {task.checked && (
-                        <p className="text-sm text-emerald-500 mt-1">Verificado por: {task.checkedBy}</p>
-                      )}
-                    </div>
-                  </div>
-                </div>
+            {/* 4 OPÇÕES OBRIGATÓRIAS SOLICITADAS PELO USUÁRIO */}
+            <div className="grid grid-cols-2 gap-3">
+              {[
+                { id: 'erro_producao', label: 'Erro na Produção', icon: '⚠️' },
+                { id: 'falta_insumo', label: 'Falta de Insumo', icon: '📦' },
+                { id: 'falta_atencao', label: 'Falta de Atenção', icon: '👁️' },
+                { id: 'desperdicio', label: 'Desperdício', icon: '🗑️' }
+              ].map(opt => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setSelectedReason(opt.id as DelayReason)}
+                  className={`p-4 rounded-2xl font-extrabold text-sm flex flex-col items-center justify-center gap-2 border transition-all cursor-pointer ${
+                    selectedReason === opt.id
+                      ? 'bg-red-600 text-white border-red-400 shadow-lg shadow-red-600/40 ring-2 ring-red-400'
+                      : 'bg-slate-900 text-slate-300 border-slate-800 hover:bg-slate-800'
+                  }`}
+                >
+                  <span className="text-2xl">{opt.icon}</span>
+                  <span>{opt.label}</span>
+                </button>
               ))}
             </div>
 
-            <div className="mt-8 pt-8 border-t border-slate-800 flex justify-end">
-              {!checklist?.signedBy ? (
-                <button
-                  onClick={() => {
-                    const allChecked = checklist?.tasks.every(t => t.checked);
-                    if (!allChecked) {
-                      alert('Atenção: Nem todas as tarefas foram verificadas ainda!');
-                    }
-                    const name = prompt('Assinatura do Responsável do Dia (Seu Nome):');
-                    if (name?.trim()) signChecklist(name.trim());
-                  }}
-                  className="px-8 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold text-lg shadow-[0_0_20px_rgba(16,185,129,0.2)] transition-all flex items-center gap-3"
-                >
-                  <CheckCircle size={24} /> Assinar e Encerrar Dia
-                </button>
-              ) : (
-                <div className="px-8 py-4 bg-slate-800 text-slate-400 rounded-2xl font-bold text-lg flex items-center gap-3 cursor-not-allowed">
-                  <CheckCircle size={24} /> Dia Encerrado Oficialmente
-                </div>
-              )}
+            {/* Observações Opcionais */}
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-1">
+                Observação Adicional (Opcional):
+              </label>
+              <input
+                type="text"
+                placeholder="Ex: Refeito hambúrguer por queima do queijo, etc."
+                value={delayNotes}
+                onChange={e => setDelayNotes(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-xs outline-none focus:border-red-500"
+              />
             </div>
+
+            {/* Botões de Ação */}
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setSelectedDelayedSale(null)}
+                className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer transition-all"
+              >
+                Voltar
+              </button>
+              <button
+                type="button"
+                disabled={isSubmittingDelay}
+                onClick={handleConfirmDelayAndComplete}
+                className="flex-2 py-3.5 bg-red-600 hover:bg-red-500 text-white rounded-xl font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg shadow-red-600/30"
+              >
+                <Check size={16} /> Salvar & Concluir Pedido
+              </button>
+            </div>
+
           </div>
         </div>
-      </div>
+      )}
+
     </div>
   );
 }

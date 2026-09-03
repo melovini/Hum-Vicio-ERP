@@ -36,14 +36,14 @@ export default function Home() {
               <ChefHat size={32} />
             </div>
             <div className="z-10 mt-4">
-              <h2 className="text-2xl font-bold text-white mb-2 group-hover:text-amber-400 transition-colors">Cozinha</h2>
-              <p className="text-sm text-slate-400 leading-relaxed mb-6">Painel de rupturas, controle de estoque operacional e perdas.</p>
+              <h2 className="text-2xl font-bold text-white mb-2 group-hover:text-amber-400 transition-colors">Cozinha & KDS</h2>
+              <p className="text-sm text-slate-400 leading-relaxed mb-6">KDS Chapa em tempo real, fila futura, rupturas e perdas.</p>
               
               <div className="flex flex-col gap-2 mt-4">
-                <Link href="/cozinha" className="text-amber-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Painel de Faltas
+                <Link href="/cozinha" className="text-amber-400 text-sm font-extrabold flex items-center gap-2 hover:gap-3 transition-all">
+                  <ChevronRight size={16} /> 🔥 KDS Digital (Chapa)
                 </Link>
-                <Link href="/cozinha/perdas" className="text-amber-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
+                <Link href="/cozinha/perdas" className="text-slate-300 text-sm font-semibold flex items-center gap-2 hover:gap-3 transition-all">
                   <ChevronRight size={16} /> Lançar Perdas
                 </Link>
               </div>
