@@ -1,9 +1,10 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useInventory } from '@/lib/store';
 import { 
   ArrowLeft, LayoutDashboard, TrendingUp, TrendingDown, 
-  DollarSign, AlertTriangle, Utensils, Settings2, Check 
+  DollarSign, AlertTriangle, Utensils, Settings2, Check,
+  Store, Bike, ShoppingBag, PieChart
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -61,6 +62,48 @@ export default function DashboardPage() {
   // 4. Margem de Contribuição e Lucro Líquido Real
   const contributionMargin = totalRevenue - realCmv - wasteLoss - totalFees;
   const netProfit = contributionMargin - dailyFixedExpense;
+
+  // 5. Métricas por Modalidade de Atendimento (Mesa vs Retirada vs Delivery)
+  const modalityStats = useMemo(() => {
+    let mesaTotal = 0, mesaCount = 0;
+    let retiradaTotal = 0, retiradaCount = 0;
+    let deliveryTotal = 0, deliveryCount = 0;
+
+    validSales.forEach(s => {
+      const type = s.orderType || (s.channel === 'ifood' ? 'delivery' : 'mesa');
+      if (type === 'delivery') {
+        deliveryTotal += s.total;
+        deliveryCount += 1;
+      } else if (type === 'retirada') {
+        retiradaTotal += s.total;
+        retiradaCount += 1;
+      } else {
+        mesaTotal += s.total;
+        mesaCount += 1;
+      }
+    });
+
+    return {
+      mesa: { 
+        total: mesaTotal, 
+        count: mesaCount, 
+        avg: mesaCount > 0 ? mesaTotal / mesaCount : 0, 
+        pct: totalRevenue > 0 ? (mesaTotal / totalRevenue) * 100 : 0 
+      },
+      retirada: { 
+        total: retiradaTotal, 
+        count: retiradaCount, 
+        avg: retiradaCount > 0 ? retiradaTotal / retiradaCount : 0, 
+        pct: totalRevenue > 0 ? (retiradaTotal / totalRevenue) * 100 : 0 
+      },
+      delivery: { 
+        total: deliveryTotal, 
+        count: deliveryCount, 
+        avg: deliveryCount > 0 ? deliveryTotal / deliveryCount : 0, 
+        pct: totalRevenue > 0 ? (deliveryTotal / totalRevenue) * 100 : 0 
+      },
+    };
+  }, [validSales, totalRevenue]);
 
   return (
     <div className="min-h-screen relative p-4 md:p-8 overflow-hidden">
@@ -144,6 +187,88 @@ export default function DashboardPage() {
             <p className="text-xs text-slate-500 mt-2 text-right">
               {totalRevenue ? ((ifoodRevenue/totalRevenue)*100).toFixed(1) : 0}% do total
             </p>
+          </div>
+        </div>
+
+        {/* Distribuição por Modalidade de Consumo (Mesa vs Retirada vs Delivery) */}
+        <div className="glass-card rounded-3xl p-6 border border-slate-800 mb-8">
+          <div className="flex items-center gap-3 mb-6">
+            <PieChart size={22} className="text-emerald-400" />
+            <div>
+              <h2 className="text-xl font-bold text-white">Vendas por Modalidade (CAC & Retenção)</h2>
+              <p className="text-xs text-slate-400">Análise de captação e lucratividade: Consumo no Salão, Retirada no Balcão e Entregas.</p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* MESA */}
+            <div className="p-5 rounded-2xl bg-slate-950/60 border border-slate-800/90 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-start mb-2">
+                  <span className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                    🍽️ Consumo Mesa / Salão
+                  </span>
+                  <span className="text-xs font-mono font-bold text-slate-400">{modalityStats.mesa.pct.toFixed(1)}%</span>
+                </div>
+                <p className="text-2xl font-mono font-bold text-white mb-1">
+                  R$ {modalityStats.mesa.total.toFixed(2)}
+                </p>
+                <p className="text-xs text-slate-400">
+                  {modalityStats.mesa.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.mesa.avg.toFixed(2)}</strong>
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-slate-800/80">
+                <span className="text-[11px] text-emerald-400 font-medium">
+                  ✓ Sem custo de entrega / CAC orgânico
+                </span>
+              </div>
+            </div>
+
+            {/* RETIRADA */}
+            <div className="p-5 rounded-2xl bg-slate-950/60 border border-slate-800/90 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-start mb-2">
+                  <span className="text-xs font-bold text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
+                    🥡 Retirada no Balcão
+                  </span>
+                  <span className="text-xs font-mono font-bold text-slate-400">{modalityStats.retirada.pct.toFixed(1)}%</span>
+                </div>
+                <p className="text-2xl font-mono font-bold text-white mb-1">
+                  R$ {modalityStats.retirada.total.toFixed(2)}
+                </p>
+                <p className="text-xs text-slate-400">
+                  {modalityStats.retirada.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.retirada.avg.toFixed(2)}</strong>
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-slate-800/80">
+                <span className="text-[11px] text-blue-400 font-medium">
+                  ✓ Maior margem líquida (Sem taxa e sem garçom)
+                </span>
+              </div>
+            </div>
+
+            {/* DELIVERY */}
+            <div className="p-5 rounded-2xl bg-slate-950/60 border border-slate-800/90 flex flex-col justify-between">
+              <div>
+                <div className="flex justify-between items-start mb-2">
+                  <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                    🛵 Entrega / Delivery
+                  </span>
+                  <span className="text-xs font-mono font-bold text-slate-400">{modalityStats.delivery.pct.toFixed(1)}%</span>
+                </div>
+                <p className="text-2xl font-mono font-bold text-white mb-1">
+                  R$ {modalityStats.delivery.total.toFixed(2)}
+                </p>
+                <p className="text-xs text-slate-400">
+                  {modalityStats.delivery.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.delivery.avg.toFixed(2)}</strong>
+                </p>
+              </div>
+              <div className="mt-4 pt-3 border-t border-slate-800/80">
+                <span className="text-[11px] text-amber-400 font-medium">
+                  ⚠️ Sujeito a taxa motoboy e comissão iFood (30%)
+                </span>
+              </div>
+            </div>
           </div>
         </div>
 

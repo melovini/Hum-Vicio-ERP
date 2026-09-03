@@ -98,10 +98,13 @@ export default function ReceiptModal({ sale, onClose }: ReceiptModalProps) {
                   <p className="font-bold text-sm bg-black text-white px-2 py-0.5 mt-1 inline-block uppercase">
                     VIA DE PRODUÇÃO (CHAPA)
                   </p>
-                  <p className="text-xs mt-1">PEDIDO #{sale.id.slice(0, 6).toUpperCase()} • {sale.channel.toUpperCase()}</p>
+                  <p className="text-xs mt-1">
+                    PEDIDO #{sale.id.slice(0, 6).toUpperCase()} • {sale.channel.toUpperCase()}
+                    {sale.orderType && ` [${sale.orderType.toUpperCase()}]`}
+                  </p>
                   {sale.customerName && (
                     <p className="text-sm font-black mt-1 bg-black text-white px-2 py-0.5 inline-block uppercase">
-                      CLIENTE: {sale.customerName}
+                      {sale.orderType ? `${sale.orderType.toUpperCase()}: ` : 'CLIENTE: '}{sale.customerName}
                     </p>
                   )}
                   <p className="text-[11px] mt-1">{formattedDate} - {formattedTime}</p>
@@ -146,8 +149,13 @@ export default function ReceiptModal({ sale, onClose }: ReceiptModalProps) {
                   <h3 className="font-extrabold text-lg uppercase tracking-wider">HUM VÍCIO BURGER</h3>
                   <p className="text-[10px]">CUPOM NÃO FISCAL DE CONFERÊNCIA</p>
                   <p className="text-xs font-bold mt-1">PEDIDO #{sale.id.slice(0, 6).toUpperCase()}</p>
+                  {sale.orderType && (
+                    <p className="text-xs font-extrabold uppercase mt-0.5">
+                      Modalidade: {sale.orderType === 'delivery' ? 'Entrega / Delivery' : sale.orderType === 'retirada' ? 'Retirada no Balcão' : 'Consumo no Salão / Mesa'}
+                    </p>
+                  )}
                   {sale.customerName && (
-                    <p className="text-xs font-bold uppercase mt-0.5">Cliente: {sale.customerName}</p>
+                    <p className="text-xs font-bold uppercase mt-0.5">Identificação: {sale.customerName}</p>
                   )}
                   <p className="text-[11px]">{formattedDate} às {formattedTime}</p>
                   <p className="text-[11px] font-bold">Canal: {sale.channel.toUpperCase()}</p>

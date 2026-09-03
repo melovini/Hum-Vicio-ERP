@@ -34,6 +34,7 @@ export default function CaixaPage() {
 
   // PDV State
   const [customerName, setCustomerName] = useState('');
+  const [orderType, setOrderType] = useState<'mesa' | 'retirada' | 'delivery'>('mesa');
   const [posCategory, setPosCategory] = useState<'mais_pedidos' | 'hamburgueres' | 'duplos' | 'bebidas' | 'porcoes'>('mais_pedidos');
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [saleChannel, setSaleChannel] = useState<'balcao' | 'ifood'>('balcao');
@@ -242,7 +243,8 @@ export default function CaixaPage() {
     if (cart.length === 0) return;
     
     addSale({
-      customerName: customerName.trim() || 'Balcão',
+      customerName: customerName.trim() || (orderType === 'mesa' ? 'Mesa' : orderType === 'retirada' ? 'Retirada' : 'Delivery'),
+      orderType,
       channel: saleChannel,
       total: cartTotal,
       paymentMethod: saleMethod,
@@ -646,16 +648,59 @@ export default function CaixaPage() {
                         </select>
                       </div>
 
+                      {/* Modalidade de Consumo Solicitada */}
+                      <div className="mb-3">
+                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                          Modalidade do Atendimento:
+                        </label>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setOrderType('mesa')}
+                            className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                              orderType === 'mesa'
+                                ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            🍽️ Mesa
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOrderType('retirada')}
+                            className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                              orderType === 'retirada'
+                                ? 'bg-blue-600 text-white font-extrabold shadow-md'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            🥡 Retirada
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOrderType('delivery')}
+                            className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                              orderType === 'delivery'
+                                ? 'bg-emerald-600 text-white font-extrabold shadow-md'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            🛵 Delivery
+                          </button>
+                        </div>
+                      </div>
+
                       {/* Nome do Cliente Solicitado */}
                       <div className="mb-4">
                         <label className="block text-xs font-bold text-slate-300 mb-1 flex items-center gap-1.5">
-                          <User size={14} className="text-emerald-400" /> Identificação / Nome do Cliente
+                          <User size={14} className="text-emerald-400" /> 
+                          {orderType === 'mesa' ? 'Número da Mesa / Identificação' : orderType === 'retirada' ? 'Nome para Retirada' : 'Nome e Endereço do Cliente'}
                         </label>
                         <input 
                           type="text" 
                           value={customerName}
                           onChange={e => setCustomerName(e.target.value)}
-                          placeholder="Ex: Mesa 4, Vinicius, Delivery"
+                          placeholder={orderType === 'mesa' ? 'Ex: Mesa 04' : orderType === 'retirada' ? 'Ex: Lucas' : 'Ex: Carlos - Rua das Flores, 123'}
                           className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-white text-sm outline-none focus:border-emerald-500 font-medium placeholder:text-slate-600"
                         />
                       </div>
@@ -786,8 +831,19 @@ export default function CaixaPage() {
                               }`}>
                                 {sale.status === 'cancelled' ? 'Estornado' : 'Concluído'}
                               </span>
+                              {sale.orderType && (
+                                <span className={`px-2.5 py-1 rounded-lg text-xs font-extrabold uppercase ${
+                                  sale.orderType === 'delivery'
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                    : sale.orderType === 'retirada'
+                                      ? 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+                                      : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                }`}>
+                                  {sale.orderType === 'delivery' ? '🛵 Delivery' : sale.orderType === 'retirada' ? '🥡 Retirada' : '🍽️ Mesa'}
+                                </span>
+                              )}
                               {sale.customerName && (
-                                <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-blue-500/20 text-blue-300 uppercase">
+                                <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-slate-800 text-slate-200 uppercase border border-slate-700">
                                   {sale.customerName}
                                 </span>
                               )}

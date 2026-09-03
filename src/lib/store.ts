@@ -54,6 +54,7 @@ export interface SaleItem {
 export interface Sale {
   id: string;
   customerName?: string;
+  orderType?: 'mesa' | 'retirada' | 'delivery';
   channel: 'balcao' | 'ifood';
   total: number;
   paymentMethod: string;
@@ -229,6 +230,7 @@ export function useInventory() {
         setSales(salesData.map(s => ({
           id: s.id, 
           customerName: s.customer_name || 'Balcão',
+          orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
           channel: s.channel, 
           total: Number(s.total) || 0, 
           paymentMethod: s.payment_method, 
@@ -860,7 +862,8 @@ export function useInventory() {
       channel: sale.channel, 
       total: sale.total, 
       payment_method: sale.paymentMethod,
-      customer_name: sale.customerName || 'Balcão'
+      customer_name: sale.customerName || 'Balcão',
+      order_type: sale.orderType || 'mesa'
     };
 
     const { data, error } = await supabase.from('sales').insert(payload).select().single();
@@ -916,6 +919,7 @@ export function useInventory() {
         ...sale,
         id: sData.id,
         customerName: sale.customerName || 'Balcão',
+        orderType: sale.orderType || 'mesa',
         date: sData.created_at || new Date().toISOString(),
         status: 'completed'
       };
