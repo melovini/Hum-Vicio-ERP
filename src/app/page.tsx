@@ -92,8 +92,11 @@ export default function Home() {
                 <Link href="/admin/compras" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
                   <ChevronRight size={16} /> Gestão de Compras
                 </Link>
+                <Link href="/admin/engenharia" className="text-amber-400 font-extrabold text-sm flex items-center gap-2 hover:gap-3 transition-all">
+                  <ChevronRight size={16} /> 🍔 Engenharia de Cardápio (BCG)
+                </Link>
                 <Link href="/admin/cardapio" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Ficha Técnica
+                  <ChevronRight size={16} /> Ficha Técnica & Receitas
                 </Link>
                 <Link href="/admin/precificacao" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
                   <ChevronRight size={16} /> Precificação (iFood)

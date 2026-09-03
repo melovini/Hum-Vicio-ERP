@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { useInventory, Product, RecipeIngredient } from '@/lib/store';
 import { 
   ChefHat, ArrowLeft, Plus, Trash2, Edit2, Check, X, 
-  FlaskConical, Sparkles, Layers, DollarSign, Store, Smartphone, Search 
+  FlaskConical, Sparkles, Layers, DollarSign, Store, Smartphone, Search, ChevronRight 
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -205,6 +205,13 @@ export default function EngenhariaCardapioPage() {
           >
             <FlaskConical size={18} /> Sub-Receitas & Molhos da Casa ({prepIngredients.length})
           </button>
+
+          <Link 
+            href="/admin/engenharia"
+            className="px-6 py-3.5 rounded-2xl font-bold text-sm flex items-center gap-2 transition-all cursor-pointer bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 ml-auto"
+          >
+            <Sparkles size={18} /> Matriz BCG & Engenharia <ChevronRight size={14} />
+          </Link>
         </div>
 
         {/* ABA 1: PRODUTOS & FICHAS TÉCNICAS */}

@@ -4,7 +4,7 @@ import { useInventory } from '@/lib/store';
 import { 
   ArrowLeft, LayoutDashboard, TrendingUp, TrendingDown, 
   DollarSign, AlertTriangle, Utensils, Settings2, Check,
-  Store, Bike, ShoppingBag, PieChart
+  Store, Bike, ShoppingBag, PieChart, Award
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -129,6 +129,15 @@ export default function DashboardPage() {
               </div>
               <h1 className="text-4xl font-extrabold text-white tracking-tight">DRE de Precisão Absoluta</h1>
             </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Link
+              href="/admin/engenharia"
+              className="px-5 py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-2xl font-extrabold text-xs md:text-sm shadow-[0_0_20px_rgba(245,158,11,0.25)] transition-all flex items-center gap-2 cursor-pointer"
+            >
+              <Award size={18} /> Engenharia de Cardápio (BCG)
+            </Link>
           </div>
         </header>
 
