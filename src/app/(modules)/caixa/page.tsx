@@ -640,7 +640,16 @@ export default function CaixaPage() {
                         
                         <select 
                           value={saleChannel} 
-                          onChange={e => setSaleChannel(e.target.value as any)} 
+                          onChange={e => {
+                            const ch = e.target.value as 'balcao' | 'ifood';
+                            setSaleChannel(ch);
+                            if (ch === 'ifood') {
+                              setSaleMethod('ifood_online');
+                              setOrderType('delivery');
+                            } else {
+                              setSaleMethod('credito');
+                            }
+                          }} 
                           className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 font-bold outline-none cursor-pointer"
                         >
                           <option value="balcao">🏪 Balcão</option>
@@ -773,26 +782,44 @@ export default function CaixaPage() {
                         </span>
                       </div>
 
-                      <div className="grid grid-cols-4 gap-2">
-                        {[
-                          { id: 'credito', label: 'Crédito' },
-                          { id: 'debito', label: 'Débito' },
-                          { id: 'pix', label: 'PIX' },
-                          { id: 'dinheiro', label: 'Dinheiro' }
-                        ].map(method => (
-                          <button
-                            key={method.id}
-                            type="button"
-                            onClick={() => setSaleMethod(method.id)}
-                            className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                              saleMethod === method.id 
-                                ? 'bg-emerald-600 text-white shadow-md' 
-                                : 'bg-slate-900 text-slate-400 hover:bg-slate-800 border border-slate-800'
-                            }`}
-                          >
-                            {method.label}
-                          </button>
-                        ))}
+                      <div className="space-y-1.5">
+                        <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                          Forma de Pagamento:
+                        </label>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {[
+                            { id: 'ifood_online', label: 'iFood Online', fee: 'Taxa 33%', isIfood: true },
+                            { id: 'ifood_entrega', label: 'iFood Entrega', fee: 'Taxa 23%', isIfood: true },
+                            { id: 'credito', label: 'Cartão Crédito', fee: 'Taxa 3%' },
+                            { id: 'debito', label: 'Cartão Débito', fee: 'Taxa 1%' },
+                            { id: 'pix', label: 'PIX Direto', fee: 'Taxa 0%' },
+                            { id: 'dinheiro', label: 'Dinheiro', fee: 'Gaveta' }
+                          ].map(method => (
+                            <button
+                              key={method.id}
+                              type="button"
+                              onClick={() => {
+                                setSaleMethod(method.id);
+                                if (method.isIfood && saleChannel !== 'ifood') {
+                                  setSaleChannel('ifood');
+                                  setOrderType('delivery');
+                                }
+                              }}
+                              className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border ${
+                                saleMethod === method.id 
+                                  ? 'bg-emerald-600 border-emerald-500 text-white shadow-md font-extrabold' 
+                                  : method.isIfood
+                                    ? 'bg-red-500/10 border-red-500/30 text-red-300 hover:bg-red-500/20'
+                                    : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border-slate-800'
+                              }`}
+                            >
+                              <span className="block text-xs font-bold leading-tight">{method.label}</span>
+                              <span className={`text-[10px] font-mono ${saleMethod === method.id ? 'text-emerald-100' : 'text-slate-400'}`}>
+                                {method.fee}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
                       </div>
 
                       <button 

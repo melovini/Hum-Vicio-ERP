@@ -47,17 +47,25 @@ export default function DashboardPage() {
   // 2. Custo Total de Desperdícios / Quebras registradas pela Cozinha
   const wasteLoss = getTotalWasteCost();
 
-  // 3. Cálculo exato de Taxas (Cartões / iFood)
+  // 3. Cálculo exato de Taxas (iFood 23% e 33%, Cartões 1% a 3%)
   const totalFees = validSales.reduce((acc, sale) => {
     let feeRate = 0;
-    if (sale.channel === 'ifood') {
-      feeRate = 0.30; // 30% iFood
+    if (sale.paymentMethod === 'ifood_online') {
+      feeRate = 0.33; // 33% iFood Pagamento Online no App
+    } else if (sale.paymentMethod === 'ifood_entrega' || sale.paymentMethod === 'ifood') {
+      feeRate = 0.23; // 23% iFood Pagamento na Entrega
+    } else if (sale.channel === 'ifood') {
+      feeRate = 0.23; // Fallback iFood
     } else {
       if (sale.paymentMethod === 'credito') feeRate = 0.03;
-      else if (sale.paymentMethod === 'debito' || sale.paymentMethod === 'pix') feeRate = 0.01;
+      else if (sale.paymentMethod === 'debito') feeRate = 0.01;
+      else if (sale.paymentMethod === 'pix' || sale.paymentMethod === 'dinheiro') feeRate = 0.00;
     }
     return acc + (sale.total * feeRate);
   }, 0);
+
+  const ifoodOnlineRevenue = validSales.filter(s => s.paymentMethod === 'ifood_online').reduce((acc, s) => acc + s.total, 0);
+  const ifoodEntregaRevenue = validSales.filter(s => s.paymentMethod === 'ifood_entrega' || (s.channel === 'ifood' && s.paymentMethod !== 'ifood_online')).reduce((acc, s) => acc + s.total, 0);
 
   // 4. Margem de Contribuição e Lucro Líquido Real
   const contributionMargin = totalRevenue - realCmv - wasteLoss - totalFees;
@@ -177,16 +185,21 @@ export default function DashboardPage() {
           </div>
 
           <div className="glass-card rounded-3xl p-6 border border-slate-800">
-            <div className="flex justify-between items-center mb-3">
-              <span className="text-sm font-bold text-slate-300">Vendas iFood</span>
+            <div className="flex justify-between items-center mb-2">
+              <span className="text-sm font-bold text-slate-300">Vendas iFood Total</span>
               <span className="font-mono text-lg font-bold text-red-400">R$ {ifoodRevenue.toFixed(2)}</span>
             </div>
             <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
               <div className="bg-red-500 h-full rounded-full transition-all" style={{ width: `${totalRevenue ? (ifoodRevenue/totalRevenue)*100 : 0}%` }} />
             </div>
-            <p className="text-xs text-slate-500 mt-2 text-right">
-              {totalRevenue ? ((ifoodRevenue/totalRevenue)*100).toFixed(1) : 0}% do total
-            </p>
+            <div className="flex justify-between text-xs mt-3 pt-2 border-t border-slate-800/60">
+              <span className="text-slate-400">
+                Online (33%): <strong className="text-red-400 font-mono">R$ {ifoodOnlineRevenue.toFixed(2)}</strong>
+              </span>
+              <span className="text-slate-400">
+                Entrega (23%): <strong className="text-amber-400 font-mono">R$ {ifoodEntregaRevenue.toFixed(2)}</strong>
+              </span>
+            </div>
           </div>
         </div>
 
@@ -323,7 +336,7 @@ export default function DashboardPage() {
             </div>
 
             <div className="flex justify-between p-4 border-b border-slate-800/60">
-              <span className="text-slate-400 pl-4">(-) Taxas de Operação (iFood 30% / Cartão 3% / Pix-Déb 1%)</span>
+              <span className="text-slate-400 pl-4">(-) Taxas de Operação (iFood 33% Online / 23% Entrega / Cartões 1%-3%)</span>
               <span className="font-mono text-red-400 font-semibold">- R$ {totalFees.toFixed(2)}</span>
             </div>
             
