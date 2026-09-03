@@ -54,8 +54,9 @@ export default function GestaoInsumosPage() {
     setIsAdding(true);
   };
 
-  // Agrupar itens por categoria
-  const groupedItems = items.reduce((acc, item) => {
+  // Agrupar itens por categoria (apenas ativos)
+  const activeItems = items.filter(i => i.isActive !== false);
+  const groupedItems = activeItems.reduce((acc, item) => {
     let rawCat = (item.category || 'Geral').trim().toLowerCase();
     const cat = rawCat.charAt(0).toUpperCase() + rawCat.slice(1);
     

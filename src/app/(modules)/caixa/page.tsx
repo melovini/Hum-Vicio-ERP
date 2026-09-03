@@ -6,7 +6,7 @@ import {
   Send, XCircle, ShoppingCart as CartIcon, Plus, Minus, Trash2, 
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
-  Clock, Play, Pause, AlertOctagon, Bell
+  Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -28,6 +28,26 @@ export default function CaixaPage() {
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [selectedSaleToPrint, setSelectedSaleToPrint] = useState<Sale | null>(null);
+
+  // Estados para Cancelamento Seguro de Vendas com Senha
+  const [saleToCancel, setSaleToCancel] = useState<Sale | null>(null);
+  const [cancelPasswordInput, setCancelPasswordInput] = useState('');
+  const [cancelReasonInput, setCancelReasonInput] = useState('Desistência do cliente antes do preparo');
+  const [cancelNotesInput, setCancelNotesInput] = useState('');
+  const [cancelError, setCancelError] = useState('');
+
+  // Estado para Relatório de Fechamento de Caixa Cego
+  const [closingSummary, setClosingSummary] = useState<{
+    initial: number;
+    cashSales: number;
+    suprimentos: number;
+    sangrias: number;
+    expectedInDrawer: number;
+    countedCash: number;
+    variance: number;
+    operator: string;
+    date: string;
+  } | null>(null);
 
   // Alerta sonoro e visual de Pedido Pronto para o Balcão
   const [caixaReadyAlert, setCaixaReadyAlert] = useState<Sale | null>(null);
@@ -152,6 +172,11 @@ export default function CaixaPage() {
     ];
   }, [products]);
 
+  // Filtrar apenas produtos ativos (respeitando soft delete)
+  const activeProducts = useMemo(() => {
+    return products.filter(p => p.isActive !== false);
+  }, [products]);
+
   // 9 Itens Mais Pedidos (calculados automaticamente das vendas)
   const top9Products = useMemo(() => {
     const counts: Record<string, number> = {};
@@ -161,7 +186,7 @@ export default function CaixaPage() {
       });
     });
 
-    const vendaveis = products.filter(p => 
+    const vendaveis = activeProducts.filter(p => 
       !p.name.startsWith('Adicional:') && 
       !p.name.startsWith('Pote Maionese') &&
       p.category !== 'combo'
@@ -169,7 +194,7 @@ export default function CaixaPage() {
 
     const sorted = [...vendaveis].sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0));
     return sorted.slice(0, 9);
-  }, [products, sales]);
+  }, [activeProducts, sales]);
 
   // Produtos exibidos por categoria
   const displayedProducts = useMemo(() => {
@@ -177,17 +202,17 @@ export default function CaixaPage() {
       case 'mais_pedidos':
         return top9Products;
       case 'hamburgueres':
-        return products.filter(p => p.category === 'lanche' && !p.name.toLowerCase().includes('duplo'));
+        return activeProducts.filter(p => p.category === 'lanche' && !p.name.toLowerCase().includes('duplo'));
       case 'duplos':
-        return products.filter(p => p.category === 'lanche' && p.name.toLowerCase().includes('duplo'));
+        return activeProducts.filter(p => p.category === 'lanche' && p.name.toLowerCase().includes('duplo'));
       case 'bebidas':
-        return products.filter(p => p.category === 'bebida');
+        return activeProducts.filter(p => p.category === 'bebida');
       case 'porcoes':
-        return products.filter(p => p.category === 'porcao' && !p.name.startsWith('Adicional:') && !p.name.startsWith('Pote Maionese'));
+        return activeProducts.filter(p => p.category === 'porcao' && !p.name.startsWith('Adicional:') && !p.name.startsWith('Pote Maionese'));
       default:
-        return products;
+        return activeProducts;
     }
-  }, [posCategory, products, top9Products]);
+  }, [posCategory, activeProducts, top9Products]);
 
   // Clique no Produto
   const handleProductClick = (product: Product) => {
@@ -336,8 +361,52 @@ export default function CaixaPage() {
   const handleConfirmClose = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!operatorCloseInput.trim()) return;
-    await closeCaixa(Number(countedAmountInput) || 0, operatorCloseInput.trim());
+    const counted = Number(countedAmountInput) || 0;
+    const expected = sessionStats.expectedInDrawer;
+    const variance = counted - expected;
+    const operator = operatorCloseInput.trim();
+
+    await closeCaixa(counted, operator, expected);
+
+    setClosingSummary({
+      initial: sessionStats.initial,
+      cashSales: sessionStats.cashSales,
+      suprimentos: sessionStats.suprimentos,
+      sangrias: sessionStats.sangrias,
+      expectedInDrawer: expected,
+      countedCash: counted,
+      variance,
+      operator,
+      date: new Date().toISOString()
+    });
+
     setShowCloseModal(false);
+    setCountedAmountInput('');
+    setOperatorCloseInput('');
+  };
+
+  const handleConfirmCancelSale = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!saleToCancel) return;
+
+    const validPassword = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || 'admin';
+    if (cancelPasswordInput.trim() !== validPassword) {
+      setCancelError('Senha de supervisor incorreta. O estorno não foi autorizado.');
+      return;
+    }
+
+    await cancelSale(
+      saleToCancel.id, 
+      cancelReasonInput, 
+      'Admin / Supervisor', 
+      cancelNotesInput.trim() || undefined
+    );
+
+    setSaleToCancel(null);
+    setCancelPasswordInput('');
+    setCancelReasonInput('Desistência do cliente antes do preparo');
+    setCancelNotesInput('');
+    setCancelError('');
   };
 
   // Atalho rápido de observações
@@ -465,27 +534,15 @@ export default function CaixaPage() {
               </h2>
               <p className="text-slate-400 text-sm mb-6">Confira os valores na gaveta e encerre o turno.</p>
 
-              <div className="bg-slate-950/60 p-4 rounded-2xl border border-slate-800 mb-6 space-y-2 text-sm">
-                <div className="flex justify-between text-slate-400">
-                  <span>Troco Inicial:</span>
-                  <span className="font-mono text-slate-200">R$ {sessionStats.initial.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Vendas em Dinheiro:</span>
-                  <span className="font-mono text-emerald-400 font-bold">+ R$ {sessionStats.cashSales.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Suprimentos:</span>
-                  <span className="font-mono text-blue-400">+ R$ {sessionStats.suprimentos.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Sangrias:</span>
-                  <span className="font-mono text-red-400">- R$ {sessionStats.sangrias.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-200 font-bold pt-2 border-t border-slate-800 text-base">
-                  <span>Esperado na Gaveta:</span>
-                  <span className="font-mono text-amber-400">R$ {sessionStats.expectedInDrawer.toFixed(2)}</span>
-                </div>
+              {/* Box de Instrução para Fechamento Cego */}
+              <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl mb-6 space-y-2 text-xs">
+                <p className="font-black text-amber-400 flex items-center gap-1.5 uppercase tracking-wide">
+                  <Lock size={15} /> Fechamento Cego Ativado
+                </p>
+                <p className="text-slate-300 leading-relaxed">
+                  Conte fisicamente todas as cédulas e moedas presentes na gaveta e digite o valor total abaixo.
+                  O sistema fará a apuração automática da quebra ou sobra de caixa após a confirmação.
+                </p>
               </div>
 
               <form onSubmit={handleConfirmClose} className="space-y-4">
@@ -1338,12 +1395,16 @@ export default function CaixaPage() {
                                     onClick={() => {
                                       if (sale.productionStatus === 'em_producao') {
                                         setPendingRemovalFromGrill({ sale, action: 'cancel' });
-                                      } else if (confirm('Deseja estornar esta venda? Os insumos voltarão automaticamente ao estoque.')) {
-                                        cancelSale(sale.id);
+                                      } else {
+                                        setSaleToCancel(sale);
+                                        setCancelPasswordInput('');
+                                        setCancelReasonInput('Desistência do cliente antes do preparo');
+                                        setCancelNotesInput('');
+                                        setCancelError('');
                                       }
                                     }} 
                                     className="text-slate-500 hover:text-red-500 p-2 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer" 
-                                    title="Estornar Venda"
+                                    title="Estornar Venda (Requer Senha de Supervisor)"
                                   >
                                     <XCircle size={18} />
                                   </button>
@@ -1699,16 +1760,214 @@ export default function CaixaPage() {
                   type="button"
                   onClick={async () => {
                     const { sale, action } = pendingRemovalFromGrill;
+                    setPendingRemovalFromGrill(null);
                     if (action === 'pause') {
                       await updateOrderProductionStatus(sale.id, 'em_espera');
                     } else {
-                      await cancelSale(sale.id);
+                      setSaleToCancel(sale);
+                      setCancelPasswordInput('');
+                      setCancelReasonInput('Desistência do cliente antes do preparo');
+                      setCancelNotesInput('');
+                      setCancelError('');
                     }
-                    setPendingRemovalFromGrill(null);
                   }}
                   className="flex-1 py-3.5 bg-red-600 hover:bg-red-500 text-white rounded-xl font-extrabold text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-red-600/30 transition-all"
                 >
                   Confirmar e Avisar Chapa
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE CANCELAMENTO / ESTORNO SEGURO COM SENHA E MOTIVO OBRIGATÓRIO */}
+        {saleToCancel && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-red-500/40 rounded-3xl p-6 md:p-8 max-w-lg w-full shadow-2xl animate-fade-in space-y-5">
+              <div className="flex items-center gap-3 text-red-400">
+                <div className="p-3 bg-red-500/10 rounded-2xl border border-red-500/20">
+                  <ShieldAlert size={28} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-white">Autorização de Estorno</h3>
+                  <p className="text-xs text-slate-400">Esta ação exige liberação de supervisor e registro auditável.</p>
+                </div>
+              </div>
+
+              {/* Detalhes da Comanda a Cancelar */}
+              <div className="bg-slate-950/70 p-4 rounded-2xl border border-slate-800 space-y-1.5 text-xs">
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Comanda / Pedido:</span>
+                  <strong className="font-mono text-white text-sm">#{saleToCancel.id.slice(0, 5).toUpperCase()}</strong>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Cliente:</span>
+                  <strong className="text-amber-400 uppercase">{saleToCancel.customerName || 'Cliente'}</strong>
+                </div>
+                <div className="flex justify-between items-center text-slate-300">
+                  <span>Total da Venda:</span>
+                  <strong className="font-mono text-emerald-400 text-sm">R$ {saleToCancel.total.toFixed(2)}</strong>
+                </div>
+              </div>
+
+              <form onSubmit={handleConfirmCancelSale} className="space-y-4">
+                {/* Motivo Obrigatório */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    Motivo do Cancelamento <span className="text-red-400">*</span>
+                  </label>
+                  <select
+                    value={cancelReasonInput}
+                    onChange={e => setCancelReasonInput(e.target.value)}
+                    required
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-xs font-semibold outline-none focus:border-red-500 cursor-pointer"
+                  >
+                    <option value="Desistência do cliente antes do preparo">Desistência do cliente antes do preparo</option>
+                    <option value="Erro de digitação / lançamento no PDV">Erro de digitação / lançamento no PDV</option>
+                    <option value="Lanche preparado errado / trocado">Lanche preparado errado / trocado</option>
+                    <option value="Problema no pagamento / recusado">Problema no pagamento / recusado</option>
+                    <option value="Cliente não aguardou tempo de espera">Cliente não aguardou tempo de espera</option>
+                    <option value="Outro motivo">Outro motivo</option>
+                  </select>
+                </div>
+
+                {/* Observações Opcionais */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    Observações Adicionais (opcional)
+                  </label>
+                  <input
+                    type="text"
+                    value={cancelNotesInput}
+                    onChange={e => setCancelNotesInput(e.target.value)}
+                    placeholder="Ex: Cliente trocou pelo combo da mesa 02"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-xs outline-none focus:border-red-500"
+                  />
+                </div>
+
+                {/* Senha do Supervisor / Admin */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
+                    Senha do Administrador / Supervisor <span className="text-red-400">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={cancelPasswordInput}
+                    onChange={e => {
+                      setCancelPasswordInput(e.target.value);
+                      setCancelError('');
+                    }}
+                    placeholder="Digite a senha de liberação"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-sm font-mono outline-none focus:border-red-500"
+                  />
+                  {cancelError && (
+                    <p className="text-red-400 text-xs font-bold mt-1.5 flex items-center gap-1">
+                      <AlertCircle size={13} /> {cancelError}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setSaleToCancel(null)}
+                    className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer transition-all"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-red-600/30 cursor-pointer transition-all"
+                  >
+                    Confirmar Estorno
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* COMPROVANTE DE FECHAMENTO DE CAIXA (APURAÇÃO DE QUEBRA/SOBRA) */}
+        {closingSummary && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl animate-fade-in space-y-5">
+              <div className="text-center space-y-1">
+                <div className="w-14 h-14 mx-auto bg-blue-500/10 text-blue-400 rounded-2xl flex items-center justify-center mb-2 border border-blue-500/20">
+                  <Receipt size={28} />
+                </div>
+                <h3 className="text-2xl font-black text-white">Fechamento de Caixa</h3>
+                <p className="text-xs text-slate-400">Apuração de Turno — {new Date(closingSummary.date).toLocaleString('pt-BR')}</p>
+                <p className="text-xs text-amber-400 font-bold uppercase">Operador: {closingSummary.operator}</p>
+              </div>
+
+              {/* Extrato da Conferência */}
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2 text-xs">
+                <div className="flex justify-between text-slate-400">
+                  <span>Troco Inicial:</span>
+                  <span className="font-mono text-slate-200">R$ {closingSummary.initial.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-slate-400">
+                  <span>Vendas em Dinheiro:</span>
+                  <span className="font-mono text-emerald-400 font-bold">+ R$ {closingSummary.cashSales.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-slate-400">
+                  <span>Suprimentos na Gaveta:</span>
+                  <span className="font-mono text-blue-400">+ R$ {closingSummary.suprimentos.toFixed(2)}</span>
+                </div>
+                <div className="flex justify-between text-slate-400">
+                  <span>Sangrias Realizadas:</span>
+                  <span className="font-mono text-red-400">- R$ {closingSummary.sangrias.toFixed(2)}</span>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800 space-y-1.5 font-bold">
+                  <div className="flex justify-between text-slate-300">
+                    <span>Esperado pelo Sistema:</span>
+                    <span className="font-mono text-white">R$ {closingSummary.expectedInDrawer.toFixed(2)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-300">
+                    <span>Informado pelo Operador:</span>
+                    <span className="font-mono text-white">R$ {closingSummary.countedCash.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                {/* Apuração da Diferença */}
+                <div className={`mt-3 p-3 rounded-xl border text-center font-black text-sm flex flex-col items-center gap-1 ${
+                  Math.abs(closingSummary.variance) < 0.01
+                    ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-400'
+                    : closingSummary.variance < 0
+                      ? 'bg-red-950/40 border-red-500/40 text-red-400'
+                      : 'bg-amber-950/40 border-amber-500/40 text-amber-400'
+                }`}>
+                  <span className="text-[10px] uppercase tracking-wider">
+                    {Math.abs(closingSummary.variance) < 0.01 
+                      ? '✅ Caixa Bateu Perfeitamente!' 
+                      : closingSummary.variance < 0 
+                        ? '⚠️ Quebra de Caixa (Falta)' 
+                        : '💡 Sobra de Caixa'}
+                  </span>
+                  <span className="text-xl font-mono">
+                    {closingSummary.variance >= 0 ? '+' : ''} R$ {closingSummary.variance.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    window.print();
+                  }}
+                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-all"
+                >
+                  <Printer size={16} /> Imprimir Comprovante
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setClosingSummary(null)}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider cursor-pointer transition-all shadow-md"
+                >
+                  Concluir & Sair
                 </button>
               </div>
             </div>

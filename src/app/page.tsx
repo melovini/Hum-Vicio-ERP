@@ -113,6 +113,9 @@ export default function Home() {
                 <Link href="/admin/checklists" className="text-emerald-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
                   <ChevronRight size={16} /> Relatórios de Checklists
                 </Link>
+                <Link href="/admin/auditoria" className="text-emerald-400 font-extrabold text-sm flex items-center gap-2 hover:gap-3 transition-all pt-1 border-t border-slate-800/80">
+                  <ChevronRight size={16} /> 🛡️ Central de Auditoria & Segurança
+                </Link>
               </div>
             </div>
           </div>

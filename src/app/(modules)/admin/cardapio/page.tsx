@@ -89,12 +89,14 @@ export default function EngenhariaCardapioPage() {
 
   // Sub-receitas (Insumos da categoria 'Pré-preparos' ou 'Molhos & Condimentos')
   const prepIngredients = items.filter(i => 
-    i.category.toLowerCase().includes('pré-preparo') || 
-    i.category.toLowerCase().includes('molhos') ||
-    i.name.toLowerCase().includes('maionese') ||
-    i.name.toLowerCase().includes('coleslaw') ||
-    i.name.toLowerCase().includes('cebola caramelizada') ||
-    i.name.toLowerCase().includes('farofa')
+    i.isActive !== false && (
+      i.category.toLowerCase().includes('pré-preparo') || 
+      i.category.toLowerCase().includes('molhos') ||
+      i.name.toLowerCase().includes('maionese') ||
+      i.name.toLowerCase().includes('coleslaw') ||
+      i.name.toLowerCase().includes('cebola caramelizada') ||
+      i.name.toLowerCase().includes('farofa')
+    )
   );
 
   const activePrep = prepIngredients.find(p => p.id === selectedPrepId) || prepIngredients[0];
@@ -109,11 +111,10 @@ export default function EngenhariaCardapioPage() {
       childIngredientId: c.childIngredientId,
       quantity: c.quantity
     }));
-    currentComponents.push({
-      childIngredientId: subChildId,
-      quantity: Number(subChildQty)
-    });
-    await saveSubRecipe(activePrep.id, currentComponents);
+    await saveSubRecipe(activePrep.id, [
+      ...currentComponents,
+      { childIngredientId: subChildId, quantity: Number(subChildQty) }
+    ]);
     setSubChildId('');
     setSubChildQty('');
   };
@@ -122,10 +123,7 @@ export default function EngenhariaCardapioPage() {
     if (!activePrep) return;
     const currentComponents = currentSubItems
       .filter((_, i) => i !== idx)
-      .map(c => ({
-        childIngredientId: c.childIngredientId,
-        quantity: c.quantity
-      }));
+      .map(c => ({ childIngredientId: c.childIngredientId, quantity: c.quantity }));
     await saveSubRecipe(activePrep.id, currentComponents);
   };
 
@@ -147,6 +145,7 @@ export default function EngenhariaCardapioPage() {
   };
 
   const filteredProducts = products.filter(p => {
+    if (p.isActive === false) return false;
     const matchesCategory = categoryFilter === 'todos' || p.category === categoryFilter;
     const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesCategory && matchesSearch;

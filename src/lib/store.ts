@@ -13,6 +13,7 @@ export interface InventoryItem {
   costPerUnit: number;
   currentStock: number;
   status: StockStatus;
+  isActive?: boolean;
 }
 
 // === PRODUTOS (Lanches/Combos) ===
@@ -36,6 +37,7 @@ export interface Product {
   priceBalcao: number;
   priceIfood: number;
   recipe: RecipeIngredient[];
+  isActive?: boolean;
 }
 
 // === VENDAS ===
@@ -72,6 +74,11 @@ export interface Sale {
   targetPrepMinutes?: number;
   delayReason?: DelayReason;
   delayNotes?: string;
+  // Campos de Auditoria de Cancelamento:
+  cancellationReason?: string;
+  cancelledBy?: string;
+  cancelledAt?: string;
+  cancellationNotes?: string;
 }
 
 // === CAIXA EM NUVEM ===
@@ -88,10 +95,35 @@ export interface CashSession {
   status: 'open' | 'closed';
   initialAmount: number;
   finalAmount?: number;
+  expectedAmount?: number;
+  varianceAmount?: number; // finalAmount - expectedAmount (Quebra ou Sobra)
   openedBy: string;
   closedBy?: string;
   openedAt: string;
   closedAt?: string;
+}
+
+// === CENTRAL DE LOGS DE AUDITORIA (SEGURANÇA DO ADMINISTRADOR) ===
+export type AuditAction = 
+  | 'CANCELAMENTO_VENDA' 
+  | 'FECHAMENTO_CAIXA' 
+  | 'ABERTURA_CAIXA' 
+  | 'SANGRIA' 
+  | 'SUPRIMENTO' 
+  | 'ALTERACAO_PRECO' 
+  | 'AJUSTE_ESTOQUE' 
+  | 'EXCLUSAO_ITEM'
+  | 'CADASTRO_PRODUTO'
+  | 'DESATIVACAO_PRODUTO';
+
+export interface AuditLog {
+  id: string;
+  timestamp: string;
+  action: AuditAction;
+  operator: string;
+  details: string;
+  oldValue?: string;
+  newValue?: string;
 }
 
 // === REGISTRO DE PERDAS (COZINHA) ===
@@ -236,6 +268,48 @@ export function useInventory() {
 
   // Sub-receitas State
   const [subRecipes, setSubRecipes] = useState<SubRecipeItem[]>([]);
+
+  // Logs de Auditoria do Administrador (Segurança & Rastreabilidade)
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+
+  const addAuditLog = async (
+    action: AuditAction, 
+    details: string, 
+    operator?: string, 
+    oldValue?: string, 
+    newValue?: string
+  ) => {
+    const newLog: AuditLog = {
+      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `log_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      timestamp: new Date().toISOString(),
+      action,
+      operator: operator || 'Sistema',
+      details,
+      oldValue,
+      newValue
+    };
+
+    setAuditLogs(prev => {
+      const updated = [newLog, ...prev].slice(0, 500);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_audit_logs', JSON.stringify(updated.slice(0, 200))); } catch {}
+      }
+      return updated;
+    });
+
+    try {
+      await supabase.from('audit_logs').insert({
+        action: newLog.action,
+        operator: newLog.operator,
+        details: newLog.details,
+        old_value: newLog.oldValue || null,
+        new_value: newLog.newValue || null,
+        created_at: newLog.timestamp
+      });
+    } catch (err) {
+      console.warn('Registro de auditoria salvo localmente:', err);
+    }
+  };
 
   const supabase = createClient();
 
@@ -502,6 +576,30 @@ export function useInventory() {
         console.warn('Tabela sub_recipes ainda não criada:', err);
       }
 
+      // 12. Fetch Logs de Auditoria
+      try {
+        const { data: logsData } = await supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200);
+        if (logsData && logsData.length > 0) {
+          setAuditLogs(logsData.map((l: any) => ({
+            id: l.id,
+            timestamp: l.created_at || l.timestamp,
+            action: l.action,
+            operator: l.operator || 'Sistema',
+            details: l.details || '',
+            oldValue: l.old_value,
+            newValue: l.new_value
+          })));
+        } else if (typeof window !== 'undefined') {
+          const cached = localStorage.getItem('hum_vicio_audit_logs');
+          if (cached) setAuditLogs(JSON.parse(cached));
+        }
+      } catch {
+        if (typeof window !== 'undefined') {
+          const cached = localStorage.getItem('hum_vicio_audit_logs');
+          if (cached) setAuditLogs(JSON.parse(cached));
+        }
+      }
+
       setIsLoaded(true);
     };
 
@@ -607,8 +705,19 @@ export function useInventory() {
   };
 
   const removeInventoryItem = async (id: string) => {
-    await supabase.from('inventory').delete().eq('id', id);
-    setItems(items.filter(i => i.id !== id));
+    const item = items.find(i => i.id === id);
+    try {
+      await supabase.from('inventory').update({ is_active: false }).eq('id', id);
+    } catch {
+      await supabase.from('inventory').delete().eq('id', id);
+    }
+    setItems(items.map(i => i.id === id ? { ...i, isActive: false } : i));
+
+    addAuditLog(
+      'EXCLUSAO_ITEM',
+      `Insumo "${item?.name || id}" desativado do inventário.`,
+      'Admin'
+    );
   };
 
   const updateStatus = async (id: string, newStatus: StockStatus, remainingQuantity?: number) => {
@@ -763,6 +872,12 @@ export function useInventory() {
         setStockAudits([newAudit, ...stockAudits]);
       }
 
+      addAuditLog(
+        'AJUSTE_ESTOQUE',
+        `Auditoria física concluída por ${auditedBy}. Variação financeira apurada: R$ ${totalVarianceCost.toFixed(2)}`,
+        auditedBy
+      );
+
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message };
@@ -833,11 +948,19 @@ export function useInventory() {
         }));
         await supabase.from('recipes').insert(recipeInserts);
       }
-      setProducts([...products, { ...prod, id: pData.id }]);
+      setProducts([...products, { ...prod, id: pData.id, isActive: true }]);
+
+      addAuditLog(
+        'CADASTRO_PRODUTO',
+        `Produto "${prod.name}" cadastrado na categoria "${prod.category}". Preço Balcão: R$ ${prod.priceBalcao.toFixed(2)}`,
+        'Admin'
+      );
     }
   };
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
+    const existing = products.find(p => p.id === id);
+
     await supabase.from('products').update({
       name: updates.name, category: updates.category, 
       price_balcao: updates.priceBalcao, price_ifood: updates.priceIfood
@@ -853,12 +976,33 @@ export function useInventory() {
       }
     }
 
+    if (existing && (updates.priceBalcao !== undefined || updates.priceIfood !== undefined)) {
+      if (updates.priceBalcao !== existing.priceBalcao || updates.priceIfood !== existing.priceIfood) {
+        addAuditLog(
+          'ALTERACAO_PRECO',
+          `Preço do produto "${existing.name}" alterado. Balcão: R$ ${existing.priceBalcao.toFixed(2)} -> R$ ${(updates.priceBalcao ?? existing.priceBalcao).toFixed(2)} | iFood: R$ ${existing.priceIfood.toFixed(2)} -> R$ ${(updates.priceIfood ?? existing.priceIfood).toFixed(2)}`,
+          'Admin'
+        );
+      }
+    }
+
     setProducts(products.map(p => p.id === id ? { ...p, ...updates } : p));
   };
 
   const removeProduct = async (id: string) => {
-    await supabase.from('products').delete().eq('id', id);
-    setProducts(products.filter(p => p.id !== id));
+    const prod = products.find(p => p.id === id);
+    try {
+      await supabase.from('products').update({ is_active: false }).eq('id', id);
+    } catch {
+      await supabase.from('products').delete().eq('id', id);
+    }
+    setProducts(products.map(p => p.id === id ? { ...p, isActive: false } : p));
+
+    addAuditLog(
+      'DESATIVACAO_PRODUTO',
+      `Produto "${prod?.name || id}" desativado do cardápio.`,
+      'Admin'
+    );
   };
 
   // Cálculo de custo real do insumo (com suporte a sub-receitas de maioneses e molhos)
@@ -979,21 +1123,43 @@ export function useInventory() {
     } catch {
       setIsOpen(true);
     }
+
+    addAuditLog(
+      'ABERTURA_CAIXA',
+      `Caixa aberto por ${operatorName} com fundo de troco inicial de R$ ${initialAmount.toFixed(2)}`,
+      operatorName,
+      'Fechado',
+      `Aberto com R$ ${initialAmount.toFixed(2)}`
+    );
   };
 
-  const closeCaixa = async (finalAmount: number, operatorName: string) => {
+  const closeCaixa = async (finalAmount: number, operatorName: string, expectedAmount?: number) => {
+    const variance = finalAmount - (expectedAmount || 0);
+    const now = new Date().toISOString();
+
     if (activeCashSession) {
       try {
         await supabase.from('cash_sessions').update({
           status: 'closed',
           final_amount: finalAmount,
+          expected_amount: expectedAmount,
+          variance_amount: variance,
           closed_by: operatorName,
-          closed_at: new Date().toISOString()
+          closed_at: now
         }).eq('id', activeCashSession.id);
       } catch (err) {
         console.error('Erro ao fechar caixa no banco:', err);
       }
     }
+
+    addAuditLog(
+      'FECHAMENTO_CAIXA',
+      `Fechamento de Caixa efetuado por ${operatorName}. Contado: R$ ${finalAmount.toFixed(2)} | Esperado: R$ ${(expectedAmount || 0).toFixed(2)} | Diferença: ${variance >= 0 ? `+R$ ${variance.toFixed(2)} (Sobra)` : `-R$ ${Math.abs(variance).toFixed(2)} (Falta)`}`,
+      operatorName,
+      `Esperado: R$ ${(expectedAmount || 0).toFixed(2)}`,
+      `Contado: R$ ${finalAmount.toFixed(2)} (Diferença: R$ ${variance.toFixed(2)})`
+    );
+
     setActiveCashSession(null);
     setIsOpen(false);
   };
@@ -1259,18 +1425,28 @@ export function useInventory() {
     });
   };
 
-  const cancelSale = async (id: string) => {
+  const cancelSale = async (id: string, reason?: string, authorizedBy?: string, notes?: string) => {
     // Salvar override no storage local
     saveProductionOverrides([{ id, status: 'concluido' }]);
 
+    const existingSale = sales.find(s => s.id === id);
+    const cancellationReason = reason || 'Cancelamento manual pelo operador';
+    const cancelledBy = authorizedBy || 'Supervisor / Admin';
+    const now = new Date().toISOString();
+
     try {
-      await supabase.from('sales').update({ status: 'cancelled' }).eq('id', id);
+      await supabase.from('sales').update({ 
+        status: 'cancelled',
+        cancellation_reason: cancellationReason,
+        cancelled_by: cancelledBy,
+        cancelled_at: now
+      }).eq('id', id);
     } catch (err) {
       console.warn('Erro ao cancelar venda no Supabase:', err);
     }
     
     // Estornar estoque localmente
-    const saleToCancel = sales.find(s => s.id === id);
+    const saleToCancel = existingSale;
     if (saleToCancel && saleToCancel.items) {
       const restoredItems = [...items];
       saleToCancel.items.forEach(si => {
@@ -1291,12 +1467,27 @@ export function useInventory() {
     }
 
     setSales(prev => {
-      const updated = prev.map(s => s.id === id ? { ...s, status: 'cancelled' as const } : s);
+      const updated = prev.map(s => s.id === id ? { 
+        ...s, 
+        status: 'cancelled' as const,
+        cancellationReason,
+        cancelledBy,
+        cancelledAt: now,
+        cancellationNotes: notes
+      } : s);
       if (typeof window !== 'undefined') {
         try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
       }
       return updated;
     });
+
+    addAuditLog(
+      'CANCELAMENTO_VENDA',
+      `Venda #${id.slice(0, 5).toUpperCase()} no valor de R$ ${existingSale?.total.toFixed(2) || '0.00'} foi estornada por ${cancelledBy}. Motivo: ${cancellationReason}.${notes ? ` Obs: ${notes}` : ''}`,
+      cancelledBy,
+      'Concluída',
+      'Cancelada'
+    );
   };
 
   const addMovement = async (mov: Omit<CashMovement, 'id' | 'date'>) => {
@@ -1326,6 +1517,12 @@ export function useInventory() {
       };
       setMovements([fallbackMov, ...movements]);
     }
+
+    addAuditLog(
+      mov.type === 'sangria' ? 'SANGRIA' : 'SUPRIMENTO',
+      `${mov.type.toUpperCase()}: R$ ${mov.amount.toFixed(2)} — ${mov.description}`,
+      'Operador do Caixa'
+    );
   };
 
   // --- CHECKLIST ACTIONS ---
@@ -1373,6 +1570,7 @@ export function useInventory() {
     purchaseRecords, recordPurchaseWithSupplier,
     stockAudits, saveStockAudit,
     subRecipes, saveSubRecipe, removeSubRecipe, getIngredientTrueCost,
-    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus, completeOrderProduction
+    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus, completeOrderProduction,
+    auditLogs, addAuditLog
   };
 }
