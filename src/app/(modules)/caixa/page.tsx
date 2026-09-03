@@ -17,6 +17,7 @@ import {
   getActiveFloorSession, createInitialSessionFromTemplate,
   lancarConsumoNaMesa, getStoredLayoutTemplates 
 } from '@/lib/mesas';
+import { sendOwnerSecurityAlert } from '@/lib/notifications';
 
 export default function CaixaPage() {
   const { 
@@ -46,6 +47,16 @@ export default function CaixaPage() {
   const [cancelReasonInput, setCancelReasonInput] = useState('Desistência do cliente antes do preparo');
   const [cancelNotesInput, setCancelNotesInput] = useState('');
   const [cancelError, setCancelError] = useState('');
+
+  // Teto de Segurança da Gaveta (Alerta Antifraude / Antiassalto)
+  const [drawerCashLimit, setDrawerCashLimit] = useState<number>(500);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('hum_vicio_drawer_limit');
+      if (saved) setDrawerCashLimit(Number(saved) || 500);
+    } catch {}
+  }, []);
 
   // Estado para Relatório de Fechamento de Caixa Cego
   const [closingSummary, setClosingSummary] = useState<{
@@ -457,7 +468,24 @@ export default function CaixaPage() {
   const handleAddMovement = (e: React.FormEvent) => {
     e.preventDefault();
     if (!movAmount || !movDesc) return;
-    addMovement({ type: movType, amount: Number(movAmount), description: movDesc });
+    const amountNum = Number(movAmount);
+    addMovement({ type: movType, amount: amountNum, description: movDesc });
+
+    if (movType === 'sangria') {
+      sendOwnerSecurityAlert({
+        type: 'SANGRIA',
+        title: 'Sangria de Gaveta Realizada',
+        message: `Retirada física de R$ ${amountNum.toFixed(2)} da gaveta. Motivo: ${movDesc}. Saldo em espécie restante: R$ ${(sessionStats.expectedInDrawer - amountNum).toFixed(2)}.`,
+        operator: activeCashSession?.openedBy || 'Operador do Caixa',
+        amount: amountNum,
+        details: {
+          tipo: 'sangria',
+          motivo: movDesc,
+          saldoRestante: sessionStats.expectedInDrawer - amountNum
+        }
+      });
+    }
+
     setMovAmount(''); setMovDesc('');
   };
 
@@ -516,6 +544,21 @@ export default function CaixaPage() {
       'Admin / Supervisor', 
       cancelNotesInput.trim() || undefined
     );
+
+    sendOwnerSecurityAlert({
+      type: 'CANCELAMENTO_VENDA',
+      title: `Estorno de Pedido #${saleToCancel.id.slice(0, 5).toUpperCase()}`,
+      message: `Venda estornada no valor de R$ ${saleToCancel.total.toFixed(2)}. Motivo: ${cancelReasonInput}. Obs: ${cancelNotesInput.trim() || 'Nenhuma'}`,
+      operator: 'Admin / Supervisor',
+      amount: saleToCancel.total,
+      details: {
+        pedidoId: saleToCancel.id,
+        cliente: saleToCancel.customerName,
+        canal: saleToCancel.channel,
+        motivo: cancelReasonInput,
+        observacoes: cancelNotesInput.trim()
+      }
+    });
 
     setSaleToCancel(null);
     setCancelPasswordInput('');
@@ -850,6 +893,43 @@ export default function CaixaPage() {
 
             {/* Conteúdo Principal */}
             <div className="lg:col-span-10">
+
+              {/* ALERTA DE SEGURANÇA: LIMITE DE GAVETA EXCEDIDO */}
+              {sessionStats.expectedInDrawer > drawerCashLimit && (
+                <div className="mb-4 p-4 rounded-2xl bg-amber-500/15 border-2 border-amber-500/40 text-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg animate-pulse">
+                  <div className="flex items-center gap-3">
+                    <div className="p-2.5 bg-amber-500 text-slate-950 rounded-xl font-black shrink-0">
+                      <ShieldAlert size={22} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-black uppercase tracking-wider bg-amber-500/20 px-2 py-0.5 rounded text-amber-300 border border-amber-500/30">
+                          ⚠️ ALERTA DE SEGURANÇA: TETO DE GAVETA EXCEDIDO
+                        </span>
+                        <span className="text-xs font-mono font-bold text-white">
+                          R$ {sessionStats.expectedInDrawer.toFixed(2)} em dinheiro
+                        </span>
+                      </div>
+                      <p className="text-xs text-amber-200/90 mt-0.5 font-medium">
+                        O saldo em espécie ultrapassou o teto seguro de <strong>R$ {drawerCashLimit.toFixed(2)}</strong>. Efetue uma sangria para o cofre seguro agora.
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('sangria');
+                      setMovType('sangria');
+                      setMovAmount((sessionStats.expectedInDrawer - drawerCashLimit).toFixed(2));
+                      setMovDesc('Sangria preventiva por excesso de dinheiro em gaveta');
+                    }}
+                    className="px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-bold text-xs uppercase flex items-center gap-1.5 shadow-md cursor-pointer transition-all shrink-0"
+                  >
+                    <DollarSign size={15} /> Sangrar Excedente (R$ {(sessionStats.expectedInDrawer - drawerCashLimit).toFixed(2)})
+                  </button>
+                </div>
+              )}
 
               {/* ALERTA VISUAL DE PEDIDO PRONTO PARA O BALCÃO BUSCAR */}
               {caixaReadyAlert && (

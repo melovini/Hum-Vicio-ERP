@@ -1,19 +1,49 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useInventory, AuditAction, SaleItem } from '@/lib/store';
 import { 
   ArrowLeft, ShieldCheck, ShieldAlert, DollarSign, 
   Lock, Unlock, AlertTriangle, Search, Filter, 
   Download, Printer, RefreshCw, FileText, User, 
-  Tag, Clock, History, Flame, Package, Gift, Heart, Calendar, HelpCircle
+  Tag, Clock, History, Flame, Package, Gift, Heart, Calendar, HelpCircle,
+  BellRing, Check, Send, ExternalLink
 } from 'lucide-react';
 import Link from 'next/link';
+import { getOwnerWebhookUrl, saveOwnerWebhookUrl, testOwnerWebhook } from '@/lib/notifications';
 
 export default function AuditoriaPage() {
   const { auditLogs, sales, getProductCmv, isLoaded } = useInventory();
   
   // Abas Principais
-  const [activeView, setActiveView] = useState<'logs' | 'brindes'>('logs');
+  const [activeView, setActiveView] = useState<'logs' | 'brindes' | 'webhook'>('logs');
+
+  // Configuração de Webhook do Dono
+  const [webhookUrl, setWebhookUrl] = useState('');
+  const [webhookStatus, setWebhookStatus] = useState<{ type: 'idle' | 'testing' | 'success' | 'error'; message: string }>({ type: 'idle', message: '' });
+
+  useEffect(() => {
+    setWebhookUrl(getOwnerWebhookUrl());
+  }, []);
+
+  const handleTestWebhook = async () => {
+    if (!webhookUrl.trim()) {
+      setWebhookStatus({ type: 'error', message: 'Informe uma URL de Webhook válida.' });
+      return;
+    }
+    setWebhookStatus({ type: 'testing', message: 'Enviando notificação de teste...' });
+    const res = await testOwnerWebhook(webhookUrl.trim());
+    if (res.success) {
+      setWebhookStatus({ type: 'success', message: res.message });
+    } else {
+      setWebhookStatus({ type: 'error', message: res.message });
+    }
+  };
+
+  const handleSaveWebhook = () => {
+    saveOwnerWebhookUrl(webhookUrl.trim());
+    setWebhookStatus({ type: 'success', message: 'URL do Webhook salva com sucesso!' });
+    setTimeout(() => setWebhookStatus({ type: 'idle', message: '' }), 3000);
+  };
 
   // Filtros dos Logs Gerais
   const [searchTerm, setSearchTerm] = useState('');
@@ -268,6 +298,17 @@ export default function AuditoriaPage() {
             }`}
           >
             <Gift size={15} /> Relatório de Brindes & Cortesias
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveView('webhook')}
+            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
+              activeView === 'webhook'
+                ? 'bg-emerald-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            <BellRing size={15} /> Webhook do Dono (WhatsApp/Telegram)
           </button>
         </div>
       </div>
@@ -634,6 +675,96 @@ export default function AuditoriaPage() {
             </div>
           </div>
 
+        </div>
+      )}
+
+      {/* VISTA 3: CONFIGURAÇÃO DE WEBHOOK DO DONO */}
+      {activeView === 'webhook' && (
+        <div className="space-y-6 max-w-4xl">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="inline-flex items-center gap-2 text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">
+                  <BellRing size={16} /> Disparo Instantâneo de Notificações
+                </div>
+                <h2 className="text-2xl font-black text-white tracking-tight">
+                  Webhook de Alertas Antifraude para o Proprietário
+                </h2>
+                <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
+                  Cadastre uma URL de Webhook para receber avisos imediatos diretamente no seu <strong>WhatsApp</strong> (via Z-API/Evolution), <strong>Telegram</strong> (via bot/bridge), <strong>Discord</strong> ou automações no <strong>n8n/Zapier</strong> sempre que ocorrerem operações sensíveis no caixa ou na produção.
+                </p>
+              </div>
+            </div>
+
+            {/* Eventos Notificados */}
+            <div className="p-5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
+              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                Eventos Críticos Monitorados pelo Sistema:
+              </h3>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                <div className="flex items-center gap-2.5 text-slate-300">
+                  <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" />
+                  <span><strong>Cancelamento/Estorno de Venda:</strong> Alerta com valor, operador e motivo.</span>
+                </div>
+                <div className="flex items-center gap-2.5 text-slate-300">
+                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
+                  <span><strong>Sangria de Gaveta:</strong> Retirada de dinheiro físico com justificativa.</span>
+                </div>
+                <div className="flex items-center gap-2.5 text-slate-300">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0" />
+                  <span><strong>Itens Brindes & Cortesias:</strong> Doações no pedido com motivo.</span>
+                </div>
+                <div className="flex items-center gap-2.5 text-slate-300">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-400 shrink-0" />
+                  <span><strong>Teto de Gaveta Excedido:</strong> Dinheiro acumulado acima do limite seguro.</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Input da URL do Webhook */}
+            <div className="space-y-3">
+              <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider">
+                URL do Webhook (Endpoint HTTP POST):
+              </label>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="url"
+                  placeholder="https://discord.com/api/webhooks/... ou https://seu-n8n.com/webhook/..."
+                  value={webhookUrl}
+                  onChange={e => setWebhookUrl(e.target.value)}
+                  className="flex-1 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs text-white p-3 focus:outline-hidden focus:border-emerald-500"
+                />
+                <button
+                  type="button"
+                  onClick={handleSaveWebhook}
+                  className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-sm"
+                >
+                  <Check size={14} /> Salvar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTestWebhook}
+                  disabled={webhookStatus.type === 'testing'}
+                  className="py-2.5 px-5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md disabled:opacity-50"
+                >
+                  <Send size={14} /> {webhookStatus.type === 'testing' ? 'Enviando...' : 'Testar Disparo'}
+                </button>
+              </div>
+
+              {webhookStatus.message && (
+                <div className={`p-3.5 rounded-2xl border text-xs font-semibold flex items-center gap-2 ${
+                  webhookStatus.type === 'success'
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                    : webhookStatus.type === 'error'
+                      ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                      : 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                }`}>
+                  {webhookStatus.type === 'success' ? <Check size={16} /> : <AlertTriangle size={16} />}
+                  <span>{webhookStatus.message}</span>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 

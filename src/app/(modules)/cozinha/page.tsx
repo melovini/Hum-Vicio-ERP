@@ -15,7 +15,7 @@ export default function CozinhaKDSPage() {
   const { 
     sales, items, updateStatus, isLoaded, 
     checklist, toggleChecklistTask, signChecklist,
-    targetPrepMinutes, completeOrderProduction 
+    targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus 
   } = useInventory();
 
   const [activeTab, setActiveTab] = useState<'chapa' | 'previsao' | 'faltas' | 'checklist'>('chapa');
@@ -186,6 +186,61 @@ export default function CozinhaKDSPage() {
     setSelectedDelayedSale(null);
   };
 
+  // Atalhos de Teclado Físicos (Bumper Bar Industrial / Operação sem mouse ou com luvas sujas)
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignora se estiver digitando em input ou textarea
+      const target = e.target as HTMLElement;
+      if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
+
+      // [Espaço]: Puxa o pedido mais antigo da fila para a chapa
+      if (e.code === 'Space') {
+        e.preventDefault();
+        if (queueOrders.length > 0) {
+          const nextOrder = queueOrders[0];
+          updateOrderProductionStatus(nextOrder.id, 'em_producao');
+          playKitchenChime();
+        }
+        return;
+      }
+
+      // [1] a [9]: Conclui o lanche correspondente na chapa
+      if (e.key >= '1' && e.key <= '9') {
+        const index = parseInt(e.key, 10) - 1;
+        if (index < productionOrders.length) {
+          e.preventDefault();
+          const targetOrder = productionOrders[index];
+          const startTime = new Date(targetOrder.productionStartedAt || targetOrder.date).getTime();
+          const elapsedMinutes = Math.floor(Math.max(0, Date.now() - startTime) / 60000);
+          const targetMin = targetOrder.targetPrepMinutes || targetPrepMinutes || 20;
+          handleConcludeClick(targetOrder, elapsedMinutes >= targetMin);
+        }
+        return;
+      }
+
+      // [P] ou [p]: Atalho para Lançar Perda / Descarte
+      if (e.key === 'p' || e.key === 'P') {
+        e.preventDefault();
+        window.location.href = '/cozinha/perdas';
+        return;
+      }
+
+      // [T] ou [t]: Alternar abas
+      if (e.key === 't' || e.key === 'T') {
+        e.preventDefault();
+        setActiveTab(prev => {
+          if (prev === 'chapa') return 'previsao';
+          if (prev === 'previsao') return 'faltas';
+          if (prev === 'faltas') return 'checklist';
+          return 'chapa';
+        });
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [queueOrders, productionOrders, updateOrderProductionStatus, completeOrderProduction, targetPrepMinutes]);
+
   // Agrupar itens do Painel de Faltas
   const groupedItems = useMemo(() => {
     return items.reduce((acc, item) => {
@@ -324,6 +379,31 @@ export default function CozinhaKDSPage() {
         </div>
       )}
 
+      {/* BARRA DE ATALHOS INDUSTRIAIS (BUMPER BAR) */}
+      <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-2.5 px-4 flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+        <div className="flex items-center gap-2 text-amber-400 font-bold">
+          <span>⌨️ Bumper Bar Industrial (Operação sem Mouse):</span>
+        </div>
+        <div className="flex flex-wrap items-center gap-3 text-slate-300 text-[11px]">
+          <span className="flex items-center gap-1">
+            <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-300 font-black">ESPAÇO</kbd>
+            Puxar p/ Chapa ({queueOrders.length})
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400 font-black">1..9</kbd>
+            Concluir Lanche da Chapa
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-red-400 font-black">P</kbd>
+            Lançar Descarte
+          </span>
+          <span className="flex items-center gap-1">
+            <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-400 font-black">T</kbd>
+            Alternar Abas
+          </span>
+        </div>
+      </div>
+
       {/* ========================================================================= */}
       {/* ABA 1: CHAPA ATIVA (KDS TEMPO REAL) */}
       {/* ========================================================================= */}
@@ -367,7 +447,7 @@ export default function CozinhaKDSPage() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {productionOrders.map(order => {
+              {productionOrders.map((order, orderIdx) => {
                 const startTime = new Date(order.productionStartedAt || order.date).getTime();
                 const elapsedSeconds = Math.max(0, Math.floor((now - startTime) / 1000));
                 const elapsedMinutes = Math.floor(elapsedSeconds / 60);
@@ -397,6 +477,11 @@ export default function CozinhaKDSPage() {
                             <span className="font-mono font-black text-xl text-white">
                               #{order.id.slice(0, 5).toUpperCase()}
                             </span>
+                            {orderIdx < 9 && (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-emerald-300 border border-slate-700 font-mono font-black text-[11px]" title={`Pressione a tecla ${orderIdx + 1} para concluir`}>
+                                [{orderIdx + 1}]
+                              </span>
+                            )}
                             <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
                               order.orderType === 'delivery' 
                                 ? 'bg-blue-600 text-white' 
