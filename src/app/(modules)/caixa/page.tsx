@@ -42,7 +42,8 @@ export default function CaixaPage() {
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [saleChannel, setSaleChannel] = useState<'balcao' | 'ifood'>('balcao');
   const [saleMethod, setSaleMethod] = useState('credito');
-  const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_producao');
+  const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_espera');
+  const [pendingRemovalFromGrill, setPendingRemovalFromGrill] = useState<{ sale: Sale; action: 'pause' | 'cancel' } | null>(null);
 
   // Customizer Modal do Hambúrguer
   const [selectedBurgerForConfig, setSelectedBurgerForConfig] = useState<Product | null>(null);
@@ -777,17 +778,6 @@ export default function CaixaPage() {
                         <div className="grid grid-cols-3 gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setOrderProductionStatus('em_producao')}
-                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
-                              orderProductionStatus === 'em_producao'
-                                ? 'bg-emerald-600 text-white font-black shadow-md ring-2 ring-emerald-400'
-                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
-                            }`}
-                          >
-                            🟢 Chapa / Agora
-                          </button>
-                          <button
-                            type="button"
                             onClick={() => setOrderProductionStatus('em_espera')}
                             className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
                               orderProductionStatus === 'em_espera'
@@ -807,6 +797,17 @@ export default function CaixaPage() {
                             }`}
                           >
                             📅 Agendado
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOrderProductionStatus('em_producao')}
+                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
+                              orderProductionStatus === 'em_producao'
+                                ? 'bg-emerald-600 text-white font-black shadow-md ring-2 ring-emerald-400'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            🟢 Chapa / Agora
                           </button>
                         </div>
                       </div>
@@ -1082,7 +1083,7 @@ export default function CaixaPage() {
                                 {isCooking && (
                                   <button
                                     type="button"
-                                    onClick={() => updateOrderProductionStatus(sale.id, 'em_espera')}
+                                    onClick={() => setPendingRemovalFromGrill({ sale, action: 'pause' })}
                                     className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
                                   >
                                     <Pause size={14} /> Pausar / Voltar para Espera
@@ -1161,7 +1162,9 @@ export default function CaixaPage() {
                                   </button>
                                   <button 
                                     onClick={() => {
-                                      if (confirm('Deseja estornar esta venda? Os insumos voltarão automaticamente ao estoque.')) {
+                                      if (sale.productionStatus === 'em_producao') {
+                                        setPendingRemovalFromGrill({ sale, action: 'cancel' });
+                                      } else if (confirm('Deseja estornar esta venda? Os insumos voltarão automaticamente ao estoque.')) {
                                         cancelSale(sale.id);
                                       }
                                     }} 
@@ -1490,6 +1493,53 @@ export default function CaixaPage() {
           sale={selectedSaleToPrint} 
           onClose={() => setSelectedSaleToPrint(null)} 
         />
+
+        {/* Modal de Confirmação de Retirada da Chapa */}
+        {pendingRemovalFromGrill && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="glass-card rounded-3xl p-6 md:p-8 max-w-md w-full border-2 border-amber-500 shadow-[0_0_50px_rgba(245,158,11,0.25)] space-y-6 animate-scale-in">
+              <div className="text-center space-y-2">
+                <div className="w-16 h-16 mx-auto bg-amber-500/20 text-amber-400 rounded-2xl flex items-center justify-center border border-amber-500/30">
+                  <AlertOctagon size={36} />
+                </div>
+                <h3 className="text-2xl font-black text-white">
+                  Atenção: Pedido na CHAPA!
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  O pedido <strong>#{pendingRemovalFromGrill.sale.id.slice(0, 5).toUpperCase()}</strong> ({pendingRemovalFromGrill.sale.customerName}) já está sendo preparado pela Cozinha.
+                </p>
+                <div className="p-3 bg-red-950/40 border border-red-500/30 rounded-xl text-xs font-bold text-red-300 text-left">
+                  ⚠️ <strong>Aviso Obrigatório:</strong> Você deve avisar o chapeiro imediatamente antes de cancelar ou pausar, para evitar desperdício de hambúrguer e insumos na chapa!
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setPendingRemovalFromGrill(null)}
+                  className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer transition-all"
+                >
+                  Manter na Chapa
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const { sale, action } = pendingRemovalFromGrill;
+                    if (action === 'pause') {
+                      await updateOrderProductionStatus(sale.id, 'em_espera');
+                    } else {
+                      await cancelSale(sale.id);
+                    }
+                    setPendingRemovalFromGrill(null);
+                  }}
+                  className="flex-1 py-3.5 bg-red-600 hover:bg-red-500 text-white rounded-xl font-extrabold text-xs uppercase tracking-wider cursor-pointer shadow-lg shadow-red-600/30 transition-all"
+                >
+                  Confirmar e Avisar Chapa
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

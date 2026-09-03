@@ -248,38 +248,63 @@ export function useInventory() {
         })));
       }
 
-      // 3. Fetch Sales
-      const { data: salesData } = await supabase.from('sales').select('*').order('created_at', { ascending: false });
-      const { data: saleItemsData } = await supabase.from('sale_items').select('*');
-      
-      if (salesData) {
-        setSales(salesData.map(s => ({
-          id: s.id, 
-          customerName: s.customer_name || 'Balcão',
-          orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
-          channel: s.channel, 
-          total: Number(s.total) || 0, 
-          paymentMethod: s.payment_method, 
-          date: s.created_at, 
-          status: s.status,
-          productionStatus: (s.production_status || 'em_producao') as any,
-          productionStartedAt: s.production_started_at || s.created_at,
-          productionCompletedAt: s.production_completed_at || undefined,
-          productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
-          targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
-          delayReason: s.delay_reason || undefined,
-          delayNotes: s.delay_notes || undefined,
-          items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
-            id: i.id,
-            productId: i.product_id, 
-            productName: i.product_name, 
-            quantity: Number(i.quantity) || 0, 
-            unitPrice: Number(i.unit_price) || 0,
-            combo: i.combo || undefined,
-            notes: i.notes || undefined,
-            additionals: Array.isArray(i.additionals) ? i.additionals : undefined
-          }))
-        })));
+      // 3. Fetch Sales (com suporte a fallback local resiliente)
+      try {
+        const { data: salesData } = await supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(80);
+        const { data: saleItemsData } = await supabase.from('sale_items').select('*');
+        
+        if (salesData && salesData.length > 0) {
+          const mappedSales: Sale[] = salesData.map(s => ({
+            id: s.id, 
+            customerName: s.customer_name || 'Balcão',
+            orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
+            channel: s.channel, 
+            total: Number(s.total) || 0, 
+            paymentMethod: s.payment_method, 
+            date: s.created_at, 
+            status: s.status,
+            productionStatus: (s.production_status || 'em_espera') as any,
+            productionStartedAt: s.production_started_at || s.created_at,
+            productionCompletedAt: s.production_completed_at || undefined,
+            productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
+            targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
+            delayReason: s.delay_reason || undefined,
+            delayNotes: s.delay_notes || undefined,
+            items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
+              id: i.id,
+              productId: i.product_id, 
+              productName: i.product_name, 
+              quantity: Number(i.quantity) || 0, 
+              unitPrice: Number(i.unit_price) || 0,
+              combo: i.combo || undefined,
+              notes: i.notes || undefined,
+              additionals: Array.isArray(i.additionals) ? i.additionals : undefined
+            }))
+          }));
+          setSales(mappedSales);
+          if (typeof window !== 'undefined') {
+            try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(mappedSales.slice(0, 100))); } catch {}
+          }
+        } else if (typeof window !== 'undefined') {
+          const cached = localStorage.getItem('hum_vicio_cached_sales');
+          if (cached) {
+            try {
+              const parsed = JSON.parse(cached);
+              if (Array.isArray(parsed) && parsed.length > 0) setSales(parsed);
+            } catch {}
+          }
+        }
+      } catch (err) {
+        console.warn('Erro ao carregar vendas do Supabase, buscando cache local:', err);
+        if (typeof window !== 'undefined') {
+          const cached = localStorage.getItem('hum_vicio_cached_sales');
+          if (cached) {
+            try {
+              const parsed = JSON.parse(cached);
+              if (Array.isArray(parsed) && parsed.length > 0) setSales(parsed);
+            } catch {}
+          }
+        }
       }
 
       // 4. Fetch Caixa Ativo (Sessão de Caixa em Nuvem)
@@ -454,6 +479,63 @@ export function useInventory() {
     };
 
     loadData();
+
+    // Sincronização instantânea entre abas no mesmo navegador
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'hum_vicio_cached_sales' && e.newValue) {
+        try {
+          const parsed = JSON.parse(e.newValue);
+          if (Array.isArray(parsed)) setSales(parsed);
+        } catch {}
+      }
+    };
+    window.addEventListener('storage', handleStorage);
+
+    // Polling contínuo a cada 3.5s para sincronizar Caixa e Cozinha em tempo real entre dispositivos
+    const syncInterval = setInterval(async () => {
+      try {
+        const { data: latestSales } = await supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(60);
+        const { data: latestItems } = await supabase.from('sale_items').select('*');
+        if (latestSales && latestSales.length > 0) {
+          setSales(prev => {
+            const localOnly = prev.filter(p => p.id.startsWith('local_') && !latestSales.some(ls => ls.id === p.id));
+            const remoteMapped: Sale[] = latestSales.map(s => ({
+              id: s.id,
+              customerName: s.customer_name || 'Balcão',
+              orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
+              channel: s.channel,
+              total: Number(s.total) || 0,
+              paymentMethod: s.payment_method,
+              date: s.created_at,
+              status: s.status,
+              productionStatus: (s.production_status || 'em_espera') as any,
+              productionStartedAt: s.production_started_at || s.created_at,
+              productionCompletedAt: s.production_completed_at || undefined,
+              productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
+              targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
+              delayReason: s.delay_reason || undefined,
+              delayNotes: s.delay_notes || undefined,
+              items: (latestItems || []).filter(i => i.sale_id === s.id).map(i => ({
+                id: i.id,
+                productId: i.product_id,
+                productName: i.product_name,
+                quantity: Number(i.quantity) || 0,
+                unitPrice: Number(i.unit_price) || 0,
+                combo: i.combo || undefined,
+                notes: i.notes || undefined,
+                additionals: Array.isArray(i.additionals) ? i.additionals : undefined
+              }))
+            }));
+            return [...localOnly, ...remoteMapped];
+          });
+        }
+      } catch {}
+    }, 3500);
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      clearInterval(syncInterval);
+    };
   }, []);
 
   // --- INSUMOS ACTIONS ---
@@ -890,39 +972,73 @@ export function useInventory() {
   };
 
   const addSale = async (sale: Omit<Sale, 'id' | 'date' | 'status'>) => {
-    let sData: any = null;
-    const initialProductionStatus = sale.productionStatus || 'em_producao';
+    const initialProductionStatus = sale.productionStatus || 'em_espera';
     const initialProductionStarted = sale.productionStartedAt || new Date().toISOString();
     const initialTargetPrep = sale.targetPrepMinutes || targetPrepMinutes;
+    let sData: any = null;
 
-    const payload: any = {
-      channel: sale.channel, 
-      total: sale.total, 
-      payment_method: sale.paymentMethod,
-      customer_name: sale.customerName || 'Balcão',
-      order_type: sale.orderType || 'mesa',
-      production_status: initialProductionStatus,
-      production_started_at: initialProductionStarted,
-      target_prep_minutes: initialTargetPrep
-    };
-
-    const { data, error } = await supabase.from('sales').insert(payload).select().single();
-    if (error) {
-      // Fallback seguro caso as novas colunas ainda não existam
-      const { data: retryData } = await supabase.from('sales').insert({
+    // 1. Tentar inserção completa com colunas novas
+    try {
+      const { data, error } = await supabase.from('sales').insert({
         channel: sale.channel, 
         total: sale.total, 
         payment_method: sale.paymentMethod,
         customer_name: sale.customerName || 'Balcão',
-        order_type: sale.orderType || 'mesa'
+        order_type: sale.orderType || 'mesa',
+        production_status: initialProductionStatus,
+        production_started_at: initialProductionStarted,
+        target_prep_minutes: initialTargetPrep
       }).select().single();
-      sData = retryData;
-    } else {
-      sData = data;
+
+      if (!error && data) {
+        sData = data;
+      }
+    } catch (e) {
+      console.warn('Tentativa 1 de inserção falhou:', e);
     }
 
-    if (sData) {
-      if (sale.items && sale.items.length > 0) {
+    // 2. Fallback intermediário caso colunas novas de KDS não existam
+    if (!sData) {
+      try {
+        const { data: retryData, error: retryErr } = await supabase.from('sales').insert({
+          channel: sale.channel, 
+          total: sale.total, 
+          payment_method: sale.paymentMethod,
+          customer_name: sale.customerName || 'Balcão',
+          order_type: sale.orderType || 'mesa'
+        }).select().single();
+
+        if (!retryErr && retryData) {
+          sData = retryData;
+        }
+      } catch (e) {
+        console.warn('Tentativa 2 de inserção falhou:', e);
+      }
+    }
+
+    // 3. Fallback mínimo com colunas base
+    if (!sData) {
+      try {
+        const { data: minData } = await supabase.from('sales').insert({
+          channel: sale.channel, 
+          total: sale.total, 
+          payment_method: sale.paymentMethod
+        }).select().single();
+
+        if (minData) {
+          sData = minData;
+        }
+      } catch (e) {
+        console.warn('Tentativa 3 de inserção falhou:', e);
+      }
+    }
+
+    // Gerar ID seguro
+    const saleId = sData?.id || ('local_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36));
+
+    // Salvar itens se houver conexão com o banco
+    if (sData && sale.items && sale.items.length > 0) {
+      try {
         const saleItems = sale.items.map(i => {
           let displayName = i.productName;
           if (i.combo) displayName += ` (${i.combo})`;
@@ -940,36 +1056,46 @@ export function useInventory() {
           };
         });
         await supabase.from('sale_items').insert(saleItems);
-        
-        // Simular o trigger localmente para refletir na UI imediatamente
-        const newItems = [...items];
-        sale.items.forEach(si => {
-          const prod = products.find(p => p.id === si.productId);
-          if (prod) {
-            prod.recipe.forEach(r => {
-              const invIdx = newItems.findIndex(inv => inv.id === r.ingredientId);
-              if (invIdx > -1) {
-                newItems[invIdx] = { ...newItems[invIdx], currentStock: newItems[invIdx].currentStock - (r.quantity * si.quantity) };
-              }
-            });
+      } catch (err) {
+        console.warn('Erro ao salvar sale_items no Supabase:', err);
+      }
+    }
+
+    // Baixa local de estoque imediata
+    const newItems = [...items];
+    sale.items.forEach(si => {
+      const prod = products.find(p => p.id === si.productId);
+      if (prod) {
+        prod.recipe.forEach(r => {
+          const invIdx = newItems.findIndex(inv => inv.id === r.ingredientId);
+          if (invIdx > -1) {
+            newItems[invIdx] = { ...newItems[invIdx], currentStock: newItems[invIdx].currentStock - (r.quantity * si.quantity) };
           }
         });
-        setItems(newItems);
       }
-      
-      const newSaleLocal: Sale = {
-        ...sale,
-        id: sData.id,
-        customerName: sale.customerName || 'Balcão',
-        orderType: sale.orderType || 'mesa',
-        productionStatus: initialProductionStatus,
-        productionStartedAt: initialProductionStarted,
-        targetPrepMinutes: initialTargetPrep,
-        date: sData.created_at || new Date().toISOString(),
-        status: 'completed'
-      };
-      setSales([newSaleLocal, ...sales]);
-    }
+    });
+    setItems(newItems);
+
+    // O pedido É SEMPRE INCLUÍDO E NUNCA SE PERDE!
+    const newSaleLocal: Sale = {
+      ...sale,
+      id: saleId,
+      customerName: sale.customerName || 'Balcão',
+      orderType: sale.orderType || 'mesa',
+      productionStatus: initialProductionStatus,
+      productionStartedAt: initialProductionStarted,
+      targetPrepMinutes: initialTargetPrep,
+      date: sData?.created_at || new Date().toISOString(),
+      status: 'completed'
+    };
+
+    setSales(prev => {
+      const updated = [newSaleLocal, ...prev];
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      }
+      return updated;
+    });
   };
 
   // Ação do Balcão: alterar status de produção (para chapa, em espera, agendado)
@@ -984,16 +1110,22 @@ export function useInventory() {
       console.warn('Erro ao atualizar status de produção no Supabase:', err);
     }
 
-    setSales(sales.map(s => {
-      if (s.id === saleId) {
-        return {
-          ...s,
-          productionStatus: newStatus,
-          productionStartedAt: startedAt || s.productionStartedAt || s.date
-        };
+    setSales(prev => {
+      const updated = prev.map(s => {
+        if (s.id === saleId) {
+          return {
+            ...s,
+            productionStatus: newStatus,
+            productionStartedAt: startedAt || s.productionStartedAt || s.date
+          };
+        }
+        return s;
+      });
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
       }
-      return s;
-    }));
+      return updated;
+    });
   };
 
   // Ação da Cozinha: concluir pedido (com justificativa de atraso se aplicável)
@@ -1022,23 +1154,33 @@ export function useInventory() {
       console.warn('Erro ao concluir produção no Supabase:', err);
     }
 
-    setSales(sales.map(s => {
-      if (s.id === saleId) {
-        return {
-          ...s,
-          productionStatus: 'concluido',
-          productionCompletedAt: completedAt,
-          productionTimeMinutes: timeMinutes,
-          delayReason: delayReason || s.delayReason,
-          delayNotes: delayNotes || s.delayNotes
-        };
+    setSales(prev => {
+      const updated = prev.map(s => {
+        if (s.id === saleId) {
+          return {
+            ...s,
+            productionStatus: 'concluido' as ProductionStatus,
+            productionCompletedAt: completedAt,
+            productionTimeMinutes: timeMinutes,
+            delayReason: delayReason || s.delayReason,
+            delayNotes: delayNotes || s.delayNotes
+          };
+        }
+        return s;
+      });
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
       }
-      return s;
-    }));
+      return updated;
+    });
   };
 
   const cancelSale = async (id: string) => {
-    await supabase.from('sales').update({ status: 'cancelled' }).eq('id', id);
+    try {
+      await supabase.from('sales').update({ status: 'cancelled' }).eq('id', id);
+    } catch (err) {
+      console.warn('Erro ao cancelar venda no Supabase:', err);
+    }
     
     // Estornar estoque localmente
     const saleToCancel = sales.find(s => s.id === id);
@@ -1061,7 +1203,13 @@ export function useInventory() {
       setItems(restoredItems);
     }
 
-    setSales(sales.map(s => s.id === id ? { ...s, status: 'cancelled' } : s));
+    setSales(prev => {
+      const updated = prev.map(s => s.id === id ? { ...s, status: 'cancelled' as const } : s);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      }
+      return updated;
+    });
   };
 
   const addMovement = async (mov: Omit<CashMovement, 'id' | 'date'>) => {

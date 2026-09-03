@@ -1,13 +1,15 @@
 'use client';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useInventory, Sale, DelayReason, InventoryItem } from '@/lib/store';
 import { 
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
-  Eye, Check, ListChecks, MessageSquare, Utensils
+  Eye, Check, ListChecks, MessageSquare, Utensils,
+  Volume2, BellRing
 } from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
+import { playKitchenChime, playCancellationWarning } from '@/lib/audio';
 
 export default function CozinhaKDSPage() {
   const { 
@@ -18,6 +20,11 @@ export default function CozinhaKDSPage() {
 
   const [activeTab, setActiveTab] = useState<'chapa' | 'previsao' | 'faltas' | 'checklist'>('chapa');
   const [now, setNow] = useState(Date.now());
+
+  // Alerta Sonoro & Visual na Cozinha
+  const [kitchenAlert, setKitchenAlert] = useState<{ type: 'new_order' | 'cancelled'; message: string } | null>(null);
+  const prevProductionIdsRef = useRef<Set<string>>(new Set());
+  const isInitialMount = useRef(true);
 
   // Modal de Justificativa de Atraso
   const [selectedDelayedSale, setSelectedDelayedSale] = useState<Sale | null>(null);
@@ -30,6 +37,60 @@ export default function CozinhaKDSPage() {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Monitorar novas remessas liberadas para a chapa e cancelamentos da chapa
+  useEffect(() => {
+    const currentProductionIds = new Set(
+      sales
+        .filter(s => s.status === 'completed' && s.productionStatus === 'em_producao')
+        .map(s => s.id)
+    );
+
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      prevProductionIdsRef.current = currentProductionIds;
+      return;
+    }
+
+    // 1. Verificar se um novo pedido entrou na chapa (nova remessa)
+    let newOrderAdded: Sale | undefined;
+    currentProductionIds.forEach(id => {
+      if (!prevProductionIdsRef.current.has(id)) {
+        newOrderAdded = sales.find(s => s.id === id);
+      }
+    });
+
+    if (newOrderAdded) {
+      playKitchenChime();
+      setKitchenAlert({
+        type: 'new_order',
+        message: `🔔 NOVA REMESSA NA CHAPA: Pedido #${newOrderAdded.id.slice(0, 5).toUpperCase()} (${newOrderAdded.customerName || 'Cliente'})!`
+      });
+      setTimeout(() => setKitchenAlert(null), 6000);
+    }
+
+    // 2. Verificar se algum pedido que estava na chapa foi cancelado ou pausado
+    let removedOrder: Sale | undefined;
+    prevProductionIdsRef.current.forEach(prevId => {
+      if (!currentProductionIds.has(prevId)) {
+        const found = sales.find(s => s.id === prevId);
+        if (found && (found.status === 'cancelled' || found.productionStatus === 'em_espera')) {
+          removedOrder = found;
+        }
+      }
+    });
+
+    if (removedOrder) {
+      playCancellationWarning();
+      setKitchenAlert({
+        type: 'cancelled',
+        message: `⚠️ ATENÇÃO CHAPA: Pedido #${removedOrder.id.slice(0, 5).toUpperCase()} (${removedOrder.customerName || 'Cliente'}) foi RETIRADO / CANCELADO pelo Balcão! Não preparar!`
+      });
+      setTimeout(() => setKitchenAlert(null), 10000);
+    }
+
+    prevProductionIdsRef.current = currentProductionIds;
+  }, [sales]);
 
   // 1. Pedidos Ativos na Chapa (Em Produção)
   const productionOrders = useMemo(() => {
@@ -191,10 +252,48 @@ export default function CozinhaKDSPage() {
             <Trash2 size={16} /> Lançar Perdas
           </Link>
 
+          <button
+            type="button"
+            onClick={() => playKitchenChime()}
+            className="px-3 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-800 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+            title="Clique para testar o som do KDS e habilitar áudio no navegador"
+          >
+            <Volume2 size={15} /> Som KDS
+          </button>
+
           <LogoutButton />
         </div>
 
       </header>
+
+      {/* ALERTA VISUAL DE NOVA REMESSA OU CANCELAMENTO NA CHAPA */}
+      {kitchenAlert && (
+        <div className={`mb-6 p-4 md:p-5 rounded-2xl border-2 flex items-center justify-between gap-4 animate-bounce shadow-2xl ${
+          kitchenAlert.type === 'new_order'
+            ? 'bg-emerald-950/95 border-emerald-500 text-emerald-100 shadow-emerald-500/30'
+            : 'bg-red-950/95 border-red-500 text-red-100 shadow-red-500/40 ring-4 ring-red-500/50'
+        }`}>
+          <div className="flex items-center gap-3">
+            {kitchenAlert.type === 'new_order' ? (
+              <BellRing size={30} className="text-emerald-400 animate-pulse shrink-0" />
+            ) : (
+              <AlertOctagon size={34} className="text-red-400 animate-pulse shrink-0" />
+            )}
+            <div>
+              <p className="font-black text-sm md:text-base uppercase tracking-wide">
+                {kitchenAlert.message}
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setKitchenAlert(null)}
+            className="px-3 py-1.5 bg-white/10 hover:bg-white/20 rounded-xl text-xs font-bold cursor-pointer shrink-0"
+          >
+            Fechar
+          </button>
+        </div>
+      )}
 
       {/* ========================================================================= */}
       {/* ABA 1: CHAPA ATIVA (KDS TEMPO REAL) */}
