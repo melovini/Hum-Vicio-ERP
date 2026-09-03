@@ -71,10 +71,6 @@ export default function Home() {
                 <span>⚡ Acessar Caixa / PDV</span>
                 <ChevronRight size={14} />
               </Link>
-              <Link href="/caixa" className="text-slate-300 hover:text-white flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-surface-elevated transition-colors">
-                <span>🗺️ Mapa Visual de Mesas</span>
-                <ChevronRight size={14} />
-              </Link>
             </div>
           </div>
 
