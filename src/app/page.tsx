@@ -1,18 +1,17 @@
 import Link from 'next/link';
-import { ChefHat, MonitorDot, LayoutDashboard, ChevronRight, TrendingUp, SlidersHorizontal, ShieldCheck, LogOut, Users } from 'lucide-react';
+import { ChefHat, MonitorDot, LayoutDashboard, ChevronRight, TrendingUp, LogOut } from 'lucide-react';
 import { logoutAction } from '@/app/login/actions';
-import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Home() {
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center p-6 bg-surface-ground text-slate-100 overflow-hidden">
-      {/* Background blueprint sutil */}
-      <div className="absolute inset-0 dot-grid opacity-40 pointer-events-none" />
+    <main className="relative flex min-h-screen flex-col items-center justify-center p-4 md:p-8 bg-surface-ground text-slate-100 overflow-hidden">
+      {/* Blueprint Dot-Grid Sutil */}
+      <div className="absolute inset-0 dot-grid opacity-30 pointer-events-none" />
 
-      <div className="relative z-10 max-w-5xl w-full text-center space-y-8">
+      <div className="relative z-10 max-w-5xl w-full space-y-6">
         
         {/* Barra Superior com Status e Logout */}
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between pb-2 border-b border-surface-border">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-card border border-surface-border text-xs font-semibold text-slate-300 shadow-xs">
             <span className="w-2 h-2 rounded-full bg-status-free animate-pulse" />
             <span>Hum Vício ERP • Produção & Salão Sincronizados</span>
@@ -29,106 +28,185 @@ export default function Home() {
           </form>
         </div>
 
-        <div className="space-y-3">
-          <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white">
+        {/* Título e Subtítulo */}
+        <div className="space-y-2 text-center">
+          <h1 className="text-3xl md:text-5xl font-extrabold tracking-tight text-white">
             Operação & Gestão <span className="text-brand-primary">Industrial</span>
           </h1>
-          <p className="text-slate-400 text-base md:text-lg max-w-xl mx-auto font-normal leading-relaxed">
-            Frente de caixa, controle em tempo real de salão com mapa visual de mesas, KDS de cozinha e inteligência de cardápio.
+          <p className="text-slate-400 text-sm md:text-base max-w-xl mx-auto font-normal leading-relaxed">
+            Controle de frente de caixa, KDS digital da chapa, mapas de salão e inteligência estratégica da empresa.
           </p>
         </div>
         
+        {/* Grid dos 3 Módulos com Estilo Padronizado */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 text-left">
           
-          {/* Módulo Cozinha & KDS */}
-          <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-6 transition-all flex flex-col justify-between space-y-5">
-            <div className="space-y-3">
-              <div className="w-10 h-10 rounded-lg bg-status-occupied/10 border border-status-occupied/20 flex items-center justify-center text-status-occupied">
-                <ChefHat size={20} />
+          {/* MÓDULO 1: Cozinha & KDS */}
+          <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-5 transition-all flex flex-col justify-between space-y-4">
+            <div className="space-y-2.5">
+              <div className="w-9 h-9 rounded-lg bg-surface-ground border border-surface-border flex items-center justify-center text-brand-primary">
+                <ChefHat size={18} />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-white tracking-tight">Cozinha & KDS</h2>
-                <p className="text-xs text-slate-400 leading-relaxed mt-1">
-                  Chapa digital em tempo real, fila futura e controle de rupturas e perdas.
+                <h2 className="text-base font-bold text-white tracking-tight">Cozinha & KDS</h2>
+                <p className="text-xs text-slate-400 leading-relaxed mt-0.5">
+                  Chapa digital em tempo real, fila futura e controle de desperdícios.
                 </p>
               </div>
             </div>
 
             <div className="flex flex-col gap-1.5 pt-3 border-t border-surface-border text-xs font-medium">
-              <Link href="/cozinha" className="text-status-occupied hover:text-amber-300 flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-surface-elevated transition-colors">
+              <Link 
+                href="/cozinha" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2.5 flex items-center justify-between transition-colors"
+              >
                 <span>🔥 KDS Chapa Digital</span>
-                <ChevronRight size={14} />
+                <ChevronRight size={14} className="text-slate-500" />
               </Link>
-              <Link href="/cozinha/perdas" className="text-slate-400 hover:text-slate-200 flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-surface-elevated transition-colors">
-                <span>Lançar Perdas & Desperdício</span>
-                <ChevronRight size={14} />
+              <Link 
+                href="/cozinha/perdas" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2.5 flex items-center justify-between transition-colors"
+              >
+                <span>🗑️ Lançar Perdas & Descarte</span>
+                <ChevronRight size={14} className="text-slate-500" />
               </Link>
             </div>
           </div>
 
-          {/* Módulo Caixa & Salão */}
-          <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-6 transition-all flex flex-col justify-between space-y-5 ring-1 ring-brand-primary/20">
-            <div className="space-y-3">
-              <div className="w-10 h-10 rounded-lg bg-brand-primary/10 border border-brand-primary/20 flex items-center justify-center text-brand-primary">
-                <MonitorDot size={20} />
+          {/* MÓDULO 2: Caixa & Salão */}
+          <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-5 transition-all flex flex-col justify-between space-y-4">
+            <div className="space-y-2.5">
+              <div className="w-9 h-9 rounded-lg bg-surface-ground border border-surface-border flex items-center justify-center text-brand-accent">
+                <MonitorDot size={18} />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-white tracking-tight">Frente de Caixa & PDV</h2>
-                <p className="text-xs text-slate-400 leading-relaxed mt-1">
-                  Operação ágil de pedidos, sangrias, conferência cega e mapa interativo de mesas na barra lateral.
+                <h2 className="text-base font-bold text-white tracking-tight">Frente de Caixa & PDV</h2>
+                <p className="text-xs text-slate-400 leading-relaxed mt-0.5">
+                  Operação ágil de pedidos, sangrias, conferência e mapa de mesas na lateral.
                 </p>
               </div>
             </div>
 
             <div className="flex flex-col gap-1.5 pt-3 border-t border-surface-border text-xs font-medium">
-              <Link href="/caixa" className="text-brand-primary hover:text-orange-400 font-semibold flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-surface-elevated transition-colors">
+              <Link 
+                href="/caixa" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2.5 flex items-center justify-between transition-colors"
+              >
                 <span>⚡ Acessar Caixa / PDV</span>
-                <ChevronRight size={14} />
+                <ChevronRight size={14} className="text-slate-500" />
               </Link>
             </div>
           </div>
 
-          {/* Módulo Gestão Executiva */}
-          <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-6 transition-all flex flex-col justify-between space-y-5">
-            <div className="space-y-3">
-              <div className="w-10 h-10 rounded-lg bg-brand-accent/10 border border-brand-accent/20 flex items-center justify-center text-brand-accent">
-                <TrendingUp size={20} />
+          {/* MÓDULO 3: Gestão Executiva */}
+          <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-5 transition-all flex flex-col justify-between space-y-4">
+            <div className="space-y-2.5">
+              <div className="w-9 h-9 rounded-lg bg-surface-ground border border-surface-border flex items-center justify-center text-brand-primary">
+                <TrendingUp size={18} />
               </div>
               <div>
-                <h2 className="text-lg font-bold text-white tracking-tight">Gestão Executiva</h2>
-                <p className="text-xs text-slate-400 leading-relaxed mt-1">
-                  DRE, ficha técnica, BCG de cardápio, estoque, colaboradores e auditoria.
+                <h2 className="text-base font-bold text-white tracking-tight">Gestão Executiva</h2>
+                <p className="text-xs text-slate-400 leading-relaxed mt-0.5">
+                  DRE, ficha técnica, BCG de cardápio, estoque, equipe e auditoria.
                 </p>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-1 pt-3 border-t border-surface-border text-[11px] font-medium text-slate-400">
-              <Link href="/admin/dashboard" className="text-brand-accent font-semibold hover:underline py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+            <div className="grid grid-cols-2 gap-1.5 pt-3 border-t border-surface-border text-xs font-medium">
+              <Link 
+                href="/admin/dashboard" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="DRE e Dashboard Financeiro"
+              >
                 📊 DRE & Dashboard
               </Link>
-              <Link href="/admin/colaboradores" className="text-brand-primary font-semibold hover:underline py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+              
+              <Link 
+                href="/admin/colaboradores" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Gestão de Colaboradores e PINs"
+              >
                 👥 Colaboradores
               </Link>
-              <Link href="/admin/mesas" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
-                • Layout Salão
+
+              <Link 
+                href="/admin/mesas" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Editor de Layouts de Salão"
+              >
+                🗺️ Layout Salão
               </Link>
-              <Link href="/admin/engenharia" className="hover:text-amber-400 py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
-                • BCG Cardápio
+
+              <Link 
+                href="/admin/engenharia" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Engenharia de Cardápio BCG"
+              >
+                🍔 BCG Cardápio
               </Link>
-              <Link href="/admin/insumos" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
-                • Insumos
+
+              <Link 
+                href="/admin/insumos" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Controle de Insumos e Estoque"
+              >
+                📦 Insumos & Estoque
               </Link>
-              <Link href="/admin/compras" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
-                • Compras
+
+              <Link 
+                href="/admin/compras" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Gestão de Compras e Cotações"
+              >
+                🛒 Gestão de Compras
               </Link>
-              <Link href="/admin/cardapio" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
-                • Ficha Técnica
+
+              <Link 
+                href="/admin/cardapio" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Fichas Técnicas e Receitas"
+              >
+                📋 Ficha Técnica
               </Link>
-              <Link href="/admin/precificacao" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
-                • Precificação
+
+              <Link 
+                href="/admin/precificacao" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Precificação e Taxas iFood"
+              >
+                🏷️ Precificação
               </Link>
-              <Link href="/admin/auditoria" className="text-status-free hover:underline py-1 px-1.5 rounded hover:bg-surface-elevated truncate font-semibold col-span-2">
-                🛡️ Central de Auditoria & Segurança
+
+              <Link 
+                href="/admin/fornecedores" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Gestão de Fornecedores"
+              >
+                🚚 Fornecedores
+              </Link>
+
+              <Link 
+                href="/admin/inventario" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Auditoria de Inventário Físico"
+              >
+                🔍 Auditoria Físico
+              </Link>
+
+              <Link 
+                href="/admin/checklists" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Relatórios de Checklists Operacionais"
+              >
+                📝 Checklists
+              </Link>
+
+              <Link 
+                href="/admin/auditoria" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
+                title="Central de Auditoria e Segurança Antifraude"
+              >
+                🛡️ Auditoria Geral
               </Link>
             </div>
           </div>

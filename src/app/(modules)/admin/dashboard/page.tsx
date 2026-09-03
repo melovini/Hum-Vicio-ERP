@@ -4,12 +4,12 @@ import { useInventory } from '@/lib/store';
 import { 
   ArrowLeft, LayoutDashboard, TrendingUp, TrendingDown, 
   DollarSign, AlertTriangle, Utensils, Settings2, Check,
-  Store, Bike, ShoppingBag, PieChart, Award
+  Store, Bike, ShoppingBag, PieChart, Award, Users, Info
 } from 'lucide-react';
 import Link from 'next/link';
 
 export default function DashboardPage() {
-  const { sales, isLoaded, getRealSalesCmv, getTotalWasteCost, wasteRecords } = useInventory();
+  const { sales = [], isLoaded, getRealSalesCmv, getTotalWasteCost, wasteRecords = [] } = useInventory();
   
   // Despesas fixas diárias customizáveis (ex: R$ 150/dia = ~R$ 4.500/mês)
   const [dailyFixedExpense, setDailyFixedExpense] = useState<number>(150);
@@ -17,68 +17,109 @@ export default function DashboardPage() {
   const [tempExpense, setTempExpense] = useState('150');
 
   useEffect(() => {
-    const saved = localStorage.getItem('hum_vicio_daily_fixed_expense');
-    if (saved) {
-      setDailyFixedExpense(Number(saved) || 150);
-      setTempExpense(saved);
-    }
+    try {
+      const saved = localStorage.getItem('hum_vicio_daily_fixed_expense');
+      if (saved) {
+        setDailyFixedExpense(Number(saved) || 150);
+        setTempExpense(saved);
+      }
+    } catch {}
   }, []);
 
   const saveExpense = () => {
     const val = Number(tempExpense) || 0;
     setDailyFixedExpense(val);
-    localStorage.setItem('hum_vicio_daily_fixed_expense', val.toString());
+    try {
+      localStorage.setItem('hum_vicio_daily_fixed_expense', val.toString());
+    } catch {}
     setEditingExpense(false);
   };
 
-  if (!isLoaded) {
-    return (
-      <div className="min-h-screen bg-surface-ground text-slate-100 p-6 flex flex-col items-center justify-center space-y-4">
-        <div className="w-10 h-10 rounded-xl border-2 border-brand-primary border-t-transparent animate-spin" />
-        <p className="text-sm font-semibold text-slate-400">Carregando indicadores do DRE & Gestão Executiva...</p>
-      </div>
-    );
-  }
-
-  // Filtra apenas vendas concluídas
-  const validSales = sales.filter(s => s.status === 'completed');
+  // 1. Vendas concluídas com proteção estrita contra nulos
+  const validSales = useMemo(() => {
+    if (!Array.isArray(sales)) return [];
+    return sales.filter(s => s && s.status === 'completed');
+  }, [sales]);
   
-  const totalRevenue = validSales.reduce((acc, s) => acc + s.total, 0);
-  const ifoodRevenue = validSales.filter(s => s.channel === 'ifood').reduce((acc, s) => acc + s.total, 0);
-  const balcaoRevenue = validSales.filter(s => s.channel === 'balcao').reduce((acc, s) => acc + s.total, 0);
+  const totalRevenue = useMemo(() => {
+    return validSales.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+  }, [validSales]);
 
-  // 1. CMV Real baseado nas Fichas Técnicas dos lanches vendidos
-  const realCmv = getRealSalesCmv();
+  const ifoodRevenue = useMemo(() => {
+    return validSales
+      .filter(s => s.channel === 'ifood')
+      .reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+  }, [validSales]);
+
+  const balcaoRevenue = useMemo(() => {
+    return validSales
+      .filter(s => s.channel === 'balcao')
+      .reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+  }, [validSales]);
+
+  // 2. CMV Real dos lanches vendidos (fallback seguro se função não estiver pronta)
+  const realCmv = useMemo(() => {
+    try {
+      if (typeof getRealSalesCmv === 'function') {
+        const val = getRealSalesCmv();
+        return Number(val) || 0;
+      }
+    } catch {}
+    return totalRevenue * 0.30;
+  }, [getRealSalesCmv, totalRevenue]);
+
   const cmvPercentage = totalRevenue > 0 ? (realCmv / totalRevenue) * 100 : 0;
 
-  // 2. Custo Total de Desperdícios / Quebras registradas pela Cozinha
-  const wasteLoss = getTotalWasteCost();
-
-  // 3. Cálculo exato de Taxas (iFood 23% e 33%, Cartões 1% a 3%)
-  const totalFees = validSales.reduce((acc, sale) => {
-    let feeRate = 0;
-    if (sale.paymentMethod === 'ifood_online') {
-      feeRate = 0.33; // 33% iFood Pagamento Online no App
-    } else if (sale.paymentMethod === 'ifood_entrega' || sale.paymentMethod === 'ifood') {
-      feeRate = 0.23; // 23% iFood Pagamento na Entrega
-    } else if (sale.channel === 'ifood') {
-      feeRate = 0.23; // Fallback iFood
-    } else {
-      if (sale.paymentMethod === 'credito') feeRate = 0.03;
-      else if (sale.paymentMethod === 'debito') feeRate = 0.01;
-      else if (sale.paymentMethod === 'pix' || sale.paymentMethod === 'dinheiro') feeRate = 0.00;
+  // 3. Custo Total de Desperdícios / Quebras
+  const wasteLoss = useMemo(() => {
+    try {
+      if (typeof getTotalWasteCost === 'function') {
+        return Number(getTotalWasteCost()) || 0;
+      }
+    } catch {}
+    if (Array.isArray(wasteRecords)) {
+      return wasteRecords.reduce((acc, w) => acc + (Number(w?.totalLoss) || 0), 0);
     }
-    return acc + (sale.total * feeRate);
-  }, 0);
+    return 0;
+  }, [getTotalWasteCost, wasteRecords]);
 
-  const ifoodOnlineRevenue = validSales.filter(s => s.paymentMethod === 'ifood_online').reduce((acc, s) => acc + s.total, 0);
-  const ifoodEntregaRevenue = validSales.filter(s => s.paymentMethod === 'ifood_entrega' || (s.channel === 'ifood' && s.paymentMethod !== 'ifood_online')).reduce((acc, s) => acc + s.total, 0);
+  // 4. Taxas de Operação (iFood 33% / 23%, Cartões 1% a 3%)
+  const totalFees = useMemo(() => {
+    return validSales.reduce((acc, sale) => {
+      const tot = Number(sale.total) || 0;
+      let feeRate = 0;
+      if (sale.paymentMethod === 'ifood_online') {
+        feeRate = 0.33;
+      } else if (sale.paymentMethod === 'ifood_entrega' || sale.paymentMethod === 'ifood') {
+        feeRate = 0.23;
+      } else if (sale.channel === 'ifood') {
+        feeRate = 0.23;
+      } else {
+        if (sale.paymentMethod === 'credito') feeRate = 0.03;
+        else if (sale.paymentMethod === 'debito') feeRate = 0.01;
+        else if (sale.paymentMethod === 'pix' || sale.paymentMethod === 'dinheiro') feeRate = 0.00;
+      }
+      return acc + (tot * feeRate);
+    }, 0);
+  }, [validSales]);
 
-  // 4. Margem de Contribuição e Lucro Líquido Real
+  const ifoodOnlineRevenue = useMemo(() => {
+    return validSales
+      .filter(s => s.paymentMethod === 'ifood_online')
+      .reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+  }, [validSales]);
+
+  const ifoodEntregaRevenue = useMemo(() => {
+    return validSales
+      .filter(s => s.paymentMethod === 'ifood_entrega' || (s.channel === 'ifood' && s.paymentMethod !== 'ifood_online'))
+      .reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+  }, [validSales]);
+
+  // 5. Margem de Contribuição e Lucro Líquido Real
   const contributionMargin = totalRevenue - realCmv - wasteLoss - totalFees;
   const netProfit = contributionMargin - dailyFixedExpense;
 
-  // 5. Métricas por Modalidade de Atendimento (Mesa vs Retirada vs Delivery)
+  // 6. Métricas por Modalidade (Mesa vs Retirada vs Delivery)
   const modalityStats = useMemo(() => {
     let mesaTotal = 0, mesaCount = 0;
     let retiradaTotal = 0, retiradaCount = 0;
@@ -86,14 +127,15 @@ export default function DashboardPage() {
 
     validSales.forEach(s => {
       const type = s.orderType || (s.channel === 'ifood' ? 'delivery' : 'mesa');
+      const tot = Number(s.total) || 0;
       if (type === 'delivery') {
-        deliveryTotal += s.total;
+        deliveryTotal += tot;
         deliveryCount += 1;
       } else if (type === 'retirada') {
-        retiradaTotal += s.total;
+        retiradaTotal += tot;
         retiradaCount += 1;
       } else {
-        mesaTotal += s.total;
+        mesaTotal += tot;
         mesaCount += 1;
       }
     });
@@ -121,218 +163,270 @@ export default function DashboardPage() {
   }, [validSales, totalRevenue]);
 
   return (
-    <div className="min-h-screen relative p-4 md:p-8 overflow-hidden">
-      <div className="absolute top-0 left-0 w-[50%] h-[50%] bg-blue-500/10 blur-[150px] pointer-events-none" />
-      
-      <div className="max-w-6xl mx-auto relative z-10">
-        <header className="flex items-center justify-between mb-10">
-          <div className="flex items-center gap-6">
-            <Link href="/" className="p-4 glass-card rounded-2xl hover:bg-slate-800 transition-colors">
-              <ArrowLeft size={24} className="text-slate-300" />
+    <div className="min-h-screen bg-surface-ground text-slate-100 p-4 md:p-6 space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
+        
+        {/* Cabeçalho */}
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-surface-border">
+          <div className="flex items-center gap-3">
+            <Link 
+              href="/" 
+              className="p-2.5 bg-surface-card border border-surface-border text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
+              title="Voltar para a Home"
+            >
+              <ArrowLeft size={18} />
             </Link>
             <div>
-              <div className="inline-flex items-center gap-2 text-blue-400 font-bold mb-1">
-                <LayoutDashboard size={20} /> Módulo Gestão Executiva
+              <div className="inline-flex items-center gap-1.5 text-brand-accent font-medium text-xs tracking-wider mb-0.5">
+                <LayoutDashboard size={14} /> Módulo Gestão Executiva
               </div>
-              <h1 className="text-4xl font-extrabold text-white tracking-tight">DRE de Precisão Absoluta</h1>
+              <h1 className="text-2xl font-bold text-white tracking-tight">DRE de Precisão & Indicadores</h1>
+              <p className="text-xs text-slate-400">
+                Demonstrativo de resultado do exercício, lucratividade líquida real e análise por canais.
+              </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5">
+          <div className="flex items-center gap-2">
             <Link
               href="/admin/colaboradores"
-              className="py-2.5 px-4 bg-surface-card hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-xl text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
+              className="py-2 px-3.5 bg-surface-card hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
             >
               👥 Colaboradores
             </Link>
             <Link
               href="/admin/engenharia"
-              className="py-2.5 px-4 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-xl font-semibold text-xs shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
+              className="py-2 px-3.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
             >
-              <Award size={15} /> BCG Cardápio
+              <Award size={14} /> BCG Cardápio
             </Link>
           </div>
-        </header>
+        </div>
+
+        {/* Banner informativo quando o caixa ainda não possui vendas concluídas */}
+        {validSales.length === 0 && (
+          <div className="p-3.5 bg-surface-card rounded-xl border border-surface-border flex items-center gap-3 text-xs text-slate-300">
+            <Info size={16} className="text-brand-accent shrink-0" />
+            <span>
+              <strong>Modo de Visualização Inicial:</strong> Nenhum pedido finalizado registrado no período. A estrutura completa do DRE e os gráficos analíticos estão prontos para receber lançamentos do Caixa e do iFood.
+            </span>
+          </div>
+        )}
 
         {/* KPIs Estratégicos */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <div className="glass-card rounded-3xl p-6 border-t-4 border-emerald-500">
-            <p className="text-xs text-slate-400 font-bold mb-1 uppercase tracking-wider">Faturamento Bruto</p>
-            <p className="text-3xl font-mono font-bold text-white">R$ {totalRevenue.toFixed(2)}</p>
-            <p className="text-xs text-emerald-400 mt-2 flex items-center gap-1">
-              <TrendingUp size={14}/> {validSales.length} pedidos faturados
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          
+          {/* Faturamento Bruto */}
+          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
+            <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Faturamento Bruto</span>
+            <p className="text-2xl font-mono tabular-nums font-bold text-slate-100">
+              R$ {totalRevenue.toFixed(2)}
+            </p>
+            <p className="text-[11px] text-status-free flex items-center gap-1 font-mono tabular-nums">
+              <TrendingUp size={13} /> {validSales.length} pedidos faturados
             </p>
           </div>
           
-          <div className="glass-card rounded-3xl p-6 border-t-4 border-amber-500">
-            <p className="text-xs text-slate-400 font-bold mb-1 uppercase tracking-wider">CMV Real dos Lanches</p>
-            <p className="text-3xl font-mono font-bold text-amber-400">R$ {realCmv.toFixed(2)}</p>
-            <p className="text-xs text-slate-400 mt-2">
+          {/* CMV Real */}
+          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
+            <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">CMV Real (Insumos)</span>
+            <p className="text-2xl font-mono tabular-nums font-bold text-status-occupied">
+              R$ {realCmv.toFixed(2)}
+            </p>
+            <p className="text-[11px] text-slate-400 font-mono tabular-nums">
               <strong className="text-slate-200">{cmvPercentage.toFixed(1)}%</strong> da receita bruta
             </p>
           </div>
 
-          <div className="glass-card rounded-3xl p-6 border-t-4 border-red-500">
-            <p className="text-xs text-slate-400 font-bold mb-1 uppercase tracking-wider">Perdas & Descarte</p>
-            <p className="text-3xl font-mono font-bold text-red-400">- R$ {wasteLoss.toFixed(2)}</p>
-            <p className="text-xs text-slate-400 mt-2">
-              {wasteRecords.length} descartes lançados
+          {/* Desperdícios & Quebras */}
+          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
+            <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Perdas & Descarte</span>
+            <p className="text-2xl font-mono tabular-nums font-bold text-status-danger">
+              - R$ {wasteLoss.toFixed(2)}
+            </p>
+            <p className="text-[11px] text-slate-400 font-mono tabular-nums">
+              {(wasteRecords || []).length} descartes lançados
             </p>
           </div>
 
-          <div className={`glass-card rounded-3xl p-6 border-t-4 ${netProfit >= 0 ? 'border-emerald-500' : 'border-red-500'}`}>
-            <p className="text-xs text-slate-400 font-bold mb-1 uppercase tracking-wider">Resultado Líquido Real</p>
-            <p className={`text-3xl font-mono font-bold ${netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+          {/* Resultado Líquido Real */}
+          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
+            <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Resultado Líquido Real</span>
+            <p className={`text-2xl font-mono tabular-nums font-bold ${netProfit >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
               R$ {netProfit.toFixed(2)}
             </p>
-            <p className="text-xs text-slate-400 mt-2">
-              Margem Líquida: <strong className="text-slate-200">{totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : '0'}%</strong>
+            <p className="text-[11px] text-slate-400 font-mono tabular-nums">
+              Margem Líquida: <strong className="text-slate-200">{totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : '0.0'}%</strong>
             </p>
           </div>
         </div>
 
         {/* Canais de Venda */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
-          <div className="glass-card rounded-3xl p-6 border border-slate-800">
-            <div className="flex justify-between items-center mb-3">
-              <span className="text-sm font-bold text-slate-300">Vendas Balcão</span>
-              <span className="font-mono text-lg font-bold text-blue-400">R$ {balcaoRevenue.toFixed(2)}</span>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          
+          {/* Balcão */}
+          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-2.5">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                🏪 Vendas Balcão / Loja Física
+              </span>
+              <span className="font-mono tabular-nums text-sm font-bold text-brand-accent">
+                R$ {balcaoRevenue.toFixed(2)}
+              </span>
             </div>
-            <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
-              <div className="bg-blue-500 h-full rounded-full transition-all" style={{ width: `${totalRevenue ? (balcaoRevenue/totalRevenue)*100 : 0}%` }} />
+            <div className="w-full bg-surface-ground h-2 rounded-full overflow-hidden border border-surface-border">
+              <div 
+                className="bg-brand-accent h-full rounded-full transition-all duration-300" 
+                style={{ width: `${totalRevenue > 0 ? (balcaoRevenue / totalRevenue) * 100 : 0}%` }} 
+              />
             </div>
-            <p className="text-xs text-slate-500 mt-2 text-right">
-              {totalRevenue ? ((balcaoRevenue/totalRevenue)*100).toFixed(1) : 0}% do total
+            <p className="text-[10px] text-slate-500 text-right font-mono tabular-nums">
+              {totalRevenue > 0 ? ((balcaoRevenue / totalRevenue) * 100).toFixed(1) : '0.0'}% do total faturado
             </p>
           </div>
 
-          <div className="glass-card rounded-3xl p-6 border border-slate-800">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-bold text-slate-300">Vendas iFood Total</span>
-              <span className="font-mono text-lg font-bold text-red-400">R$ {ifoodRevenue.toFixed(2)}</span>
-            </div>
-            <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden">
-              <div className="bg-red-500 h-full rounded-full transition-all" style={{ width: `${totalRevenue ? (ifoodRevenue/totalRevenue)*100 : 0}%` }} />
-            </div>
-            <div className="flex justify-between text-xs mt-3 pt-2 border-t border-slate-800/60">
-              <span className="text-slate-400">
-                Online (33%): <strong className="text-red-400 font-mono">R$ {ifoodOnlineRevenue.toFixed(2)}</strong>
+          {/* iFood */}
+          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-2.5">
+            <div className="flex justify-between items-center">
+              <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                🛵 Vendas iFood Total
               </span>
-              <span className="text-slate-400">
-                Entrega (23%): <strong className="text-amber-400 font-mono">R$ {ifoodEntregaRevenue.toFixed(2)}</strong>
+              <span className="font-mono tabular-nums text-sm font-bold text-status-danger">
+                R$ {ifoodRevenue.toFixed(2)}
               </span>
+            </div>
+            <div className="w-full bg-surface-ground h-2 rounded-full overflow-hidden border border-surface-border">
+              <div 
+                className="bg-status-danger h-full rounded-full transition-all duration-300" 
+                style={{ width: `${totalRevenue > 0 ? (ifoodRevenue / totalRevenue) * 100 : 0}%` }} 
+              />
+            </div>
+            <div className="flex justify-between text-[11px] font-mono tabular-nums text-slate-400 pt-1 border-t border-surface-border">
+              <span>Online (33%): <strong className="text-status-danger">R$ {ifoodOnlineRevenue.toFixed(2)}</strong></span>
+              <span>Entrega (23%): <strong className="text-status-occupied">R$ {ifoodEntregaRevenue.toFixed(2)}</strong></span>
             </div>
           </div>
         </div>
 
-        {/* Distribuição por Modalidade de Consumo (Mesa vs Retirada vs Delivery) */}
-        <div className="glass-card rounded-3xl p-6 border border-slate-800 mb-8">
-          <div className="flex items-center gap-3 mb-6">
-            <PieChart size={22} className="text-emerald-400" />
+        {/* Distribuição por Modalidade de Consumo */}
+        <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-4">
+          <div className="flex items-center gap-2">
+            <PieChart size={18} className="text-brand-accent" />
             <div>
-              <h2 className="text-xl font-bold text-white">Vendas por Modalidade (CAC & Retenção)</h2>
-              <p className="text-xs text-slate-400">Análise de captação e lucratividade: Consumo no Salão, Retirada no Balcão e Entregas.</p>
+              <h2 className="text-sm font-bold text-white tracking-tight">Vendas por Modalidade (CAC & Retenção)</h2>
+              <p className="text-[11px] text-slate-400">Análise comparativa de consumo: Salão/Mesa, Retirada no Balcão e Entregas.</p>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            
             {/* MESA */}
-            <div className="p-5 rounded-2xl bg-slate-950/60 border border-slate-800/90 flex flex-col justify-between">
+            <div className="p-3.5 rounded-lg bg-surface-ground border border-surface-border flex flex-col justify-between space-y-3">
               <div>
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-xs font-bold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+                <div className="flex justify-between items-start mb-1">
+                  <span className="text-[11px] font-semibold text-status-occupied uppercase tracking-wider">
                     🍽️ Consumo Mesa / Salão
                   </span>
-                  <span className="text-xs font-mono font-bold text-slate-400">{modalityStats.mesa.pct.toFixed(1)}%</span>
+                  <span className="text-xs font-mono tabular-nums font-bold text-slate-400">
+                    {modalityStats.mesa.pct.toFixed(1)}%
+                  </span>
                 </div>
-                <p className="text-2xl font-mono font-bold text-white mb-1">
+                <p className="text-xl font-mono tabular-nums font-bold text-white">
                   R$ {modalityStats.mesa.total.toFixed(2)}
                 </p>
-                <p className="text-xs text-slate-400">
+                <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
                   {modalityStats.mesa.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.mesa.avg.toFixed(2)}</strong>
                 </p>
               </div>
-              <div className="mt-4 pt-3 border-t border-slate-800/80">
-                <span className="text-[11px] text-emerald-400 font-medium">
-                  ✓ Sem custo de entrega / CAC orgânico
+              <div className="pt-2 border-t border-surface-border">
+                <span className="text-[10px] text-status-free font-medium">
+                  ✓ Sem taxa de comissão e CAC orgânico
                 </span>
               </div>
             </div>
 
             {/* RETIRADA */}
-            <div className="p-5 rounded-2xl bg-slate-950/60 border border-slate-800/90 flex flex-col justify-between">
+            <div className="p-3.5 rounded-lg bg-surface-ground border border-surface-border flex flex-col justify-between space-y-3">
               <div>
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-xs font-bold text-blue-400 uppercase tracking-wider flex items-center gap-1.5">
+                <div className="flex justify-between items-start mb-1">
+                  <span className="text-[11px] font-semibold text-brand-accent uppercase tracking-wider">
                     🥡 Retirada no Balcão
                   </span>
-                  <span className="text-xs font-mono font-bold text-slate-400">{modalityStats.retirada.pct.toFixed(1)}%</span>
+                  <span className="text-xs font-mono tabular-nums font-bold text-slate-400">
+                    {modalityStats.retirada.pct.toFixed(1)}%
+                  </span>
                 </div>
-                <p className="text-2xl font-mono font-bold text-white mb-1">
+                <p className="text-xl font-mono tabular-nums font-bold text-white">
                   R$ {modalityStats.retirada.total.toFixed(2)}
                 </p>
-                <p className="text-xs text-slate-400">
+                <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
                   {modalityStats.retirada.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.retirada.avg.toFixed(2)}</strong>
                 </p>
               </div>
-              <div className="mt-4 pt-3 border-t border-slate-800/80">
-                <span className="text-[11px] text-blue-400 font-medium">
+              <div className="pt-2 border-t border-surface-border">
+                <span className="text-[10px] text-brand-accent font-medium">
                   ✓ Maior margem líquida (Sem taxa e sem garçom)
                 </span>
               </div>
             </div>
 
             {/* DELIVERY */}
-            <div className="p-5 rounded-2xl bg-slate-950/60 border border-slate-800/90 flex flex-col justify-between">
+            <div className="p-3.5 rounded-lg bg-surface-ground border border-surface-border flex flex-col justify-between space-y-3">
               <div>
-                <div className="flex justify-between items-start mb-2">
-                  <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+                <div className="flex justify-between items-start mb-1">
+                  <span className="text-[11px] font-semibold text-status-free uppercase tracking-wider">
                     🛵 Entrega / Delivery
                   </span>
-                  <span className="text-xs font-mono font-bold text-slate-400">{modalityStats.delivery.pct.toFixed(1)}%</span>
+                  <span className="text-xs font-mono tabular-nums font-bold text-slate-400">
+                    {modalityStats.delivery.pct.toFixed(1)}%
+                  </span>
                 </div>
-                <p className="text-2xl font-mono font-bold text-white mb-1">
+                <p className="text-xl font-mono tabular-nums font-bold text-white">
                   R$ {modalityStats.delivery.total.toFixed(2)}
                 </p>
-                <p className="text-xs text-slate-400">
+                <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
                   {modalityStats.delivery.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.delivery.avg.toFixed(2)}</strong>
                 </p>
               </div>
-              <div className="mt-4 pt-3 border-t border-slate-800/80">
-                <span className="text-[11px] text-amber-400 font-medium">
-                  ⚠️ Sujeito a taxa motoboy e comissão iFood (30%)
+              <div className="pt-2 border-t border-surface-border">
+                <span className="text-[10px] text-status-occupied font-medium">
+                  ⚠️ Sujeito a taxa de motoboy ou comissão iFood
                 </span>
               </div>
             </div>
+
           </div>
         </div>
 
         {/* DRE Detalhado Real */}
-        <div className="glass-card rounded-3xl p-8 border border-slate-800 mb-10">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
-            <h2 className="text-2xl font-bold text-white">Demonstrativo de Resultado (DRE Real)</h2>
+        <div className="bg-surface-card rounded-xl p-5 border border-surface-border space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-bold text-white tracking-tight">Demonstrativo de Resultado do Exercício (DRE Real)</h2>
+              <p className="text-xs text-slate-400">Visão financeira auditável com deduções linha por linha.</p>
+            </div>
             
             {/* Controle de Despesas Fixas */}
-            <div className="flex items-center gap-3 bg-slate-950/70 border border-slate-800 px-4 py-2 rounded-2xl text-xs">
-              <Settings2 size={16} className="text-slate-400" />
-              <span className="text-slate-400">Despesa Fixa Diária:</span>
+            <div className="flex items-center gap-2 bg-surface-ground border border-surface-border px-3 py-1.5 rounded-lg text-xs">
+              <Settings2 size={14} className="text-slate-400" />
+              <span className="text-slate-400 text-[11px]">Despesa Fixa Diária:</span>
               {editingExpense ? (
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <input 
                     type="number"
                     value={tempExpense}
                     onChange={e => setTempExpense(e.target.value)}
-                    className="w-20 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-white font-mono"
+                    className="w-16 input-util py-0.5 px-1.5 font-mono tabular-nums text-xs"
                     autoFocus
                   />
-                  <button onClick={saveExpense} className="p-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded cursor-pointer">
-                    <Check size={14} />
+                  <button onClick={saveExpense} className="p-1 bg-brand-primary hover:bg-brand-primaryHover text-white rounded cursor-pointer">
+                    <Check size={12} />
                   </button>
                 </div>
               ) : (
                 <button 
                   onClick={() => setEditingExpense(true)} 
-                  className="font-mono font-bold text-slate-200 hover:text-blue-400 underline decoration-dotted cursor-pointer"
+                  className="font-mono tabular-nums font-bold text-slate-200 hover:text-brand-accent underline decoration-dotted cursor-pointer"
                   title="Clique para editar a estimativa diária de custos fixos"
                 >
                   R$ {dailyFixedExpense.toFixed(2)}/dia
@@ -341,48 +435,51 @@ export default function DashboardPage() {
             </div>
           </div>
           
-          <div className="space-y-2">
-            <div className="flex justify-between p-4 bg-slate-950/60 rounded-xl">
+          <div className="space-y-1.5 text-xs">
+            <div className="flex justify-between p-3 bg-surface-ground rounded-lg border border-surface-border">
               <span className="font-bold text-slate-200">(=) Receita Bruta Faturada</span>
-              <span className="font-mono text-emerald-400 font-bold text-lg">R$ {totalRevenue.toFixed(2)}</span>
+              <span className="font-mono tabular-nums text-status-free font-bold text-sm">R$ {totalRevenue.toFixed(2)}</span>
             </div>
             
-            <div className="flex justify-between p-4 border-b border-slate-800/60">
-              <span className="text-slate-400 pl-4">(-) CMV Real (Insumos dos Lanches Vendidos)</span>
-              <span className="font-mono text-amber-400 font-semibold">- R$ {realCmv.toFixed(2)}</span>
+            <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
+              <span className="text-slate-400 pl-3">(-) CMV Real (Insumos dos Lanches Vendidos)</span>
+              <span className="font-mono tabular-nums text-status-occupied font-semibold">- R$ {realCmv.toFixed(2)}</span>
             </div>
 
-            <div className="flex justify-between p-4 border-b border-slate-800/60">
-              <span className="text-slate-400 pl-4">(-) Desperdícios & Quebras (Cozinha)</span>
-              <span className="font-mono text-red-400 font-semibold">- R$ {wasteLoss.toFixed(2)}</span>
+            <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
+              <span className="text-slate-400 pl-3">(-) Desperdícios & Quebras (Cozinha)</span>
+              <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {wasteLoss.toFixed(2)}</span>
             </div>
 
-            <div className="flex justify-between p-4 border-b border-slate-800/60">
-              <span className="text-slate-400 pl-4">(-) Taxas de Operação (iFood 33% Online / 23% Entrega / Cartões 1%-3%)</span>
-              <span className="font-mono text-red-400 font-semibold">- R$ {totalFees.toFixed(2)}</span>
+            <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
+              <span className="text-slate-400 pl-3">(-) Taxas de Operação (iFood 33% / 23% / Cartões 1%-3%)</span>
+              <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {totalFees.toFixed(2)}</span>
             </div>
             
-            <div className="flex justify-between p-4 bg-slate-900/60 rounded-xl border border-blue-500/20">
-              <span className="font-bold text-blue-300">(=) Margem de Contribuição Real</span>
-              <span className="font-mono text-blue-400 font-bold text-lg">R$ {contributionMargin.toFixed(2)}</span>
+            <div className="flex justify-between p-3 bg-surface-elevated rounded-lg border border-brand-accent/20">
+              <span className="font-bold text-brand-accent">(=) Margem de Contribuição Real</span>
+              <span className="font-mono tabular-nums text-brand-accent font-bold text-sm">R$ {contributionMargin.toFixed(2)}</span>
             </div>
 
-            <div className="flex justify-between p-4 border-b border-slate-800/60">
-              <span className="text-slate-400 pl-4">(-) Despesas Fixas (Rateio Diário: Aluguel, Equipe, Luz)</span>
-              <span className="font-mono text-red-400 font-semibold">- R$ {dailyFixedExpense.toFixed(2)}</span>
+            <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
+              <span className="text-slate-400 pl-3">(-) Despesas Fixas (Rateio Diário: Equipe, Aluguel, Luz)</span>
+              <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {dailyFixedExpense.toFixed(2)}</span>
             </div>
 
-            <div className={`flex justify-between p-6 rounded-2xl mt-4 border ${netProfit >= 0 ? 'bg-emerald-500/10 border-emerald-500/40' : 'bg-red-500/10 border-red-500/40'}`}>
+            <div className={`flex justify-between items-center p-4 rounded-xl mt-3 border ${
+              netProfit >= 0 ? 'bg-status-free/10 border-status-free/30' : 'bg-status-danger/10 border-status-danger/30'
+            }`}>
               <div>
-                <span className="font-extrabold text-xl text-white">(=) Lucro / Prejuízo Líquido</span>
-                <p className="text-xs text-slate-400 mt-0.5">Dinheiro real que sobra para a empresa após todas as deduções</p>
+                <span className="font-bold text-sm text-white">(=) Lucro / Prejuízo Líquido</span>
+                <p className="text-[10px] text-slate-400 mt-0.5">Saldo real restante após a quitação de todos os custos variáveis e fixos</p>
               </div>
-              <span className={`font-mono text-3xl font-extrabold ${netProfit >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              <span className={`font-mono tabular-nums text-2xl font-bold ${netProfit >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
                 R$ {netProfit.toFixed(2)}
               </span>
             </div>
           </div>
         </div>
+
       </div>
     </div>
   );
