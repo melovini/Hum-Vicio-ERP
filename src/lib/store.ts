@@ -21,6 +21,14 @@ export interface RecipeIngredient {
   quantity: number;
 }
 
+// === SUB-RECEITAS / PRÉ-PREPAROS (MAIONESES E MOLHOS) ===
+export interface SubRecipeItem {
+  id: string;
+  parentIngredientId: string;
+  childIngredientId: string;
+  quantity: number;
+}
+
 export interface Product {
   id: string;
   name: string;
@@ -172,6 +180,9 @@ export function useInventory() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [purchaseRecords, setPurchaseRecords] = useState<PurchaseRecord[]>([]);
   const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
+
+  // Sub-receitas State
+  const [subRecipes, setSubRecipes] = useState<SubRecipeItem[]>([]);
 
   const supabase = createClient();
 
@@ -371,6 +382,21 @@ export function useInventory() {
         }
       } catch (err) {
         console.warn('Tabela stock_audits ainda não criada:', err);
+      }
+
+      // 11. Fetch Sub-Receitas
+      try {
+        const { data: subData } = await supabase.from('sub_recipes').select('*');
+        if (subData) {
+          setSubRecipes(subData.map(s => ({
+            id: s.id,
+            parentIngredientId: s.parent_ingredient_id,
+            childIngredientId: s.child_ingredient_id,
+            quantity: Number(s.quantity) || 0
+          })));
+        }
+      } catch (err) {
+        console.warn('Tabela sub_recipes ainda não criada:', err);
       }
 
       setIsLoaded(true);
@@ -667,12 +693,66 @@ export function useInventory() {
     setProducts(products.filter(p => p.id !== id));
   };
 
+  // Cálculo de custo real do insumo (com suporte a sub-receitas de maioneses e molhos)
+  const getIngredientTrueCost = (ingId: string, visited = new Set<string>()): number => {
+    const ing = items.find(i => i.id === ingId);
+    if (!ing) return 0;
+    if (visited.has(ingId)) return ing.costPerUnit;
+    visited.add(ingId);
+
+    const children = subRecipes.filter(s => s.parentIngredientId === ingId);
+    if (children.length === 0) return ing.costPerUnit;
+
+    const calculated = children.reduce((acc, child) => {
+      const childCost = getIngredientTrueCost(child.childIngredientId, new Set(visited));
+      return acc + (childCost * child.quantity);
+    }, 0);
+
+    return calculated > 0 ? calculated : ing.costPerUnit;
+  };
+
   const getProductCmv = (recipe: RecipeIngredient[]) => {
     return recipe.reduce((total, recipeItem) => {
-      const ing = items.find(i => i.id === recipeItem.ingredientId);
-      if (ing) return total + (ing.costPerUnit * recipeItem.quantity);
-      return total;
+      const unitCost = getIngredientTrueCost(recipeItem.ingredientId);
+      return total + (unitCost * recipeItem.quantity);
     }, 0);
+  };
+
+  const saveSubRecipe = async (parentIngredientId: string, components: { childIngredientId: string; quantity: number }[]) => {
+    try {
+      await supabase.from('sub_recipes').delete().eq('parent_ingredient_id', parentIngredientId);
+      if (components.length > 0) {
+        const inserts = components.map(c => ({
+          parent_ingredient_id: parentIngredientId,
+          child_ingredient_id: c.childIngredientId,
+          quantity: c.quantity
+        }));
+        await supabase.from('sub_recipes').insert(inserts);
+      }
+
+      const remaining = subRecipes.filter(s => s.parentIngredientId !== parentIngredientId);
+      const newItems: SubRecipeItem[] = components.map(c => ({
+        id: Math.random().toString(36).substring(2, 9),
+        parentIngredientId,
+        childIngredientId: c.childIngredientId,
+        quantity: c.quantity
+      }));
+      setSubRecipes([...remaining, ...newItems]);
+
+      // Atualizar o custo do insumo pai no banco com o novo valor somado
+      const calculatedCost = components.reduce((acc, c) => {
+        const childIng = items.find(i => i.id === c.childIngredientId);
+        return acc + ((childIng?.costPerUnit || 0) * c.quantity);
+      }, 0);
+
+      if (calculatedCost > 0) {
+        await updateInventoryItem(parentIngredientId, { costPerUnit: calculatedCost });
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
   };
 
   const getRealSalesCmv = () => {
@@ -885,6 +965,7 @@ export function useInventory() {
     checklist, toggleChecklistTask, signChecklist, allChecklists,
     suppliers, addSupplier, updateSupplier, removeSupplier,
     purchaseRecords, recordPurchaseWithSupplier,
-    stockAudits, saveStockAudit
+    stockAudits, saveStockAudit,
+    subRecipes, saveSubRecipe, getIngredientTrueCost
   };
 }
