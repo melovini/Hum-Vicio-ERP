@@ -97,6 +97,51 @@ export interface DailyChecklist {
   signedBy?: string;
 }
 
+// === FORNECEDORES & COMPRAS (FASE 3) ===
+export interface Supplier {
+  id: string;
+  name: string;
+  contactName: string;
+  phone: string;
+  category: string;
+  notes: string;
+  createdAt?: string;
+}
+
+export interface PurchaseRecord {
+  id: string;
+  ingredientId: string;
+  ingredientName: string;
+  supplierId?: string;
+  supplierName: string;
+  quantity: number;
+  unit: string;
+  costPerUnit: number;
+  totalCost: number;
+  createdAt: string;
+}
+
+// === AUDITORIA DE INVENTÁRIO FÍSICO (FASE 3) ===
+export interface StockAuditItem {
+  id: string;
+  name: string;
+  category: string;
+  unit: string;
+  costPerUnit: number;
+  systemStock: number;
+  countedStock: number;
+  diff: number;
+  varianceCost: number;
+}
+
+export interface StockAudit {
+  id: string;
+  auditedBy: string;
+  items: StockAuditItem[];
+  totalVarianceCost: number;
+  createdAt: string;
+}
+
 const defaultChecklistTasks: ChecklistTask[] = [
   { id: '1', label: 'Verificar o conteúdo do freezer e geladeiras e ver o que será necessário', checked: false },
   { id: '2', label: 'Verificar os pães e a integridade deles', checked: false },
@@ -122,6 +167,11 @@ export function useInventory() {
   // Checklist State
   const [checklist, setChecklist] = useState<DailyChecklist | null>(null);
   const [allChecklists, setAllChecklists] = useState<DailyChecklist[]>([]);
+
+  // Fase 3 States
+  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
+  const [purchaseRecords, setPurchaseRecords] = useState<PurchaseRecord[]>([]);
+  const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
 
   const supabase = createClient();
 
@@ -200,7 +250,7 @@ export function useInventory() {
         console.warn('Tabela cash_sessions ainda não criada:', err);
       }
 
-      // 5. Fetch Movimentações de Caixa (Sangrias / Suprimentos)
+      // 5. Fetch Movimentações de Caixa
       try {
         const { data: movData } = await supabase
           .from('cash_movements')
@@ -220,7 +270,7 @@ export function useInventory() {
         console.warn('Tabela cash_movements ainda não criada:', err);
       }
 
-      // 6. Fetch Perdas / Desperdícios (Cozinha)
+      // 6. Fetch Perdas / Desperdícios
       try {
         const { data: wasteData } = await supabase
           .from('waste_records')
@@ -246,7 +296,7 @@ export function useInventory() {
       }
 
       // 7. Fetch Daily Checklist & All Checklists
-      const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
+      const today = new Date().toLocaleDateString('en-CA');
       const { data: allChecks } = await supabase.from('kitchen_checklists').select('*').order('date', { ascending: false });
       
       if (allChecks) {
@@ -266,6 +316,61 @@ export function useInventory() {
         }
       } else {
         setChecklist({ id: '', date: today, tasks: defaultChecklistTasks });
+      }
+
+      // 8. Fetch Fornecedores (Fase 3)
+      try {
+        const { data: supData } = await supabase.from('suppliers').select('*').order('name', { ascending: true });
+        if (supData) {
+          setSuppliers(supData.map(s => ({
+            id: s.id,
+            name: s.name,
+            contactName: s.contact_name || '',
+            phone: s.phone || '',
+            category: s.category || 'Geral',
+            notes: s.notes || '',
+            createdAt: s.created_at
+          })));
+        }
+      } catch (err) {
+        console.warn('Tabela suppliers ainda não criada:', err);
+      }
+
+      // 9. Fetch Histórico de Compras (Fase 3)
+      try {
+        const { data: purchData } = await supabase.from('purchase_records').select('*').order('created_at', { ascending: false });
+        if (purchData) {
+          setPurchaseRecords(purchData.map(p => ({
+            id: p.id,
+            ingredientId: p.ingredient_id,
+            ingredientName: p.ingredient_name,
+            supplierId: p.supplier_id,
+            supplierName: p.supplier_name || 'Diversos',
+            quantity: Number(p.quantity) || 0,
+            unit: p.unit,
+            costPerUnit: Number(p.cost_per_unit) || 0,
+            totalCost: Number(p.total_cost) || 0,
+            createdAt: p.created_at
+          })));
+        }
+      } catch (err) {
+        console.warn('Tabela purchase_records ainda não criada:', err);
+      }
+
+      // 10. Fetch Auditorias de Inventário (Fase 3)
+      try {
+        const { data: auditData } = await supabase.from('stock_audits').select('*').order('created_at', { ascending: false });
+        if (auditData) {
+          setStockAudits(auditData.map(a => ({
+            id: a.id,
+            auditedBy: a.audited_by,
+            items: a.items || [],
+            totalVarianceCost: Number(a.total_variance_cost) || 0,
+            createdAt: a.created_at
+          })));
+        }
+      } catch (err) {
+        console.warn('Tabela stock_audits ainda não criada:', err);
       }
 
       setIsLoaded(true);
@@ -325,6 +430,151 @@ export function useInventory() {
     }
   };
 
+  // --- REGISTRO DE COMPRA COM FORNECEDOR (FASE 3) ---
+  const recordPurchaseWithSupplier = async (
+    ingredientId: string, 
+    quantity: number, 
+    newCost: number,
+    supplierId?: string,
+    supplierName?: string
+  ) => {
+    const item = items.find(i => i.id === ingredientId);
+    if (!item) return { success: false, error: 'Insumo não encontrado' };
+
+    const totalCost = quantity * newCost;
+    const finalSupplierName = supplierName || 'Diversos / Não Informado';
+
+    try {
+      // 1. Inserir histórico de compras
+      const { data: pData } = await supabase.from('purchase_records').insert({
+        ingredient_id: ingredientId,
+        ingredient_name: item.name,
+        supplier_id: supplierId || null,
+        supplier_name: finalSupplierName,
+        quantity,
+        unit: item.unit,
+        cost_per_unit: newCost,
+        total_cost: totalCost
+      }).select().single();
+
+      // 2. Atualizar estoque e custo unitário
+      await updateInventoryItem(ingredientId, {
+        currentStock: item.currentStock + quantity,
+        costPerUnit: newCost,
+        status: 'ok'
+      });
+
+      if (pData) {
+        const newRecord: PurchaseRecord = {
+          id: pData.id,
+          ingredientId: pData.ingredient_id,
+          ingredientName: pData.ingredient_name,
+          supplierId: pData.supplier_id,
+          supplierName: pData.supplier_name,
+          quantity: Number(pData.quantity),
+          unit: pData.unit,
+          costPerUnit: Number(pData.cost_per_unit),
+          totalCost: Number(pData.total_cost),
+          createdAt: pData.created_at
+        };
+        setPurchaseRecords([newRecord, ...purchaseRecords]);
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      // Fallback
+      await registerPurchase(ingredientId, quantity, newCost);
+      return { success: true };
+    }
+  };
+
+  // --- FORNECEDORES ACTIONS (FASE 3) ---
+  const addSupplier = async (sup: Omit<Supplier, 'id' | 'createdAt'>) => {
+    try {
+      const { data, error } = await supabase.from('suppliers').insert({
+        name: sup.name,
+        contact_name: sup.contactName,
+        phone: sup.phone,
+        category: sup.category,
+        notes: sup.notes
+      }).select().single();
+
+      if (error) {
+        alert(`Erro ao salvar fornecedor: ${error.message}`);
+        return;
+      }
+
+      if (data) {
+        setSuppliers([...suppliers, {
+          id: data.id,
+          name: data.name,
+          contactName: data.contact_name,
+          phone: data.phone,
+          category: data.category,
+          notes: data.notes,
+          createdAt: data.created_at
+        }]);
+      }
+    } catch (err: any) {
+      alert(`Erro: ${err.message}`);
+    }
+  };
+
+  const updateSupplier = async (id: string, updates: Partial<Supplier>) => {
+    const dbUpdates: any = {};
+    if (updates.name !== undefined) dbUpdates.name = updates.name;
+    if (updates.contactName !== undefined) dbUpdates.contact_name = updates.contactName;
+    if (updates.phone !== undefined) dbUpdates.phone = updates.phone;
+    if (updates.category !== undefined) dbUpdates.category = updates.category;
+    if (updates.notes !== undefined) dbUpdates.notes = updates.notes;
+
+    await supabase.from('suppliers').update(dbUpdates).eq('id', id);
+    setSuppliers(suppliers.map(s => s.id === id ? { ...s, ...updates } : s));
+  };
+
+  const removeSupplier = async (id: string) => {
+    await supabase.from('suppliers').delete().eq('id', id);
+    setSuppliers(suppliers.filter(s => s.id !== id));
+  };
+
+  // --- AUDITORIA DE INVENTÁRIO FÍSICO (FASE 3) ---
+  const saveStockAudit = async (auditedBy: string, auditItems: StockAuditItem[], totalVarianceCost: number) => {
+    try {
+      // 1. Salvar relatório da auditoria
+      const { data: aData, error: aErr } = await supabase.from('stock_audits').insert({
+        audited_by: auditedBy,
+        items: auditItems,
+        total_variance_cost: totalVarianceCost
+      }).select().single();
+
+      if (aErr) {
+        console.error('Erro ao salvar auditoria:', aErr);
+      }
+
+      // 2. Ajustar saldos de estoque no banco para cada insumo contado
+      for (const ai of auditItems) {
+        if (ai.diff !== 0) {
+          await updateInventoryItem(ai.id, { currentStock: ai.countedStock });
+        }
+      }
+
+      if (aData) {
+        const newAudit: StockAudit = {
+          id: aData.id,
+          auditedBy: aData.audited_by,
+          items: aData.items,
+          totalVarianceCost: Number(aData.total_variance_cost),
+          createdAt: aData.created_at
+        };
+        setStockAudits([newAudit, ...stockAudits]);
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  };
+
   // --- PERDAS / DESPERDÍCIO (COZINHA) ---
   const registerWaste = async (ingredientId: string, quantity: number, reason: string, responsibleName: string) => {
     const ing = items.find(i => i.id === ingredientId);
@@ -334,7 +584,6 @@ export function useInventory() {
     const totalLoss = costAtTime * quantity;
 
     try {
-      // 1. Inserir registro na tabela waste_records
       const { data: wData, error: wErr } = await supabase.from('waste_records').insert({
         ingredient_id: ingredientId,
         ingredient_name: ing.name,
@@ -348,10 +597,8 @@ export function useInventory() {
 
       if (wErr) {
         console.error('Erro ao registrar perda:', wErr);
-        // Fallback local se a tabela ainda não foi criada
       }
 
-      // 2. Abater estoque do insumo no banco e localmente
       const newStock = Math.max(0, ing.currentStock - quantity);
       await updateInventoryItem(ingredientId, { currentStock: newStock });
 
@@ -428,7 +675,6 @@ export function useInventory() {
     }, 0);
   };
 
-  // Cálculo de CMV Real Somando todas as Fichas Técnicas dos Lanches Vendidos
   const getRealSalesCmv = () => {
     const completedSales = sales.filter(s => s.status === 'completed');
     let totalCmv = 0;
@@ -440,7 +686,6 @@ export function useInventory() {
           if (product && product.recipe && product.recipe.length > 0) {
             totalCmv += getProductCmv(product.recipe) * item.quantity;
           } else {
-            // Fallback: 30% caso o produto ainda não tenha ficha técnica cadastrada
             totalCmv += (item.unitPrice * 0.30) * item.quantity;
           }
         });
@@ -455,7 +700,7 @@ export function useInventory() {
   // --- CAIXA ACTIONS (EM NUVEM) ---
   const openCaixa = async (initialAmount: number, operatorName: string) => {
     try {
-      const { data, error } = await supabase.from('cash_sessions').insert({
+      const { data } = await supabase.from('cash_sessions').insert({
         status: 'open',
         initial_amount: initialAmount,
         opened_by: operatorName,
@@ -637,6 +882,9 @@ export function useInventory() {
     sales, addSale, cancelSale,
     movements, addMovement,
     wasteRecords, registerWaste, getTotalWasteCost,
-    checklist, toggleChecklistTask, signChecklist, allChecklists
+    checklist, toggleChecklistTask, signChecklist, allChecklists,
+    suppliers, addSupplier, updateSupplier, removeSupplier,
+    purchaseRecords, recordPurchaseWithSupplier,
+    stockAudits, saveStockAudit
   };
 }

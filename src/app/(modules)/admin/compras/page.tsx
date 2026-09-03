@@ -1,14 +1,15 @@
 'use client';
 import { useInventory, InventoryItem } from '@/lib/store';
-import { ShoppingCart, ArrowLeft, TrendingUp, Check, AlertCircle } from 'lucide-react';
+import { ShoppingCart, ArrowLeft, TrendingUp, Check, AlertCircle, Truck, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 import { useState } from 'react';
 
 export default function GestaoComprasPage() {
-  const { items, registerPurchase, isLoaded, sales } = useInventory();
+  const { items, recordPurchaseWithSupplier, suppliers, isLoaded, sales } = useInventory();
   const [selectedItem, setSelectedItem] = useState<InventoryItem | null>(null);
   const [quantity, setQuantity] = useState('');
   const [cost, setCost] = useState('');
+  const [selectedSupplierId, setSelectedSupplierId] = useState('');
 
   if (!isLoaded) return null;
 
@@ -21,12 +22,20 @@ export default function GestaoComprasPage() {
     return item.status === 'ok' && item.currentStock < 15 && totalSoldRecently > 2;
   });
   
-  const handlePurchase = (e: React.FormEvent) => {
+  const handlePurchase = async (e: React.FormEvent) => {
     e.preventDefault();
     if (selectedItem && quantity && cost) {
-      registerPurchase(selectedItem.id, Number(quantity), Number(cost));
+      const sup = suppliers.find(s => s.id === selectedSupplierId);
+      await recordPurchaseWithSupplier(
+        selectedItem.id, 
+        Number(quantity), 
+        Number(cost),
+        selectedSupplierId || undefined,
+        sup?.name
+      );
       setQuantity('');
       setCost('');
+      setSelectedSupplierId('');
       setSelectedItem(null);
     }
   };
@@ -53,18 +62,25 @@ export default function GestaoComprasPage() {
       <div className="absolute top-0 right-0 w-[50%] h-[50%] bg-blue-500/10 blur-[150px] pointer-events-none" />
       
       <div className="max-w-6xl mx-auto relative z-10">
-        <header className="flex items-center justify-between mb-12">
+        <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-10">
           <div className="flex items-center gap-6">
             <Link href="/" className="p-4 glass-card rounded-2xl hover:bg-slate-800 transition-colors">
               <ArrowLeft size={24} className="text-slate-300" />
             </Link>
             <div>
               <div className="inline-flex items-center gap-2 text-blue-400 font-bold mb-1">
-                <ShoppingCart size={20} /> Módulo Gestão
+                <ShoppingCart size={20} /> Módulo Gestão Executiva
               </div>
               <h1 className="text-4xl font-extrabold text-white tracking-tight">Gestão de Compras</h1>
             </div>
           </div>
+
+          <Link 
+            href="/admin/fornecedores" 
+            className="px-5 py-3.5 bg-slate-900 hover:bg-slate-800 border border-slate-700 text-blue-400 rounded-2xl font-bold flex items-center gap-2 text-sm transition-all"
+          >
+            <Truck size={18} /> Painel de Fornecedores <ExternalLink size={14} />
+          </Link>
         </header>
 
         {predictiveAlerts.length > 0 && (
@@ -113,9 +129,9 @@ export default function GestaoComprasPage() {
                           </div>
                           <button 
                             onClick={() => setSelectedItem(item)}
-                            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all"
+                            className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-xl text-sm font-bold transition-all cursor-pointer"
                           >
-                            Dar Baixa
+                            Dar Entrada
                           </button>
                         </div>
                       ))}
@@ -132,7 +148,7 @@ export default function GestaoComprasPage() {
                   <h3 className="text-md font-bold text-slate-400 mb-2">{catName}</h3>
                   <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                     {items.map(item => (
-                      <button key={item.id} onClick={() => setSelectedItem(item)} className="p-3 bg-slate-900/50 hover:bg-slate-800 border border-slate-800 rounded-xl text-left transition-colors">
+                      <button key={item.id} onClick={() => setSelectedItem(item)} className="p-3 bg-slate-900/50 hover:bg-slate-800 border border-slate-800 rounded-xl text-left transition-colors cursor-pointer">
                         <span className="text-slate-300 text-sm block font-bold">{item.name}</span>
                         <span className="text-slate-500 text-xs">{item.currentStock} {item.unit} em estoque</span>
                       </button>
@@ -143,44 +159,59 @@ export default function GestaoComprasPage() {
             </div>
           </div>
 
-          {/* Registro de Compra */}
+          {/* Registro de Compra com Fornecedor */}
           <div className="lg:col-span-1">
             <div className="glass-card rounded-3xl p-6 border-t-4 border-blue-500 sticky top-8">
-              <h2 className="text-xl font-bold text-white mb-6">Registrar Compra</h2>
+              <h2 className="text-xl font-bold text-white mb-6">Lançar Compra</h2>
               
               {!selectedItem ? (
                 <p className="text-slate-500 text-center py-8">Selecione um item da lista ao lado para registrar a compra.</p>
               ) : (
                 <form onSubmit={handlePurchase} className="space-y-4">
-                  <div className="bg-slate-900/50 p-4 rounded-2xl border border-slate-800 mb-6">
-                    <span className="text-sm text-slate-400 block mb-1">Comprando:</span>
-                    <span className="font-bold text-lg text-slate-200">{selectedItem.name}</span>
-                    <span className="text-sm text-slate-500 block">Estoque Atual: {selectedItem.currentStock} {selectedItem.unit}</span>
+                  <div className="bg-slate-900/60 p-4 rounded-2xl border border-slate-800 mb-4">
+                    <span className="text-xs text-slate-400 block mb-1">Insumo Selecionado:</span>
+                    <span className="font-bold text-lg text-white block">{selectedItem.name}</span>
+                    <span className="text-xs text-slate-400 block">Estoque Atual: {selectedItem.currentStock} {selectedItem.unit}</span>
                   </div>
 
                   <div>
-                    <label className="block text-sm text-slate-400 font-bold mb-2">Quantidade Comprada ({selectedItem.unit})</label>
+                    <label className="block text-xs text-slate-300 font-bold mb-1">Fornecedor da Compra</label>
+                    <select 
+                      value={selectedSupplierId} 
+                      onChange={e => setSelectedSupplierId(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-700/60 rounded-xl p-3 text-slate-200 outline-none focus:border-blue-500 text-sm"
+                    >
+                      <option value="">Diversos / Não Informado</option>
+                      {suppliers.map(s => (
+                        <option key={s.id} value={s.id}>{s.name} ({s.category})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs text-slate-300 font-bold mb-1">Quantidade Comprada ({selectedItem.unit})</label>
                     <input 
                       type="number" step="0.01" required value={quantity} onChange={e => setQuantity(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700/50 rounded-xl p-3 text-white outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-700/60 rounded-xl p-3 text-white outline-none focus:border-blue-500 text-base"
+                      placeholder="0.00"
                     />
                   </div>
                   
                   <div>
-                    <label className="block text-sm text-slate-400 font-bold mb-2">Novo Custo Unitário (R$)</label>
+                    <label className="block text-xs text-slate-300 font-bold mb-1">Novo Custo Unitário (R$)</label>
                     <input 
                       type="number" step="0.01" required value={cost} onChange={e => setCost(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700/50 rounded-xl p-3 text-white outline-none focus:border-blue-500"
+                      className="w-full bg-slate-950 border border-slate-700/60 rounded-xl p-3 text-white outline-none focus:border-blue-500 text-base"
                       placeholder={`Último: R$ ${selectedItem.costPerUnit.toFixed(2)}`}
                     />
                   </div>
 
-                  <div className="pt-4 flex gap-2">
-                    <button type="button" onClick={() => setSelectedItem(null)} className="flex-1 py-3 text-slate-400 font-bold hover:bg-slate-800 rounded-xl transition-colors">
+                  <div className="pt-3 flex gap-2">
+                    <button type="button" onClick={() => setSelectedItem(null)} className="flex-1 py-3 text-slate-400 font-bold hover:bg-slate-800 rounded-xl transition-colors cursor-pointer text-sm">
                       Cancelar
                     </button>
-                    <button type="submit" className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2">
-                      <TrendingUp size={18} /> Atualizar
+                    <button type="submit" className="flex-1 bg-emerald-600 hover:bg-emerald-500 text-white py-3 rounded-xl font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-emerald-600/30 text-sm">
+                      <TrendingUp size={16} /> Gravar Entrada
                     </button>
                   </div>
                 </form>

@@ -1,12 +1,13 @@
 'use client';
 import { useState, useMemo } from 'react';
-import { useInventory, Product, SaleItem } from '@/lib/store';
+import { useInventory, Product, SaleItem, Sale } from '@/lib/store';
 import { 
   MonitorDot, ArrowLeft, Lock, Unlock, DollarSign, History, 
   Send, XCircle, ShoppingCart as CartIcon, Plus, Minus, Trash2, 
-  Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User 
+  Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer 
 } from 'lucide-react';
 import Link from 'next/link';
+import ReceiptModal from '@/components/ReceiptModal';
 
 export default function CaixaPage() {
   const { 
@@ -20,6 +21,7 @@ export default function CaixaPage() {
   // Modais de Abertura e Fechamento
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
+  const [selectedSaleToPrint, setSelectedSaleToPrint] = useState<Sale | null>(null);
 
   // Form Abertura
   const [initialAmountInput, setInitialAmountInput] = useState('100.00');
@@ -473,17 +475,26 @@ export default function CaixaPage() {
                                 R$ {sale.total.toFixed(2)}
                               </span>
                               {sale.status !== 'cancelled' && (
-                                <button 
-                                  onClick={() => {
-                                    if (confirm('Deseja estornar esta venda? Os insumos da receita voltarão automaticamente para o estoque.')) {
-                                      cancelSale(sale.id);
-                                    }
-                                  }} 
-                                  className="text-slate-500 hover:text-red-500 p-2 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer" 
-                                  title="Estornar Venda e Devolver Estoque"
-                                >
-                                  <XCircle size={22} />
-                                </button>
+                                <div className="flex items-center gap-1">
+                                  <button 
+                                    onClick={() => setSelectedSaleToPrint(sale)} 
+                                    className="text-slate-400 hover:text-emerald-400 p-2 hover:bg-emerald-500/10 rounded-xl transition-all cursor-pointer" 
+                                    title="Imprimir Cupom Térmico (Cozinha / Cliente)"
+                                  >
+                                    <Printer size={20} />
+                                  </button>
+                                  <button 
+                                    onClick={() => {
+                                      if (confirm('Deseja estornar esta venda? Os insumos da receita voltarão automaticamente para o estoque.')) {
+                                        cancelSale(sale.id);
+                                      }
+                                    }} 
+                                    className="text-slate-500 hover:text-red-500 p-2 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer" 
+                                    title="Estornar Venda e Devolver Estoque"
+                                  >
+                                    <XCircle size={20} />
+                                  </button>
+                                </div>
                               )}
                             </div>
                           </div>
@@ -608,6 +619,12 @@ export default function CaixaPage() {
             </div>
           </div>
         )}
+
+        {/* Modal de Impressão Térmica */}
+        <ReceiptModal 
+          sale={selectedSaleToPrint} 
+          onClose={() => setSelectedSaleToPrint(null)} 
+        />
       </div>
     </div>
   );
