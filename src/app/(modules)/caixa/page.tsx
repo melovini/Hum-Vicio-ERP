@@ -6,11 +6,17 @@ import {
   Send, XCircle, ShoppingCart as CartIcon, Plus, Minus, Trash2, 
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
-  Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck
+  Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
 import { playOrderReadyChime } from '@/lib/audio';
+import MapaMesasCanvas from '@/components/MapaMesasCanvas';
+import { 
+  SessaoCaixaSalao, SalaoMesaInstancia, LayoutTemplate,
+  getActiveFloorSession, createInitialSessionFromTemplate,
+  lancarConsumoNaMesa, getStoredLayoutTemplates 
+} from '@/lib/mesas';
 
 export default function CaixaPage() {
   const { 
@@ -20,9 +26,14 @@ export default function CaixaPage() {
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus 
   } = useInventory();
 
-  const [activeTab, setActiveTab] = useState<'pdv' | 'producao' | 'historico' | 'sangria'>('pdv');
+  const [activeTab, setActiveTab] = useState<'pdv' | 'mesas' | 'producao' | 'historico' | 'sangria'>('pdv');
   const [productionFilter, setProductionFilter] = useState<'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido'>('todos');
   const [selectedOrdersForBatch, setSelectedOrdersForBatch] = useState<string[]>([]);
+
+  // Instância de Salão Viva no Turno de Caixa (Floor Session State)
+  const [floorSession, setFloorSession] = useState<SessaoCaixaSalao>(() => getActiveFloorSession());
+  const [selectedInitialLayoutId, setSelectedInitialLayoutId] = useState<string>('tpl_padrao_6');
+  const [floorTemplates, setFloorTemplates] = useState<LayoutTemplate[]>(() => getStoredLayoutTemplates());
   
   // Modais de Abertura e Fechamento
   const [showOpenModal, setShowOpenModal] = useState(false);
@@ -423,6 +434,18 @@ export default function CaixaPage() {
       targetPrepMinutes
     });
 
+    // Se o pedido for de mesa, lança o consumo automaticamente na instância da mesa
+    if (orderType === 'mesa' && customerName.trim()) {
+      const mesaAlvo = floorSession.mesas.find(
+        m => m.numeroIdentificador.toLowerCase() === customerName.trim().toLowerCase() ||
+             m.id === customerName.trim()
+      );
+      if (mesaAlvo) {
+        const updatedFloor = lancarConsumoNaMesa(floorSession, mesaAlvo.id, cartTotal, customerName.trim(), 'Operador');
+        setFloorSession(updatedFloor);
+      }
+    }
+
     setCart([]);
     setCustomerName('');
     setDiscountInput('');
@@ -442,6 +465,11 @@ export default function CaixaPage() {
     e.preventDefault();
     if (!operatorOpenInput.trim()) return;
     await openCaixa(Number(initialAmountInput) || 0, operatorOpenInput.trim());
+
+    // RF02 - Carga Inicial por Turno: Clona o template selecionado para a sessão do salão
+    const novaSessao = createInitialSessionFromTemplate(activeCashSession?.id || 'sessao_' + Date.now().toString(36), selectedInitialLayoutId);
+    setFloorSession(novaSessao);
+
     setShowOpenModal(false);
   };
 
@@ -592,6 +620,28 @@ export default function CaixaPage() {
                     className="w-full bg-slate-950 border border-slate-700 rounded-2xl p-4 text-white font-mono text-xl font-bold outline-none focus:border-emerald-500"
                   />
                 </div>
+
+                {/* RF02 - Carga Inicial por Turno: Seleção do Layout Mestre de Salão */}
+                <div>
+                  <label className="block text-slate-300 font-bold text-sm mb-2 flex items-center gap-1.5">
+                    <LayoutGrid size={15} className="text-emerald-400" /> Layout Inicial do Salão (Mesas)
+                  </label>
+                  <select
+                    value={selectedInitialLayoutId}
+                    onChange={e => setSelectedInitialLayoutId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-2xl p-3.5 text-white text-xs font-bold outline-none focus:border-emerald-500 cursor-pointer"
+                  >
+                    {floorTemplates.filter(t => t.ativo).map(t => (
+                      <option key={t.id} value={t.id}>
+                        {t.nome} ({t.items.length} mesas)
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-[10px] text-slate-500 mt-1 block">
+                    O template selecionado será clonado para a sessão viva do turno.
+                  </span>
+                </div>
+
                 <div className="flex gap-3 pt-4">
                   <button 
                     type="button" 
@@ -702,6 +752,24 @@ export default function CaixaPage() {
                 }`}
               >
                 <CartIcon size={20} /> Pedidos
+              </button>
+
+              <button 
+                onClick={() => setActiveTab('mesas')} 
+                className={`w-full flex items-center justify-between p-4 rounded-2xl font-bold transition-all text-left cursor-pointer ${
+                  activeTab === 'mesas' 
+                    ? 'bg-purple-600/30 text-purple-300 border border-purple-500/40 shadow-lg ring-2 ring-purple-500/20' 
+                    : 'bg-slate-900/50 text-slate-400 hover:bg-slate-800 border border-slate-800/50'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <LayoutGrid size={20} /> Mapa de Mesas
+                </div>
+                {floorSession.mesas.filter(m => m.statusVisual !== 'GUARDADA' && (m.statusConsumo === 'OCUPADA_ABERTA' || m.statusConsumo === 'PARCIALMENTE_PAGA')).length > 0 && (
+                  <span className="px-2 py-0.5 bg-amber-500 text-slate-950 text-[10px] font-black rounded-full animate-pulse">
+                    {floorSession.mesas.filter(m => m.statusVisual !== 'GUARDADA' && (m.statusConsumo === 'OCUPADA_ABERTA' || m.statusConsumo === 'PARCIALMENTE_PAGA')).length} ocupadas
+                  </span>
+                )}
               </button>
 
               <button 
@@ -1379,6 +1447,22 @@ export default function CaixaPage() {
                     </div>
                   </div>
 
+                </div>
+              )}
+
+              {/* ABA MAPA VISUAL INTERATIVO DE MESAS */}
+              {activeTab === 'mesas' && (
+                <div className="space-y-6">
+                  <MapaMesasCanvas
+                    floorSession={floorSession}
+                    onUpdateSession={setFloorSession}
+                    onSelectTableForOrder={(mesa) => {
+                      setOrderType('mesa');
+                      setCustomerName(mesa.numeroIdentificador);
+                      setActiveTab('pdv');
+                    }}
+                    operatorName="Operador"
+                  />
                 </div>
               )}
 

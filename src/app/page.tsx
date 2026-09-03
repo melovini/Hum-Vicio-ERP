@@ -66,6 +66,9 @@ export default function Home() {
                 <Link href="/caixa" className="text-emerald-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
                   <ChevronRight size={16} /> Acessar Caixa / PDV
                 </Link>
+                <Link href="/caixa" className="text-purple-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
+                  <ChevronRight size={16} /> 🗺️ Mapa Visual de Mesas (Salão)
+                </Link>
               </div>
             </div>
           </div>
@@ -85,6 +88,9 @@ export default function Home() {
               <div className="flex flex-col gap-2 mt-4">
                 <Link href="/admin/dashboard" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
                   <ChevronRight size={16} /> DRE & Dashboard
+                </Link>
+                <Link href="/admin/mesas" className="text-purple-400 font-extrabold text-sm flex items-center gap-2 hover:gap-3 transition-all">
+                  <ChevronRight size={16} /> 🗺️ Editor de Layouts de Salão
                 </Link>
                 <Link href="/admin/insumos" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
                   <ChevronRight size={16} /> CRUD Insumos
