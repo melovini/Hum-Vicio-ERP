@@ -1,15 +1,16 @@
 'use client';
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useInventory, Product, SaleItem, Sale, ProductionStatus } from '@/lib/store';
 import { 
   MonitorDot, ArrowLeft, Lock, Unlock, DollarSign, History, 
   Send, XCircle, ShoppingCart as CartIcon, Plus, Minus, Trash2, 
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
-  Clock, Play, Pause, AlertOctagon
+  Clock, Play, Pause, AlertOctagon, Bell
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
+import { playOrderReadyChime } from '@/lib/audio';
 
 export default function CaixaPage() {
   const { 
@@ -27,6 +28,40 @@ export default function CaixaPage() {
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [selectedSaleToPrint, setSelectedSaleToPrint] = useState<Sale | null>(null);
+
+  // Alerta sonoro e visual de Pedido Pronto para o Balcão
+  const [caixaReadyAlert, setCaixaReadyAlert] = useState<Sale | null>(null);
+  const prevCompletedIdsRef = useRef<Set<string>>(new Set());
+  const isInitialCaixaMount = useRef(true);
+
+  useEffect(() => {
+    const currentCompletedIds = new Set(
+      sales
+        .filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido')
+        .map(s => s.id)
+    );
+
+    if (isInitialCaixaMount.current) {
+      isInitialCaixaMount.current = false;
+      prevCompletedIdsRef.current = currentCompletedIds;
+      return;
+    }
+
+    let newlyDoneSale: Sale | undefined;
+    currentCompletedIds.forEach(id => {
+      if (!prevCompletedIdsRef.current.has(id)) {
+        newlyDoneSale = sales.find(s => s.id === id);
+      }
+    });
+
+    if (newlyDoneSale) {
+      playOrderReadyChime();
+      setCaixaReadyAlert(newlyDoneSale);
+      setTimeout(() => setCaixaReadyAlert(null), 14000);
+    }
+
+    prevCompletedIdsRef.current = currentCompletedIds;
+  }, [sales]);
 
   // Form Abertura
   const [initialAmountInput, setInitialAmountInput] = useState('100.00');
@@ -536,11 +571,18 @@ export default function CaixaPage() {
                 <div className="flex items-center gap-3">
                   <Flame size={20} /> Produção / KDS
                 </div>
-                {sales.filter(s => s.status === 'completed' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length > 0 && (
-                  <span className="px-2 py-0.5 bg-amber-500 text-slate-950 text-[10px] font-black rounded-full">
-                    {sales.filter(s => s.status === 'completed' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length}
-                  </span>
-                )}
+                <div className="flex items-center gap-1.5">
+                  {sales.filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido').length > 0 && (
+                    <span className="px-2 py-0.5 bg-emerald-500 text-slate-950 text-[10px] font-black rounded-full animate-pulse" title="Pedidos Prontos">
+                      🛎️ {sales.filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido').length} prontos
+                    </span>
+                  )}
+                  {sales.filter(s => s.status !== 'cancelled' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length > 0 && (
+                    <span className="px-2 py-0.5 bg-amber-500 text-slate-950 text-[10px] font-black rounded-full">
+                      {sales.filter(s => s.status !== 'cancelled' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length}
+                    </span>
+                  )}
+                </div>
               </button>
 
               <button 
@@ -596,6 +638,53 @@ export default function CaixaPage() {
 
             {/* Conteúdo Principal */}
             <div className="lg:col-span-10">
+
+              {/* ALERTA VISUAL DE PEDIDO PRONTO PARA O BALCÃO BUSCAR */}
+              {caixaReadyAlert && (
+                <div className="mb-6 p-4 md:p-5 rounded-3xl bg-gradient-to-r from-emerald-600 to-teal-700 text-white shadow-2xl border-2 border-emerald-300 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-bounce">
+                  <div className="flex items-center gap-3.5">
+                    <div className="p-3 bg-white text-emerald-700 rounded-2xl font-black shadow-lg shrink-0">
+                      <CheckCircle2 size={30} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black uppercase tracking-widest bg-emerald-950/70 px-2.5 py-0.5 rounded-full text-emerald-200">
+                          🛎️ PEDIDO PRONTO NA COZINHA!
+                        </span>
+                        <span className="font-mono font-black text-sm">
+                          #{caixaReadyAlert.id.slice(0, 5).toUpperCase()}
+                        </span>
+                      </div>
+                      <h4 className="text-lg md:text-xl font-black uppercase mt-1">
+                        Buscar Pedido de: {caixaReadyAlert.customerName || 'Cliente'}
+                      </h4>
+                      <p className="text-xs text-emerald-100 font-medium">
+                        Modalidade: {caixaReadyAlert.orderType?.toUpperCase() || 'BALCÃO'} • {caixaReadyAlert.items?.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedSaleToPrint(caixaReadyAlert);
+                        setCaixaReadyAlert(null);
+                      }}
+                      className="px-4 py-2.5 bg-white text-emerald-800 hover:bg-emerald-50 rounded-xl font-black text-xs uppercase flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
+                    >
+                      <Printer size={15} /> Imprimir Comanda
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCaixaReadyAlert(null)}
+                      className="p-2.5 bg-emerald-900/60 hover:bg-emerald-900 text-emerald-200 hover:text-white rounded-xl cursor-pointer"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                </div>
+              )}
               {activeTab === 'pdv' && (
                 <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-[75vh]">
                   

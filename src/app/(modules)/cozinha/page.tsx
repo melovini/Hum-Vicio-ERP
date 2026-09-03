@@ -5,7 +5,7 @@ import {
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
   Eye, Check, ListChecks, MessageSquare, Utensils,
-  Volume2, BellRing
+  Volume2, BellRing, User
 } from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
@@ -42,7 +42,7 @@ export default function CozinhaKDSPage() {
   useEffect(() => {
     const currentProductionIds = new Set(
       sales
-        .filter(s => s.status === 'completed' && s.productionStatus === 'em_producao')
+        .filter(s => s.status !== 'cancelled' && s.productionStatus === 'em_producao')
         .map(s => s.id)
     );
 
@@ -426,6 +426,21 @@ export default function CozinhaKDSPage() {
                           <span className="text-[10px] font-bold block uppercase tracking-tighter">
                             {isDelayed ? `ATRASADO (+${elapsedMinutes - target}m)` : `Meta: ${target}m`}
                           </span>
+                        </div>
+                      </div>
+
+                      {/* NOME DO CLIENTE EM DESTAQUE MÁXIMO PARA IDENTIFICAÇÃO NA EMBALAGEM */}
+                      <div className="mb-3.5 p-3 rounded-2xl bg-amber-500/15 border-2 border-amber-500/60 shadow-inner flex items-center gap-3">
+                        <div className="p-2 bg-amber-500 text-slate-950 rounded-xl font-black shrink-0 shadow-md">
+                          <User size={20} />
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <span className="text-[10px] uppercase font-black tracking-widest text-amber-400 block">
+                            Escrever na Embalagem:
+                          </span>
+                          <p className="text-lg md:text-xl font-black text-white uppercase tracking-wide truncate">
+                            {order.customerName || 'CLIENTE BALCÃO'}
+                          </p>
                         </div>
                       </div>
 

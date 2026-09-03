@@ -1235,6 +1235,9 @@ export function useInventory() {
       console.warn('Erro ao concluir produção no Supabase:', err);
     }
 
+    // Salvar override no storage local para nunca ressuscitar na chapa
+    saveProductionOverrides([{ id: saleId, status: 'concluido', startedAt: existing?.productionStartedAt }]);
+
     setSales(prev => {
       const updated = prev.map(s => {
         if (s.id === saleId) {
@@ -1257,6 +1260,9 @@ export function useInventory() {
   };
 
   const cancelSale = async (id: string) => {
+    // Salvar override no storage local
+    saveProductionOverrides([{ id, status: 'concluido' }]);
+
     try {
       await supabase.from('sales').update({ status: 'cancelled' }).eq('id', id);
     } catch (err) {
