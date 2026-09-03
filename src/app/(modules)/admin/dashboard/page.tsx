@@ -1,20 +1,61 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
-import { useInventory } from '@/lib/store';
+import { useInventory, Sale, CashSession } from '@/lib/store';
 import { 
   ArrowLeft, LayoutDashboard, TrendingUp, TrendingDown, 
   DollarSign, AlertTriangle, Utensils, Settings2, Check,
-  Store, Bike, ShoppingBag, PieChart, Award, Users, Info
+  Store, Bike, ShoppingBag, PieChart, Award, Users, Info,
+  Calendar, Clock, Filter, GitCompare, Trash2, ShieldAlert,
+  ChevronRight, RefreshCw, Flame, BarChart3, AlertCircle
 } from 'lucide-react';
 import Link from 'next/link';
 
+type PeriodFilter = 'hoje' | 'ontem' | 'esta_semana' | 'finais_de_semana' | 'este_mes' | 'mes_anterior' | 'personalizado';
+type DashboardTab = 'visao_geral' | 'cruzamento_horarios' | 'gerenciar_caixas';
+
 export default function DashboardPage() {
-  const { sales = [], isLoaded, getRealSalesCmv, getTotalWasteCost, wasteRecords = [] } = useInventory();
+  const { 
+    sales = [], 
+    isLoaded, 
+    getRealSalesCmv, 
+    getTotalWasteCost, 
+    wasteRecords = [],
+    allCashSessions = [],
+    deleteCashSession,
+    deleteTestSales
+  } = useInventory();
   
-  // Despesas fixas diárias customizáveis (ex: R$ 150/dia = ~R$ 4.500/mês)
+  // Abas de navegação do Dashboard
+  const [activeTab, setActiveTab] = useState<DashboardTab>('visao_geral');
+
+  // Filtro Temporal Ativo
+  const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('hoje');
+  const [customStartDate, setCustomStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return d.toISOString().split('T')[0];
+  });
+  const [customEndDate, setCustomEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+
+  // Estados para Cruzamento de Horários
+  const [compareDateA, setCompareDateA] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return d.toISOString().split('T')[0];
+  });
+  const [compareDateB, setCompareDateB] = useState(() => new Date().toISOString().split('T')[0]);
+
+  // Despesas fixas diárias
   const [dailyFixedExpense, setDailyFixedExpense] = useState<number>(150);
   const [editingExpense, setEditingExpense] = useState(false);
   const [tempExpense, setTempExpense] = useState('150');
+
+  // Modal de Exclusão de Caixa de Teste
+  const [sessionToDelete, setSessionToDelete] = useState<CashSession | null>(null);
+  const [adminPasswordInput, setAdminPasswordInput] = useState('');
+  const [adminActionError, setAdminActionError] = useState('');
+  const [adminActionSuccess, setAdminActionSuccess] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     try {
@@ -35,42 +76,110 @@ export default function DashboardPage() {
     setEditingExpense(false);
   };
 
-  // 1. Vendas concluídas com proteção estrita contra nulos
-  const validSales = useMemo(() => {
+  // Helper de comparação de data local (YYYY-MM-DD)
+  const getLocalDateString = (dateInput: string | Date): string => {
+    const d = new Date(dateInput);
+    const year = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // 1. Filtrar Vendas pelo Período Selecionado
+  const filteredSales = useMemo(() => {
     if (!Array.isArray(sales)) return [];
-    return sales.filter(s => s && s.status === 'completed');
-  }, [sales]);
-  
+    const completed = sales.filter(s => s && s.status === 'completed');
+
+    const now = new Date();
+    const todayStr = getLocalDateString(now);
+
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = getLocalDateString(yesterday);
+
+    // Segunda da semana atual
+    const dayOfWeek = now.getDay(); // 0 é domingo
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const monday = new Date(now);
+    monday.setDate(now.getDate() + diffToMonday);
+    const mondayStr = getLocalDateString(monday);
+
+    // Mês atual e anterior
+    const currentMonth = now.getMonth();
+    const currentYear = now.getFullYear();
+
+    return completed.filter(sale => {
+      const saleDate = new Date(sale.date);
+      const saleDateStr = getLocalDateString(saleDate);
+
+      switch (periodFilter) {
+        case 'hoje':
+          return saleDateStr === todayStr;
+
+        case 'ontem':
+          return saleDateStr === yesterdayStr;
+
+        case 'esta_semana':
+          return saleDateStr >= mondayStr && saleDateStr <= todayStr;
+
+        case 'finais_de_semana': {
+          // Sexta (5), Sábado (6) ou Domingo (0) dentro do mês corrente
+          const day = saleDate.getDay();
+          const isWeekend = day === 0 || day === 5 || day === 6;
+          const isThisMonth = saleDate.getMonth() === currentMonth && saleDate.getFullYear() === currentYear;
+          return isWeekend && isThisMonth;
+        }
+
+        case 'este_mes':
+          return saleDate.getMonth() === currentMonth && saleDate.getFullYear() === currentYear;
+
+        case 'mes_anterior': {
+          const prevMonth = currentMonth === 0 ? 11 : currentMonth - 1;
+          const prevYear = currentMonth === 0 ? currentYear - 1 : currentYear;
+          return saleDate.getMonth() === prevMonth && saleDate.getFullYear() === prevYear;
+        }
+
+        case 'personalizado':
+          return saleDateStr >= customStartDate && saleDateStr <= customEndDate;
+
+        default:
+          return true;
+      }
+    });
+  }, [sales, periodFilter, customStartDate, customEndDate]);
+
+  // Cálculos do DRE Baseados no Período Filtrado
   const totalRevenue = useMemo(() => {
-    return validSales.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
-  }, [validSales]);
+    return filteredSales.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+  }, [filteredSales]);
 
   const ifoodRevenue = useMemo(() => {
-    return validSales
+    return filteredSales
       .filter(s => s.channel === 'ifood')
       .reduce((acc, s) => acc + (Number(s.total) || 0), 0);
-  }, [validSales]);
+  }, [filteredSales]);
 
   const balcaoRevenue = useMemo(() => {
-    return validSales
+    return filteredSales
       .filter(s => s.channel === 'balcao')
       .reduce((acc, s) => acc + (Number(s.total) || 0), 0);
-  }, [validSales]);
+  }, [filteredSales]);
 
-  // 2. CMV Real dos lanches vendidos (fallback seguro se função não estiver pronta)
   const realCmv = useMemo(() => {
     try {
       if (typeof getRealSalesCmv === 'function') {
+        // Se a função aceitar lista ou for global:
         const val = getRealSalesCmv();
-        return Number(val) || 0;
+        // Ajuste proporcional ao período filtrado
+        const ratio = sales.length > 0 ? filteredSales.length / sales.length : 1;
+        return (Number(val) || 0) * (totalRevenue > 0 ? ratio : 0);
       }
     } catch {}
     return totalRevenue * 0.30;
-  }, [getRealSalesCmv, totalRevenue]);
+  }, [getRealSalesCmv, totalRevenue, filteredSales.length, sales.length]);
 
   const cmvPercentage = totalRevenue > 0 ? (realCmv / totalRevenue) * 100 : 0;
 
-  // 3. Custo Total de Desperdícios / Quebras
   const wasteLoss = useMemo(() => {
     try {
       if (typeof getTotalWasteCost === 'function') {
@@ -83,49 +192,40 @@ export default function DashboardPage() {
     return 0;
   }, [getTotalWasteCost, wasteRecords]);
 
-  // 4. Taxas de Operação (iFood 33% / 23%, Cartões 1% a 3%)
   const totalFees = useMemo(() => {
-    return validSales.reduce((acc, sale) => {
+    return filteredSales.reduce((acc, sale) => {
       const tot = Number(sale.total) || 0;
       let feeRate = 0;
-      if (sale.paymentMethod === 'ifood_online') {
-        feeRate = 0.33;
-      } else if (sale.paymentMethod === 'ifood_entrega' || sale.paymentMethod === 'ifood') {
-        feeRate = 0.23;
-      } else if (sale.channel === 'ifood') {
-        feeRate = 0.23;
-      } else {
-        if (sale.paymentMethod === 'credito') feeRate = 0.03;
-        else if (sale.paymentMethod === 'debito') feeRate = 0.01;
-        else if (sale.paymentMethod === 'pix' || sale.paymentMethod === 'dinheiro') feeRate = 0.00;
-      }
+      if (sale.paymentMethod === 'ifood_online') feeRate = 0.33;
+      else if (sale.paymentMethod === 'ifood_entrega' || sale.paymentMethod === 'ifood') feeRate = 0.23;
+      else if (sale.channel === 'ifood') feeRate = 0.23;
+      else if (sale.paymentMethod === 'credito') feeRate = 0.03;
+      else if (sale.paymentMethod === 'debito') feeRate = 0.01;
       return acc + (tot * feeRate);
     }, 0);
-  }, [validSales]);
+  }, [filteredSales]);
 
   const ifoodOnlineRevenue = useMemo(() => {
-    return validSales
+    return filteredSales
       .filter(s => s.paymentMethod === 'ifood_online')
       .reduce((acc, s) => acc + (Number(s.total) || 0), 0);
-  }, [validSales]);
+  }, [filteredSales]);
 
   const ifoodEntregaRevenue = useMemo(() => {
-    return validSales
+    return filteredSales
       .filter(s => s.paymentMethod === 'ifood_entrega' || (s.channel === 'ifood' && s.paymentMethod !== 'ifood_online'))
       .reduce((acc, s) => acc + (Number(s.total) || 0), 0);
-  }, [validSales]);
+  }, [filteredSales]);
 
-  // 5. Margem de Contribuição e Lucro Líquido Real
   const contributionMargin = totalRevenue - realCmv - wasteLoss - totalFees;
   const netProfit = contributionMargin - dailyFixedExpense;
 
-  // 6. Métricas por Modalidade (Mesa vs Retirada vs Delivery)
   const modalityStats = useMemo(() => {
     let mesaTotal = 0, mesaCount = 0;
     let retiradaTotal = 0, retiradaCount = 0;
     let deliveryTotal = 0, deliveryCount = 0;
 
-    validSales.forEach(s => {
+    filteredSales.forEach(s => {
       const type = s.orderType || (s.channel === 'ifood' ? 'delivery' : 'mesa');
       const tot = Number(s.total) || 0;
       if (type === 'delivery') {
@@ -160,7 +260,120 @@ export default function DashboardPage() {
         pct: totalRevenue > 0 ? (deliveryTotal / totalRevenue) * 100 : 0 
       },
     };
-  }, [validSales, totalRevenue]);
+  }, [filteredSales, totalRevenue]);
+
+  // =========================================================================
+  // 2. MOTOR DE CRUZAMENTO COMPARATIVO DE HORÁRIOS (Hourly Peak Comparison)
+  // =========================================================================
+  const hourlyComparisonData = useMemo(() => {
+    // Horários operacionais das 11:00 às 02:00 (16 faixas de 1h)
+    const hours = [11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 0, 1, 2];
+
+    const completed = (sales || []).filter(s => s && s.status === 'completed');
+
+    const salesDateA = completed.filter(s => getLocalDateString(s.date) === compareDateA);
+    const salesDateB = completed.filter(s => getLocalDateString(s.date) === compareDateB);
+
+    const totalA = salesDateA.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+    const totalB = salesDateB.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+
+    let maxRevA = 0;
+    let maxHourA = -1;
+    let maxRevB = 0;
+    let maxHourB = -1;
+
+    const rows = hours.map(hour => {
+      const salesInHourA = salesDateA.filter(s => new Date(s.date).getHours() === hour);
+      const salesInHourB = salesDateB.filter(s => new Date(s.date).getHours() === hour);
+
+      const revA = salesInHourA.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+      const countA = salesInHourA.length;
+
+      const revB = salesInHourB.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+      const countB = salesInHourB.length;
+
+      if (revA > maxRevA) { maxRevA = revA; maxHourA = hour; }
+      if (revB > maxRevB) { maxRevB = revB; maxHourB = hour; }
+
+      const diffRev = revB - revA;
+      const diffPct = revA > 0 ? ((revB - revA) / revA) * 100 : revB > 0 ? 100 : 0;
+
+      const formattedHour = `${String(hour).padStart(2, '0')}:00`;
+
+      return {
+        hour,
+        label: formattedHour,
+        revA,
+        countA,
+        revB,
+        countB,
+        diffRev,
+        diffPct
+      };
+    });
+
+    const diffTotal = totalB - totalA;
+    const diffTotalPct = totalA > 0 ? ((totalB - totalA) / totalA) * 100 : totalB > 0 ? 100 : 0;
+
+    return {
+      rows,
+      totalA,
+      totalB,
+      diffTotal,
+      diffTotalPct,
+      countA: salesDateA.length,
+      countB: salesDateB.length,
+      maxHourA,
+      maxRevA,
+      maxHourB,
+      maxRevB
+    };
+  }, [sales, compareDateA, compareDateB]);
+
+  // =========================================================================
+  // 3. AÇÕES DO ADMINISTRADOR MASTER: EXCLUSÃO DE CAIXA DE TESTE
+  // =========================================================================
+  const handleConfirmDeleteSession = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!sessionToDelete) return;
+    setIsDeleting(true);
+    setAdminActionError('');
+
+    try {
+      const res = await deleteCashSession(sessionToDelete.id, adminPasswordInput);
+      if (!res.success) {
+        setAdminActionError(res.error || 'Falha ao excluir caixa.');
+      } else {
+        setAdminActionSuccess(`Caixa #${sessionToDelete.id.slice(0, 6)} e ${res.count || 0} vendas de teste expurgadas com sucesso!`);
+        setTimeout(() => setAdminActionSuccess(''), 4000);
+        setSessionToDelete(null);
+        setAdminPasswordInput('');
+      }
+    } catch (err: any) {
+      setAdminActionError(err.message || 'Erro inesperado ao excluir caixa.');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handlePurgeTodayTestSales = async () => {
+    const todayStr = getLocalDateString(new Date());
+    const todaySales = sales.filter(s => getLocalDateString(s.date) === todayStr).map(s => s.id);
+    if (todaySales.length === 0) {
+      alert('Nenhuma venda registrada hoje para expurgar.');
+      return;
+    }
+
+    const pass = prompt('CONFIRMAÇÃO MASTER: Digite a senha do Administrador Master para expurgar TODAS as vendas registradas hoje:');
+    if (!pass) return;
+
+    const res = await deleteTestSales(todaySales, pass);
+    if (!res.success) {
+      alert(res.error || 'Senha incorreta.');
+    } else {
+      alert(`${todaySales.length} vendas de hoje expurgadas com sucesso do faturamento!`);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-surface-ground text-slate-100 p-4 md:p-6 space-y-6">
@@ -180,9 +393,9 @@ export default function DashboardPage() {
               <div className="inline-flex items-center gap-1.5 text-brand-accent font-medium text-xs tracking-wider mb-0.5">
                 <LayoutDashboard size={14} /> Módulo Gestão Executiva
               </div>
-              <h1 className="text-2xl font-bold text-white tracking-tight">DRE de Precisão & Indicadores</h1>
+              <h1 className="text-2xl font-bold text-white tracking-tight">DRE & Inteligência Financeira</h1>
               <p className="text-xs text-slate-400">
-                Demonstrativo de resultado do exercício, lucratividade líquida real e análise por canais.
+                Faturamento por períodos, cruzamento por horários de pico e gerenciamento de turnos.
               </p>
             </div>
           </div>
@@ -203,282 +416,766 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Banner informativo quando o caixa ainda não possui vendas concluídas */}
-        {validSales.length === 0 && (
-          <div className="p-3.5 bg-surface-card rounded-xl border border-surface-border flex items-center gap-3 text-xs text-slate-300">
-            <Info size={16} className="text-brand-accent shrink-0" />
-            <span>
-              <strong>Modo de Visualização Inicial:</strong> Nenhum pedido finalizado registrado no período. A estrutura completa do DRE e os gráficos analíticos estão prontos para receber lançamentos do Caixa e do iFood.
-            </span>
+        {/* Notificações de Sucesso / Erro do Administrador */}
+        {adminActionSuccess && (
+          <div className="p-3.5 rounded-xl bg-status-free/10 border border-status-free/30 text-status-free text-xs font-semibold flex items-center gap-2 animate-in fade-in">
+            <Check size={16} /> {adminActionSuccess}
           </div>
         )}
 
-        {/* KPIs Estratégicos */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          
-          {/* Faturamento Bruto */}
-          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
-            <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Faturamento Bruto</span>
-            <p className="text-2xl font-mono tabular-nums font-bold text-slate-100">
-              R$ {totalRevenue.toFixed(2)}
-            </p>
-            <p className="text-[11px] text-status-free flex items-center gap-1 font-mono tabular-nums">
-              <TrendingUp size={13} /> {validSales.length} pedidos faturados
-            </p>
-          </div>
-          
-          {/* CMV Real */}
-          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
-            <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">CMV Real (Insumos)</span>
-            <p className="text-2xl font-mono tabular-nums font-bold text-status-occupied">
-              R$ {realCmv.toFixed(2)}
-            </p>
-            <p className="text-[11px] text-slate-400 font-mono tabular-nums">
-              <strong className="text-slate-200">{cmvPercentage.toFixed(1)}%</strong> da receita bruta
-            </p>
+        {/* NAVEGAÇÃO ENTRE ABAS DO DASHBOARD */}
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-surface-card p-2 rounded-xl border border-surface-border">
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('visao_geral')}
+              className={`py-2 px-3.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                activeTab === 'visao_geral'
+                  ? 'bg-surface-elevated text-white border border-surface-borderHover shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <BarChart3 size={14} className="text-brand-accent" />
+              <span>DRE & Visão Geral</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('cruzamento_horarios')}
+              className={`py-2 px-3.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                activeTab === 'cruzamento_horarios'
+                  ? 'bg-surface-elevated text-white border border-surface-borderHover shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <GitCompare size={14} className="text-brand-primary" />
+              <span>Cruzamento por Horários</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('gerenciar_caixas')}
+              className={`py-2 px-3.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                activeTab === 'gerenciar_caixas'
+                  ? 'bg-surface-elevated text-white border border-surface-borderHover shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <ShieldAlert size={14} className="text-status-danger" />
+              <span>Caixas & Reset de Testes</span>
+            </button>
           </div>
 
-          {/* Desperdícios & Quebras */}
-          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
-            <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Perdas & Descarte</span>
-            <p className="text-2xl font-mono tabular-nums font-bold text-status-danger">
-              - R$ {wasteLoss.toFixed(2)}
-            </p>
-            <p className="text-[11px] text-slate-400 font-mono tabular-nums">
-              {(wasteRecords || []).length} descartes lançados
-            </p>
-          </div>
-
-          {/* Resultado Líquido Real */}
-          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
-            <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Resultado Líquido Real</span>
-            <p className={`text-2xl font-mono tabular-nums font-bold ${netProfit >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
-              R$ {netProfit.toFixed(2)}
-            </p>
-            <p className="text-[11px] text-slate-400 font-mono tabular-nums">
-              Margem Líquida: <strong className="text-slate-200">{totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : '0.0'}%</strong>
-            </p>
-          </div>
+          {/* Atalho Rápido para o Dono / Master Admin limpar testes do dia */}
+          {activeTab === 'gerenciar_caixas' && (
+            <button
+              type="button"
+              onClick={handlePurgeTodayTestSales}
+              className="py-1.5 px-3 bg-status-danger/10 hover:bg-status-danger/20 text-status-danger border border-status-danger/30 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+              title="Exclusivo Master Admin: expurgar todas as vendas de teste feitas hoje"
+            >
+              <Trash2 size={13} /> Limpar Vendas de Teste de Hoje
+            </button>
+          )}
         </div>
 
-        {/* Canais de Venda */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          
-          {/* Balcão */}
-          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-2.5">
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                🏪 Vendas Balcão / Loja Física
-              </span>
-              <span className="font-mono tabular-nums text-sm font-bold text-brand-accent">
-                R$ {balcaoRevenue.toFixed(2)}
-              </span>
-            </div>
-            <div className="w-full bg-surface-ground h-2 rounded-full overflow-hidden border border-surface-border">
-              <div 
-                className="bg-brand-accent h-full rounded-full transition-all duration-300" 
-                style={{ width: `${totalRevenue > 0 ? (balcaoRevenue / totalRevenue) * 100 : 0}%` }} 
-              />
-            </div>
-            <p className="text-[10px] text-slate-500 text-right font-mono tabular-nums">
-              {totalRevenue > 0 ? ((balcaoRevenue / totalRevenue) * 100).toFixed(1) : '0.0'}% do total faturado
-            </p>
-          </div>
-
-          {/* iFood */}
-          <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-2.5">
-            <div className="flex justify-between items-center">
-              <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-                🛵 Vendas iFood Total
-              </span>
-              <span className="font-mono tabular-nums text-sm font-bold text-status-danger">
-                R$ {ifoodRevenue.toFixed(2)}
-              </span>
-            </div>
-            <div className="w-full bg-surface-ground h-2 rounded-full overflow-hidden border border-surface-border">
-              <div 
-                className="bg-status-danger h-full rounded-full transition-all duration-300" 
-                style={{ width: `${totalRevenue > 0 ? (ifoodRevenue / totalRevenue) * 100 : 0}%` }} 
-              />
-            </div>
-            <div className="flex justify-between text-[11px] font-mono tabular-nums text-slate-400 pt-1 border-t border-surface-border">
-              <span>Online (33%): <strong className="text-status-danger">R$ {ifoodOnlineRevenue.toFixed(2)}</strong></span>
-              <span>Entrega (23%): <strong className="text-status-occupied">R$ {ifoodEntregaRevenue.toFixed(2)}</strong></span>
-            </div>
-          </div>
-        </div>
-
-        {/* Distribuição por Modalidade de Consumo */}
-        <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-4">
-          <div className="flex items-center gap-2">
-            <PieChart size={18} className="text-brand-accent" />
-            <div>
-              <h2 className="text-sm font-bold text-white tracking-tight">Vendas por Modalidade (CAC & Retenção)</h2>
-              <p className="text-[11px] text-slate-400">Análise comparativa de consumo: Salão/Mesa, Retirada no Balcão e Entregas.</p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        {/* ================================================================= */}
+        {/* ABA 1: DRE & VISÃO GERAL COM FILTROS TEMPORAIS                   */}
+        {/* ================================================================= */}
+        {activeTab === 'visao_geral' && (
+          <div className="space-y-6">
             
-            {/* MESA */}
-            <div className="p-3.5 rounded-lg bg-surface-ground border border-surface-border flex flex-col justify-between space-y-3">
-              <div>
-                <div className="flex justify-between items-start mb-1">
-                  <span className="text-[11px] font-semibold text-status-occupied uppercase tracking-wider">
-                    🍽️ Consumo Mesa / Salão
-                  </span>
-                  <span className="text-xs font-mono tabular-nums font-bold text-slate-400">
-                    {modalityStats.mesa.pct.toFixed(1)}%
-                  </span>
-                </div>
-                <p className="text-xl font-mono tabular-nums font-bold text-white">
-                  R$ {modalityStats.mesa.total.toFixed(2)}
-                </p>
-                <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
-                  {modalityStats.mesa.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.mesa.avg.toFixed(2)}</strong>
-                </p>
-              </div>
-              <div className="pt-2 border-t border-surface-border">
-                <span className="text-[10px] text-status-free font-medium">
-                  ✓ Sem taxa de comissão e CAC orgânico
+            {/* BARRA DE FILTROS TEMPORAIS */}
+            <div className="bg-surface-card p-3 rounded-xl border border-surface-border flex flex-col md:flex-row items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-1 w-full md:w-auto">
+                <span className="text-[10px] font-medium uppercase tracking-wider text-slate-500 mr-2 flex items-center gap-1">
+                  <Filter size={12} /> Período:
                 </span>
-              </div>
-            </div>
-
-            {/* RETIRADA */}
-            <div className="p-3.5 rounded-lg bg-surface-ground border border-surface-border flex flex-col justify-between space-y-3">
-              <div>
-                <div className="flex justify-between items-start mb-1">
-                  <span className="text-[11px] font-semibold text-brand-accent uppercase tracking-wider">
-                    🥡 Retirada no Balcão
-                  </span>
-                  <span className="text-xs font-mono tabular-nums font-bold text-slate-400">
-                    {modalityStats.retirada.pct.toFixed(1)}%
-                  </span>
-                </div>
-                <p className="text-xl font-mono tabular-nums font-bold text-white">
-                  R$ {modalityStats.retirada.total.toFixed(2)}
-                </p>
-                <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
-                  {modalityStats.retirada.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.retirada.avg.toFixed(2)}</strong>
-                </p>
-              </div>
-              <div className="pt-2 border-t border-surface-border">
-                <span className="text-[10px] text-brand-accent font-medium">
-                  ✓ Maior margem líquida (Sem taxa e sem garçom)
-                </span>
-              </div>
-            </div>
-
-            {/* DELIVERY */}
-            <div className="p-3.5 rounded-lg bg-surface-ground border border-surface-border flex flex-col justify-between space-y-3">
-              <div>
-                <div className="flex justify-between items-start mb-1">
-                  <span className="text-[11px] font-semibold text-status-free uppercase tracking-wider">
-                    🛵 Entrega / Delivery
-                  </span>
-                  <span className="text-xs font-mono tabular-nums font-bold text-slate-400">
-                    {modalityStats.delivery.pct.toFixed(1)}%
-                  </span>
-                </div>
-                <p className="text-xl font-mono tabular-nums font-bold text-white">
-                  R$ {modalityStats.delivery.total.toFixed(2)}
-                </p>
-                <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
-                  {modalityStats.delivery.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.delivery.avg.toFixed(2)}</strong>
-                </p>
-              </div>
-              <div className="pt-2 border-t border-surface-border">
-                <span className="text-[10px] text-status-occupied font-medium">
-                  ⚠️ Sujeito a taxa de motoboy ou comissão iFood
-                </span>
-              </div>
-            </div>
-
-          </div>
-        </div>
-
-        {/* DRE Detalhado Real */}
-        <div className="bg-surface-card rounded-xl p-5 border border-surface-border space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div>
-              <h2 className="text-base font-bold text-white tracking-tight">Demonstrativo de Resultado do Exercício (DRE Real)</h2>
-              <p className="text-xs text-slate-400">Visão financeira auditável com deduções linha por linha.</p>
-            </div>
-            
-            {/* Controle de Despesas Fixas */}
-            <div className="flex items-center gap-2 bg-surface-ground border border-surface-border px-3 py-1.5 rounded-lg text-xs">
-              <Settings2 size={14} className="text-slate-400" />
-              <span className="text-slate-400 text-[11px]">Despesa Fixa Diária:</span>
-              {editingExpense ? (
-                <div className="flex items-center gap-1.5">
-                  <input 
-                    type="number"
-                    value={tempExpense}
-                    onChange={e => setTempExpense(e.target.value)}
-                    className="w-16 input-util py-0.5 px-1.5 font-mono tabular-nums text-xs"
-                    autoFocus
-                  />
-                  <button onClick={saveExpense} className="p-1 bg-brand-primary hover:bg-brand-primaryHover text-white rounded cursor-pointer">
-                    <Check size={12} />
+                {[
+                  { id: 'hoje', label: '📅 Hoje' },
+                  { id: 'ontem', label: '⏮️ Ontem' },
+                  { id: 'esta_semana', label: '🗓️ Esta Semana' },
+                  { id: 'finais_de_semana', label: '🍻 Finais de Semana' },
+                  { id: 'este_mes', label: '📆 Este Mês' },
+                  { id: 'mes_anterior', label: '⏪ Mês Anterior' },
+                  { id: 'personalizado', label: '🎯 Intervalo' }
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setPeriodFilter(tab.id as any)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      periodFilter === tab.id
+                        ? 'bg-surface-elevated text-slate-100 border border-surface-borderHover shadow-xs'
+                        : 'text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {tab.label}
                   </button>
+                ))}
+              </div>
+
+              {/* Seletor de Datas Personalizadas */}
+              {periodFilter === 'personalizado' && (
+                <div className="flex items-center gap-2 text-xs font-mono tabular-nums bg-surface-ground p-1.5 rounded-lg border border-surface-border">
+                  <span className="text-slate-500 text-[11px]">De:</span>
+                  <input
+                    type="date"
+                    value={customStartDate}
+                    onChange={e => setCustomStartDate(e.target.value)}
+                    className="input-util py-0.5 px-1.5 text-xs text-slate-200"
+                  />
+                  <span className="text-slate-500 text-[11px]">Até:</span>
+                  <input
+                    type="date"
+                    value={customEndDate}
+                    onChange={e => setCustomEndDate(e.target.value)}
+                    className="input-util py-0.5 px-1.5 text-xs text-slate-200"
+                  />
                 </div>
-              ) : (
-                <button 
-                  onClick={() => setEditingExpense(true)} 
-                  className="font-mono tabular-nums font-bold text-slate-200 hover:text-brand-accent underline decoration-dotted cursor-pointer"
-                  title="Clique para editar a estimativa diária de custos fixos"
-                >
-                  R$ {dailyFixedExpense.toFixed(2)}/dia
-                </button>
               )}
             </div>
-          </div>
-          
-          <div className="space-y-1.5 text-xs">
-            <div className="flex justify-between p-3 bg-surface-ground rounded-lg border border-surface-border">
-              <span className="font-bold text-slate-200">(=) Receita Bruta Faturada</span>
-              <span className="font-mono tabular-nums text-status-free font-bold text-sm">R$ {totalRevenue.toFixed(2)}</span>
-            </div>
-            
-            <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
-              <span className="text-slate-400 pl-3">(-) CMV Real (Insumos dos Lanches Vendidos)</span>
-              <span className="font-mono tabular-nums text-status-occupied font-semibold">- R$ {realCmv.toFixed(2)}</span>
-            </div>
 
-            <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
-              <span className="text-slate-400 pl-3">(-) Desperdícios & Quebras (Cozinha)</span>
-              <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {wasteLoss.toFixed(2)}</span>
-            </div>
-
-            <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
-              <span className="text-slate-400 pl-3">(-) Taxas de Operação (iFood 33% / 23% / Cartões 1%-3%)</span>
-              <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {totalFees.toFixed(2)}</span>
-            </div>
-            
-            <div className="flex justify-between p-3 bg-surface-elevated rounded-lg border border-brand-accent/20">
-              <span className="font-bold text-brand-accent">(=) Margem de Contribuição Real</span>
-              <span className="font-mono tabular-nums text-brand-accent font-bold text-sm">R$ {contributionMargin.toFixed(2)}</span>
-            </div>
-
-            <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
-              <span className="text-slate-400 pl-3">(-) Despesas Fixas (Rateio Diário: Equipe, Aluguel, Luz)</span>
-              <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {dailyFixedExpense.toFixed(2)}</span>
-            </div>
-
-            <div className={`flex justify-between items-center p-4 rounded-xl mt-3 border ${
-              netProfit >= 0 ? 'bg-status-free/10 border-status-free/30' : 'bg-status-danger/10 border-status-danger/30'
-            }`}>
-              <div>
-                <span className="font-bold text-sm text-white">(=) Lucro / Prejuízo Líquido</span>
-                <p className="text-[10px] text-slate-400 mt-0.5">Saldo real restante após a quitação de todos os custos variáveis e fixos</p>
+            {/* Banner informativo se o período não possuir vendas */}
+            {filteredSales.length === 0 && (
+              <div className="p-3.5 bg-surface-card rounded-xl border border-surface-border flex items-center gap-3 text-xs text-slate-300">
+                <Info size={16} className="text-brand-accent shrink-0" />
+                <span>
+                  <strong>Nenhuma venda no período selecionado:</strong> Os indicadores abaixo refletem o estado zerado ({periodFilter === 'finais_de_semana' ? 'apenas vendas de Sexta a Domingo' : 'período filtrado'}).
+                </span>
               </div>
-              <span className={`font-mono tabular-nums text-2xl font-bold ${netProfit >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
-                R$ {netProfit.toFixed(2)}
-              </span>
+            )}
+
+            {/* KPIs Estratégicos */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
+                <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Faturamento Bruto</span>
+                <p className="text-2xl font-mono tabular-nums font-bold text-slate-100">
+                  R$ {totalRevenue.toFixed(2)}
+                </p>
+                <p className="text-[11px] text-status-free flex items-center gap-1 font-mono tabular-nums">
+                  <TrendingUp size={13} /> {filteredSales.length} pedidos faturados
+                </p>
+              </div>
+              
+              <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
+                <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">CMV Real (Insumos)</span>
+                <p className="text-2xl font-mono tabular-nums font-bold text-status-occupied">
+                  R$ {realCmv.toFixed(2)}
+                </p>
+                <p className="text-[11px] text-slate-400 font-mono tabular-nums">
+                  <strong className="text-slate-200">{cmvPercentage.toFixed(1)}%</strong> da receita bruta
+                </p>
+              </div>
+
+              <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
+                <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Perdas & Descarte</span>
+                <p className="text-2xl font-mono tabular-nums font-bold text-status-danger">
+                  - R$ {wasteLoss.toFixed(2)}
+                </p>
+                <p className="text-[11px] text-slate-400 font-mono tabular-nums">
+                  {(wasteRecords || []).length} descartes lançados
+                </p>
+              </div>
+
+              <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
+                <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Resultado Líquido Real</span>
+                <p className={`text-2xl font-mono tabular-nums font-bold ${netProfit >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
+                  R$ {netProfit.toFixed(2)}
+                </p>
+                <p className="text-[11px] text-slate-400 font-mono tabular-nums">
+                  Margem Líquida: <strong className="text-slate-200">{totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : '0.0'}%</strong>
+                </p>
+              </div>
+            </div>
+
+            {/* Canais de Venda */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-2.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                    🏪 Vendas Balcão / Salão
+                  </span>
+                  <span className="font-mono tabular-nums text-sm font-bold text-brand-accent">
+                    R$ {balcaoRevenue.toFixed(2)}
+                  </span>
+                </div>
+                <div className="w-full bg-surface-ground h-2 rounded-full overflow-hidden border border-surface-border">
+                  <div 
+                    className="bg-brand-accent h-full rounded-full transition-all duration-300" 
+                    style={{ width: `${totalRevenue > 0 ? (balcaoRevenue / totalRevenue) * 100 : 0}%` }} 
+                  />
+                </div>
+                <p className="text-[10px] text-slate-500 text-right font-mono tabular-nums">
+                  {totalRevenue > 0 ? ((balcaoRevenue / totalRevenue) * 100).toFixed(1) : '0.0'}% do total
+                </p>
+              </div>
+
+              <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-2.5">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                    🛵 Vendas iFood Total
+                  </span>
+                  <span className="font-mono tabular-nums text-sm font-bold text-status-danger">
+                    R$ {ifoodRevenue.toFixed(2)}
+                  </span>
+                </div>
+                <div className="w-full bg-surface-ground h-2 rounded-full overflow-hidden border border-surface-border">
+                  <div 
+                    className="bg-status-danger h-full rounded-full transition-all duration-300" 
+                    style={{ width: `${totalRevenue > 0 ? (ifoodRevenue / totalRevenue) * 100 : 0}%` }} 
+                  />
+                </div>
+                <div className="flex justify-between text-[11px] font-mono tabular-nums text-slate-400 pt-1 border-t border-surface-border">
+                  <span>Online (33%): <strong className="text-status-danger">R$ {ifoodOnlineRevenue.toFixed(2)}</strong></span>
+                  <span>Entrega (23%): <strong className="text-status-occupied">R$ {ifoodEntregaRevenue.toFixed(2)}</strong></span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modalidades de Consumo */}
+            <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-4">
+              <div className="flex items-center gap-2">
+                <PieChart size={18} className="text-brand-accent" />
+                <div>
+                  <h2 className="text-sm font-bold text-white tracking-tight">Vendas por Modalidade (CAC & Retenção)</h2>
+                  <p className="text-[11px] text-slate-400">Análise de consumo: Salão/Mesa, Retirada no Balcão e Entregas.</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="p-3.5 rounded-lg bg-surface-ground border border-surface-border flex flex-col justify-between space-y-3">
+                  <div>
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="text-[11px] font-semibold text-status-occupied uppercase tracking-wider">
+                        🍽️ Consumo Mesa / Salão
+                      </span>
+                      <span className="text-xs font-mono tabular-nums font-bold text-slate-400">
+                        {modalityStats.mesa.pct.toFixed(1)}%
+                      </span>
+                    </div>
+                    <p className="text-xl font-mono tabular-nums font-bold text-white">
+                      R$ {modalityStats.mesa.total.toFixed(2)}
+                    </p>
+                    <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
+                      {modalityStats.mesa.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.mesa.avg.toFixed(2)}</strong>
+                    </p>
+                  </div>
+                  <div className="pt-2 border-t border-surface-border">
+                    <span className="text-[10px] text-status-free font-medium">✓ Sem taxa de entrega</span>
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-lg bg-surface-ground border border-surface-border flex flex-col justify-between space-y-3">
+                  <div>
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="text-[11px] font-semibold text-brand-accent uppercase tracking-wider">
+                        🥡 Retirada no Balcão
+                      </span>
+                      <span className="text-xs font-mono tabular-nums font-bold text-slate-400">
+                        {modalityStats.retirada.pct.toFixed(1)}%
+                      </span>
+                    </div>
+                    <p className="text-xl font-mono tabular-nums font-bold text-white">
+                      R$ {modalityStats.retirada.total.toFixed(2)}
+                    </p>
+                    <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
+                      {modalityStats.retirada.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.retirada.avg.toFixed(2)}</strong>
+                    </p>
+                  </div>
+                  <div className="pt-2 border-t border-surface-border">
+                    <span className="text-[10px] text-brand-accent font-medium">✓ Maior margem líquida</span>
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-lg bg-surface-ground border border-surface-border flex flex-col justify-between space-y-3">
+                  <div>
+                    <div className="flex justify-between items-start mb-1">
+                      <span className="text-[11px] font-semibold text-status-free uppercase tracking-wider">
+                        🛵 Entrega / Delivery
+                      </span>
+                      <span className="text-xs font-mono tabular-nums font-bold text-slate-400">
+                        {modalityStats.delivery.pct.toFixed(1)}%
+                      </span>
+                    </div>
+                    <p className="text-xl font-mono tabular-nums font-bold text-white">
+                      R$ {modalityStats.delivery.total.toFixed(2)}
+                    </p>
+                    <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
+                      {modalityStats.delivery.count} pedidos • Ticket Médio: <strong className="text-slate-200">R$ {modalityStats.delivery.avg.toFixed(2)}</strong>
+                    </p>
+                  </div>
+                  <div className="pt-2 border-t border-surface-border">
+                    <span className="text-[10px] text-status-occupied font-medium">⚠️ Sujeito a taxa motoboy/iFood</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* DRE Detalhado Real */}
+            <div className="bg-surface-card rounded-xl p-5 border border-surface-border space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-white tracking-tight">Demonstrativo de Resultado do Exercício (DRE Real)</h2>
+                  <p className="text-xs text-slate-400">Visão financeira auditável com deduções linha por linha para o período.</p>
+                </div>
+                
+                <div className="flex items-center gap-2 bg-surface-ground border border-surface-border px-3 py-1.5 rounded-lg text-xs">
+                  <Settings2 size={14} className="text-slate-400" />
+                  <span className="text-slate-400 text-[11px]">Despesa Fixa Diária:</span>
+                  {editingExpense ? (
+                    <div className="flex items-center gap-1.5">
+                      <input 
+                        type="number"
+                        value={tempExpense}
+                        onChange={e => setTempExpense(e.target.value)}
+                        className="w-16 input-util py-0.5 px-1.5 font-mono tabular-nums text-xs"
+                        autoFocus
+                      />
+                      <button onClick={saveExpense} className="p-1 bg-brand-primary hover:bg-brand-primaryHover text-white rounded cursor-pointer">
+                        <Check size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={() => setEditingExpense(true)} 
+                      className="font-mono tabular-nums font-bold text-slate-200 hover:text-brand-accent underline decoration-dotted cursor-pointer"
+                      title="Clique para editar a estimativa diária de custos fixos"
+                    >
+                      R$ {dailyFixedExpense.toFixed(2)}/dia
+                    </button>
+                  )}
+                </div>
+              </div>
+              
+              <div className="space-y-1.5 text-xs">
+                <div className="flex justify-between p-3 bg-surface-ground rounded-lg border border-surface-border">
+                  <span className="font-bold text-slate-200">(=) Receita Bruta Faturada</span>
+                  <span className="font-mono tabular-nums text-status-free font-bold text-sm">R$ {totalRevenue.toFixed(2)}</span>
+                </div>
+                
+                <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
+                  <span className="text-slate-400 pl-3">(-) CMV Real (Insumos dos Lanches Vendidos)</span>
+                  <span className="font-mono tabular-nums text-status-occupied font-semibold">- R$ {realCmv.toFixed(2)}</span>
+                </div>
+
+                <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
+                  <span className="text-slate-400 pl-3">(-) Desperdícios & Quebras (Cozinha)</span>
+                  <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {wasteLoss.toFixed(2)}</span>
+                </div>
+
+                <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
+                  <span className="text-slate-400 pl-3">(-) Taxas de Operação (iFood 33% / 23% / Cartões 1%-3%)</span>
+                  <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {totalFees.toFixed(2)}</span>
+                </div>
+                
+                <div className="flex justify-between p-3 bg-surface-elevated rounded-lg border border-brand-accent/20">
+                  <span className="font-bold text-brand-accent">(=) Margem de Contribuição Real</span>
+                  <span className="font-mono tabular-nums text-brand-accent font-bold text-sm">R$ {contributionMargin.toFixed(2)}</span>
+                </div>
+
+                <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
+                  <span className="text-slate-400 pl-3">(-) Despesas Fixas (Rateio Diário)</span>
+                  <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {dailyFixedExpense.toFixed(2)}</span>
+                </div>
+
+                <div className={`flex justify-between items-center p-4 rounded-xl mt-3 border ${
+                  netProfit >= 0 ? 'bg-status-free/10 border-status-free/30' : 'bg-status-danger/10 border-status-danger/30'
+                }`}>
+                  <div>
+                    <span className="font-bold text-sm text-white">(=) Lucro / Prejuízo Líquido</span>
+                    <p className="text-[10px] text-slate-400 mt-0.5">Saldo real após todas as deduções operacionais e fixas</p>
+                  </div>
+                  <span className={`font-mono tabular-nums text-2xl font-bold ${netProfit >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
+                    R$ {netProfit.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* ABA 2: CRUZAMENTO COMPARATIVO POR HORÁRIOS DE PICO               */}
+        {/* ================================================================= */}
+        {activeTab === 'cruzamento_horarios' && (
+          <div className="space-y-6">
+            
+            {/* Controles de Seleção das Duas Datas */}
+            <div className="bg-surface-card p-4 rounded-xl border border-surface-border space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-base font-bold text-white flex items-center gap-2">
+                    <GitCompare className="text-brand-primary" size={18} />
+                    <span>Cruzamento Comparativo de Vendas por Horários</span>
+                  </h2>
+                  <p className="text-xs text-slate-400">
+                    Compare o faturamento e a densidade de pedidos hora a hora entre dois dias de operação.
+                  </p>
+                </div>
+
+                {/* Atalhos Rápidos */}
+                <div className="flex items-center gap-1.5 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const now = new Date();
+                      const d1 = new Date();
+                      d1.setDate(now.getDate() - 7);
+                      setCompareDateA(d1.toISOString().split('T')[0]);
+                      setCompareDateB(now.toISOString().split('T')[0]);
+                    }}
+                    className="py-1 px-2.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg cursor-pointer transition-colors"
+                  >
+                    Hoje vs 7 Dias Atrás
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-surface-border">
+                {/* Data Base A */}
+                <div className="p-3 bg-surface-ground rounded-lg border border-brand-accent/30 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-brand-accent flex items-center gap-1.5">
+                      <Calendar size={13} /> Data Base (A):
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {new Date(compareDateA + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long' })}
+                    </span>
+                  </div>
+                  <input
+                    type="date"
+                    value={compareDateA}
+                    onChange={e => setCompareDateA(e.target.value)}
+                    className="w-full input-util text-xs font-mono tabular-nums text-white"
+                  />
+                  <div className="flex justify-between items-center text-xs pt-1 font-mono tabular-nums">
+                    <span className="text-slate-400">{hourlyComparisonData.countA} pedidos</span>
+                    <strong className="text-brand-accent">R$ {hourlyComparisonData.totalA.toFixed(2)}</strong>
+                  </div>
+                </div>
+
+                {/* Data Comparada B */}
+                <div className="p-3 bg-surface-ground rounded-lg border border-brand-primary/30 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-brand-primary flex items-center gap-1.5">
+                      <Calendar size={13} /> Data Comparada (B):
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {new Date(compareDateB + 'T12:00:00').toLocaleDateString('pt-BR', { weekday: 'long' })}
+                    </span>
+                  </div>
+                  <input
+                    type="date"
+                    value={compareDateB}
+                    onChange={e => setCompareDateB(e.target.value)}
+                    className="w-full input-util text-xs font-mono tabular-nums text-white"
+                  />
+                  <div className="flex justify-between items-center text-xs pt-1 font-mono tabular-nums">
+                    <span className="text-slate-400">{hourlyComparisonData.countB} pedidos</span>
+                    <strong className="text-brand-primary">R$ {hourlyComparisonData.totalB.toFixed(2)}</strong>
+                  </div>
+                </div>
+              </div>
+
+              {/* Balanço Geral do Cruzamento */}
+              <div className="p-3.5 bg-surface-elevated rounded-xl border border-surface-border flex flex-wrap items-center justify-between gap-3 text-xs font-mono tabular-nums">
+                <div className="flex items-center gap-3">
+                  <span className="text-slate-400">Variação Total (B vs A):</span>
+                  <span className={`font-bold text-sm ${hourlyComparisonData.diffTotal >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
+                    {hourlyComparisonData.diffTotal >= 0 ? '+' : ''} R$ {hourlyComparisonData.diffTotal.toFixed(2)} ({hourlyComparisonData.diffTotalPct >= 0 ? '+' : ''}{hourlyComparisonData.diffTotalPct.toFixed(1)}%)
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-4 text-[11px]">
+                  {hourlyComparisonData.maxHourA >= 0 && (
+                    <span className="text-slate-300">
+                      Pico Data A: <strong className="text-brand-accent">{String(hourlyComparisonData.maxHourA).padStart(2, '0')}:00</strong> (R$ {hourlyComparisonData.maxRevA.toFixed(2)})
+                    </span>
+                  )}
+                  {hourlyComparisonData.maxHourB >= 0 && (
+                    <span className="text-slate-300">
+                      Pico Data B: <strong className="text-brand-primary">{String(hourlyComparisonData.maxHourB).padStart(2, '0')}:00</strong> (R$ {hourlyComparisonData.maxRevB.toFixed(2)})
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* GRÁFICO VISUAL COMPARATIVO DE BARRAS POR HORÁRIO */}
+            <div className="bg-surface-card p-5 rounded-xl border border-surface-border space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider flex items-center gap-1.5">
+                  <BarChart3 size={15} className="text-brand-accent" />
+                  <span>Distribuição Comparativa de Faturamento por Faixa Horária</span>
+                </h3>
+                <div className="flex items-center gap-4 text-xs font-medium">
+                  <span className="flex items-center gap-1.5 text-brand-accent">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-brand-accent" /> Data A
+                  </span>
+                  <span className="flex items-center gap-1.5 text-brand-primary">
+                    <span className="w-2.5 h-2.5 rounded-sm bg-brand-primary" /> Data B
+                  </span>
+                </div>
+              </div>
+
+              {/* Barras Horárias */}
+              <div className="space-y-2 pt-2">
+                {hourlyComparisonData.rows.map(row => {
+                  const maxPeak = Math.max(hourlyComparisonData.maxRevA, hourlyComparisonData.maxRevB, 1);
+                  const pctA = (row.revA / maxPeak) * 100;
+                  const pctB = (row.revB / maxPeak) * 100;
+                  const isPeakA = row.hour === hourlyComparisonData.maxHourA && row.revA > 0;
+                  const isPeakB = row.hour === hourlyComparisonData.maxHourB && row.revB > 0;
+
+                  return (
+                    <div key={row.hour} className="p-2.5 bg-surface-ground rounded-lg border border-surface-border/80 hover:border-surface-border transition-colors">
+                      <div className="flex justify-between items-center text-xs mb-1.5 font-mono tabular-nums">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-200 w-14">{row.label}</span>
+                          {(isPeakA || isPeakB) && (
+                            <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-0.5">
+                              <Flame size={10} /> Pico
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-4 text-[11px]">
+                          <span className="text-brand-accent">
+                            A: R$ {row.revA.toFixed(2)} <span className="text-slate-500">({row.countA} ped)</span>
+                          </span>
+                          <span className="text-brand-primary">
+                            B: R$ {row.revB.toFixed(2)} <span className="text-slate-500">({row.countB} ped)</span>
+                          </span>
+                          <span className={`w-20 text-right font-bold ${row.diffRev >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
+                            {row.diffRev >= 0 ? '+' : ''}{row.diffRev.toFixed(2)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Barras Lado a Lado / Empilhadas */}
+                      <div className="space-y-1">
+                        <div className="w-full bg-surface-card h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className="bg-brand-accent h-full rounded-full transition-all duration-300"
+                            style={{ width: `${pctA}%` }} 
+                          />
+                        </div>
+                        <div className="w-full bg-surface-card h-1.5 rounded-full overflow-hidden">
+                          <div 
+                            className="bg-brand-primary h-full rounded-full transition-all duration-300"
+                            style={{ width: `${pctB}%` }} 
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+          </div>
+        )}
+
+        {/* ================================================================= */}
+        {/* ABA 3: GERENCIAR CAIXAS DIÁRIOS & RESET DE TESTES (MASTER ADMIN)  */}
+        {/* ================================================================= */}
+        {activeTab === 'gerenciar_caixas' && (
+          <div className="space-y-6">
+            
+            <div className="bg-surface-card p-4 rounded-xl border border-surface-border flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-bold text-white flex items-center gap-2">
+                  <ShieldAlert className="text-status-danger" size={18} />
+                  <span>Gerenciador de Sessões de Caixa & Reset de Testes</span>
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Exclusivo para o Administrador Master (Dono). Permite apagar sessões de teste e expurgar vendas correspondentes do faturamento.
+                </p>
+              </div>
+
+              <div className="text-right font-mono tabular-nums text-xs">
+                <span className="text-slate-500 block">Total de Sessões:</span>
+                <strong className="text-slate-200 text-sm">{allCashSessions.length} turnos registrados</strong>
+              </div>
+            </div>
+
+            {/* Tabela de Sessões de Caixa */}
+            <div className="bg-surface-card rounded-xl border border-surface-border overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-surface-border bg-surface-ground/60 font-medium text-slate-400 uppercase text-[10px] tracking-wider">
+                      <th className="py-3 px-4">Sessão / Status</th>
+                      <th className="py-3 px-4">Abertura</th>
+                      <th className="py-3 px-4">Fechamento</th>
+                      <th className="py-3 px-4">Operador</th>
+                      <th className="py-3 px-4 font-mono">Fundo Inicial</th>
+                      <th className="py-3 px-4 font-mono">Valor Contado</th>
+                      <th className="py-3 px-4 font-mono">Diferença</th>
+                      <th className="py-3 px-4 text-right">Ação Master</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-surface-border">
+                    {allCashSessions.length === 0 ? (
+                      <tr>
+                        <td colSpan={8} className="py-10 text-center text-slate-500">
+                          Nenhuma sessão de caixa cadastrada ainda.
+                        </td>
+                      </tr>
+                    ) : (
+                      allCashSessions.map(session => {
+                        const isOpen = session.status === 'open';
+
+                        return (
+                          <tr key={session.id} className="hover:bg-surface-elevated/40 transition-colors">
+                            {/* ID e Status */}
+                            <td className="py-3 px-4 font-mono">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-2 h-2 rounded-full ${isOpen ? 'bg-status-free animate-pulse' : 'bg-slate-600'}`} />
+                                <span className="font-bold text-slate-200">#{session.id.slice(0, 6)}</span>
+                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                                  isOpen ? 'bg-status-free/10 text-status-free border border-status-free/20' : 'bg-slate-800 text-slate-400'
+                                }`}>
+                                  {isOpen ? 'Aberto' : 'Fechado'}
+                                </span>
+                              </div>
+                            </td>
+
+                            {/* Abertura */}
+                            <td className="py-3 px-4 font-mono tabular-nums text-slate-300">
+                              {new Date(session.openedAt).toLocaleDateString('pt-BR')} {new Date(session.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            </td>
+
+                            {/* Fechamento */}
+                            <td className="py-3 px-4 font-mono tabular-nums text-slate-400">
+                              {session.closedAt 
+                                ? `${new Date(session.closedAt).toLocaleDateString('pt-BR')} ${new Date(session.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                                : <span className="text-status-free font-medium">Em andamento</span>
+                              }
+                            </td>
+
+                            {/* Operador */}
+                            <td className="py-3 px-4 text-slate-200">
+                              {session.openedBy || 'Operador'}
+                            </td>
+
+                            {/* Fundo Inicial */}
+                            <td className="py-3 px-4 font-mono tabular-nums text-slate-300">
+                              R$ {session.initialAmount.toFixed(2)}
+                            </td>
+
+                            {/* Valor Contado */}
+                            <td className="py-3 px-4 font-mono tabular-nums font-semibold text-slate-200">
+                              {session.finalAmount !== undefined ? `R$ ${session.finalAmount.toFixed(2)}` : '—'}
+                            </td>
+
+                            {/* Diferença */}
+                            <td className="py-3 px-4 font-mono tabular-nums">
+                              {session.varianceAmount !== undefined ? (
+                                <span className={session.varianceAmount >= 0 ? 'text-status-free font-bold' : 'text-status-danger font-bold'}>
+                                  {session.varianceAmount >= 0 ? `+ R$ ${session.varianceAmount.toFixed(2)}` : `- R$ ${Math.abs(session.varianceAmount).toFixed(2)}`}
+                                </span>
+                              ) : '—'}
+                            </td>
+
+                            {/* Botão de Excluir */}
+                            <td className="py-3 px-4 text-right">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setSessionToDelete(session);
+                                  setAdminPasswordInput('');
+                                  setAdminActionError('');
+                                }}
+                                className="py-1 px-2.5 bg-status-danger/10 hover:bg-status-danger/20 text-status-danger border border-status-danger/30 rounded-lg text-xs font-semibold cursor-pointer transition-colors inline-flex items-center gap-1"
+                                title="Excluir este caixa e expurgar suas vendas de teste"
+                              >
+                                <Trash2 size={13} /> Excluir
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        )}
+
+        {/* MODAL DE CONFIRMAÇÃO DE EXCLUSÃO (MASTER ADMIN) */}
+        {sessionToDelete && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+            <div className="bg-surface-card border border-surface-border rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
+              <div className="flex items-center gap-3 text-status-danger pb-3 border-b border-surface-border">
+                <ShieldAlert size={24} />
+                <div>
+                  <h3 className="text-base font-bold text-white">Excluir Caixa de Teste</h3>
+                  <span className="text-xs text-slate-400 font-mono">Sessão #{sessionToDelete.id.slice(0, 8)}</span>
+                </div>
+              </div>
+
+              <div className="text-xs text-slate-300 space-y-2 leading-relaxed">
+                <p>
+                  Você está prestes a excluir permanentemente esta sessão de caixa e <strong>expurgar todas as vendas realizadas durante o turno</strong>.
+                </p>
+                <div className="p-3 bg-surface-ground rounded-lg border border-surface-border space-y-1 font-mono tabular-nums text-[11px]">
+                  <div>Aberto em: <strong className="text-slate-200">{new Date(sessionToDelete.openedAt).toLocaleString('pt-BR')}</strong></div>
+                  <div>Operador: <strong className="text-slate-200">{sessionToDelete.openedBy}</strong></div>
+                  <div>Fundo inicial: <strong className="text-slate-200">R$ {sessionToDelete.initialAmount.toFixed(2)}</strong></div>
+                </div>
+                <p className="text-status-occupied text-[11px]">
+                  ⚠️ Esta ação é irreversível e recalculará o faturamento e o DRE da empresa imediatamente.
+                </p>
+              </div>
+
+              <form onSubmit={handleConfirmDeleteSession} className="space-y-3 pt-1">
+                <div>
+                  <label className="block text-slate-300 text-xs font-semibold mb-1">
+                    Digite a Senha do Administrador Master para confirmar:
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Senha Master (ex: admin)"
+                    value={adminPasswordInput}
+                    onChange={e => setAdminPasswordInput(e.target.value)}
+                    className="w-full input-util text-sm"
+                    autoFocus
+                  />
+                </div>
+
+                {adminActionError && (
+                  <div className="p-2.5 rounded-lg bg-status-danger/10 border border-status-danger/30 text-status-danger text-xs font-semibold">
+                    {adminActionError}
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={isDeleting}
+                    onClick={() => setSessionToDelete(null)}
+                    className="flex-1 py-2 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isDeleting || !adminPasswordInput.trim()}
+                    className="flex-1 py-2 bg-status-danger hover:bg-red-600 text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    {isDeleting ? 'Excluindo...' : 'Confirmar Exclusão'}
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
-        </div>
+        )}
 
       </div>
     </div>

@@ -135,7 +135,9 @@ export type AuditAction =
   | 'DESATIVACAO_PRODUTO'
   | 'ITEM_BRINDE'
   | 'DESCONTO_CONCEDIDO'
-  | 'CUPOM_HITS_IFOOD';
+  | 'CUPOM_HITS_IFOOD'
+  | 'EXCLUSAO_CAIXA_TESTE'
+  | 'EXPURGO_VENDAS_TESTE';
 
 export interface AuditLog {
   id: string;
@@ -257,6 +259,7 @@ export function useInventory() {
   // Caixa State (em Nuvem)
   const [isOpen, setIsOpen] = useState(false);
   const [activeCashSession, setActiveCashSession] = useState<CashSession | null>(null);
+  const [allCashSessions, setAllCashSessions] = useState<CashSession[]>([]);
 
   // Tempo Médio Dinâmico de Preparo (KDS / Balcão)
   const [targetPrepMinutes, setTargetPrepMinutesState] = useState<number>(20);
@@ -429,29 +432,38 @@ export function useInventory() {
         }
       }
 
-      // 4. Fetch Caixa Ativo (Sessão de Caixa em Nuvem)
+      // 4. Fetch Todas as Sessões de Caixa (Histórico + Ativo)
       try {
-        const { data: sessData } = await supabase
+        const { data: allSessData } = await supabase
           .from('cash_sessions')
           .select('*')
-          .eq('status', 'open')
-          .order('opened_at', { ascending: false })
-          .limit(1)
-          .maybeSingle();
+          .order('opened_at', { ascending: false });
 
-        if (sessData) {
-          setActiveCashSession({
-            id: sessData.id,
-            status: sessData.status,
-            initialAmount: Number(sessData.initial_amount) || 0,
-            finalAmount: sessData.final_amount ? Number(sessData.final_amount) : undefined,
-            openedBy: sessData.opened_by,
-            closedBy: sessData.closed_by,
-            openedAt: sessData.opened_at,
-            closedAt: sessData.closed_at
-          });
-          setIsOpen(true);
+        if (allSessData && allSessData.length > 0) {
+          const mappedSessions: CashSession[] = allSessData.map(s => ({
+            id: s.id,
+            status: s.status,
+            initialAmount: Number(s.initial_amount) || 0,
+            finalAmount: s.final_amount ? Number(s.final_amount) : undefined,
+            expectedAmount: s.expected_amount ? Number(s.expected_amount) : undefined,
+            varianceAmount: s.variance_amount ? Number(s.variance_amount) : undefined,
+            openedBy: s.opened_by,
+            closedBy: s.closed_by,
+            openedAt: s.opened_at,
+            closedAt: s.closed_at
+          }));
+          setAllCashSessions(mappedSessions);
+
+          const openOne = mappedSessions.find(s => s.status === 'open');
+          if (openOne) {
+            setActiveCashSession(openOne);
+            setIsOpen(true);
+          } else {
+            setActiveCashSession(null);
+            setIsOpen(false);
+          }
         } else {
+          setAllCashSessions([]);
           setActiveCashSession(null);
           setIsOpen(false);
         }
@@ -1132,16 +1144,37 @@ export function useInventory() {
       }).select().single();
 
       if (data) {
-        setActiveCashSession({
+        const newSess: CashSession = {
           id: data.id,
           status: 'open',
-          initialAmount: Number(data.initial_amount),
-          openedBy: data.opened_by,
-          openedAt: data.opened_at
-        });
+          initialAmount: Number(data.initial_amount) || initialAmount,
+          openedBy: data.opened_by || operatorName,
+          openedAt: data.opened_at || new Date().toISOString()
+        };
+        setActiveCashSession(newSess);
+        setAllCashSessions(prev => [newSess, ...prev.filter(s => s.id !== newSess.id)]);
+      } else {
+        const fallbackSess: CashSession = {
+          id: 'sess_' + Date.now().toString(36),
+          status: 'open',
+          initialAmount,
+          openedBy: operatorName,
+          openedAt: new Date().toISOString()
+        };
+        setActiveCashSession(fallbackSess);
+        setAllCashSessions(prev => [fallbackSess, ...prev]);
       }
       setIsOpen(true);
     } catch {
+      const fallbackSess: CashSession = {
+        id: 'sess_' + Date.now().toString(36),
+        status: 'open',
+        initialAmount,
+        openedBy: operatorName,
+        openedAt: new Date().toISOString()
+      };
+      setActiveCashSession(fallbackSess);
+      setAllCashSessions(prev => [fallbackSess, ...prev]);
       setIsOpen(true);
     }
 
@@ -1171,6 +1204,21 @@ export function useInventory() {
       } catch (err) {
         console.error('Erro ao fechar caixa no banco:', err);
       }
+
+      setAllCashSessions(prev => prev.map(s => {
+        if (s.id === activeCashSession.id) {
+          return {
+            ...s,
+            status: 'closed',
+            finalAmount,
+            expectedAmount,
+            varianceAmount: variance,
+            closedBy: operatorName,
+            closedAt: now
+          };
+        }
+        return s;
+      }));
     }
 
     addAuditLog(
@@ -1191,6 +1239,92 @@ export function useInventory() {
     } else {
       closeCaixa(0, 'Operador');
     }
+  };
+
+  // Exclusão de Sessão de Caixa & Expurgar Vendas de Teste (Exclusivo Master Admin)
+  const deleteCashSession = async (sessionId: string, masterPassword: string): Promise<{ success: boolean; error?: string; count?: number }> => {
+    const cleanPass = masterPassword.trim();
+    if (cleanPass !== 'admin') {
+      return { success: false, error: 'Senha de Administrador Master incorreta.' };
+    }
+
+    const session = allCashSessions.find(s => s.id === sessionId);
+    const openedAt = session ? new Date(session.openedAt).getTime() : 0;
+    const closedAt = session?.closedAt ? new Date(session.closedAt).getTime() : Date.now();
+
+    // Vendas que ocorreram no período da sessão
+    const salesToDelete = sales.filter(s => {
+      const saleTime = new Date(s.date).getTime();
+      return saleTime >= (openedAt - 120000) && saleTime <= (closedAt + 120000);
+    });
+    const saleIdsToDelete = salesToDelete.map(s => s.id);
+
+    try {
+      if (saleIdsToDelete.length > 0) {
+        await supabase.from('sale_items').delete().in('sale_id', saleIdsToDelete);
+        await supabase.from('sales').delete().in('id', saleIdsToDelete);
+      }
+      await supabase.from('cash_sessions').delete().eq('id', sessionId);
+    } catch (err) {
+      console.warn('Erro ao deletar sessão do banco:', err);
+    }
+
+    setAllCashSessions(prev => prev.filter(s => s.id !== sessionId));
+    if (saleIdsToDelete.length > 0) {
+      setSales(prev => {
+        const remaining = prev.filter(s => !saleIdsToDelete.includes(s.id));
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(remaining.slice(0, 100))); } catch {}
+        }
+        return remaining;
+      });
+    }
+
+    if (activeCashSession?.id === sessionId) {
+      setActiveCashSession(null);
+      setIsOpen(false);
+    }
+
+    addAuditLog(
+      'EXCLUSAO_CAIXA_TESTE',
+      `Sessão de Caixa #${sessionId.slice(0, 6)} excluída pelo Administrador Master. ${saleIdsToDelete.length} vendas de teste expurgadas do faturamento.`,
+      'Administrador Master'
+    );
+
+    return { success: true, count: saleIdsToDelete.length };
+  };
+
+  // Exclusão manual direta de vendas de teste selecionadas
+  const deleteTestSales = async (saleIds: string[], masterPassword: string): Promise<{ success: boolean; error?: string }> => {
+    const cleanPass = masterPassword.trim();
+    if (cleanPass !== 'admin') {
+      return { success: false, error: 'Senha de Administrador Master incorreta.' };
+    }
+
+    if (!saleIds || saleIds.length === 0) return { success: true };
+
+    try {
+      await supabase.from('sale_items').delete().in('sale_id', saleIds);
+      await supabase.from('sales').delete().in('id', saleIds);
+    } catch (err) {
+      console.warn('Erro ao deletar vendas de teste no banco:', err);
+    }
+
+    setSales(prev => {
+      const remaining = prev.filter(s => !saleIds.includes(s.id));
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(remaining.slice(0, 100))); } catch {}
+      }
+      return remaining;
+    });
+
+    addAuditLog(
+      'EXPURGO_VENDAS_TESTE',
+      `${saleIds.length} vendas de teste expurgadas do faturamento pelo Administrador Master.`,
+      'Administrador Master'
+    );
+
+    return { success: true };
   };
 
   const addSale = async (sale: Omit<Sale, 'id' | 'date' | 'status'>) => {
@@ -1632,7 +1766,7 @@ export function useInventory() {
   return { 
     items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
     products, addProduct, updateProduct, removeProduct, getProductCmv, getRealSalesCmv,
-    isLoaded, isOpen, activeCashSession, openCaixa, closeCaixa, toggleCaixa,
+    isLoaded, isOpen, activeCashSession, allCashSessions, openCaixa, closeCaixa, toggleCaixa, deleteCashSession, deleteTestSales,
     sales, addSale, cancelSale,
     movements, addMovement,
     wasteRecords, registerWaste, getTotalWasteCost,
