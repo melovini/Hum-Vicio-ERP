@@ -52,21 +52,34 @@ export default function CozinhaKDSPage() {
       return;
     }
 
-    // 1. Verificar se um novo pedido entrou na chapa (nova remessa)
-    let newOrderAdded: Sale | undefined;
+    // 1. Verificar se novos pedidos entraram na chapa (nova remessa ou remessa em lote)
+    const newlyAddedOrders: Sale[] = [];
     currentProductionIds.forEach(id => {
       if (!prevProductionIdsRef.current.has(id)) {
-        newOrderAdded = sales.find(s => s.id === id);
+        const found = sales.find(s => s.id === id);
+        if (found) newlyAddedOrders.push(found);
       }
     });
 
-    if (newOrderAdded) {
+    if (newlyAddedOrders.length > 0) {
       playKitchenChime();
-      setKitchenAlert({
-        type: 'new_order',
-        message: `🔔 NOVA REMESSA NA CHAPA: Pedido #${newOrderAdded.id.slice(0, 5).toUpperCase()} (${newOrderAdded.customerName || 'Cliente'})!`
+      let totalNewBurgers = 0;
+      newlyAddedOrders.forEach(o => {
+        o.items?.forEach(i => { totalNewBurgers += i.quantity; });
       });
-      setTimeout(() => setKitchenAlert(null), 6000);
+
+      if (newlyAddedOrders.length === 1) {
+        setKitchenAlert({
+          type: 'new_order',
+          message: `🔔 NOVA REMESSA NA CHAPA: Pedido #${newlyAddedOrders[0].id.slice(0, 5).toUpperCase()} (${newlyAddedOrders[0].customerName || 'Cliente'}) - ${totalNewBurgers} lanche(s)!`
+        });
+      } else {
+        setKitchenAlert({
+          type: 'new_order',
+          message: `🔔 REMESSA EM LOTE: ${newlyAddedOrders.length} PEDIDOS LIBERADOS COM ${totalNewBurgers} HAMBÚRGUERES NO FOGO!`
+        });
+      }
+      setTimeout(() => setKitchenAlert(null), 8000);
     }
 
     // 2. Verificar se algum pedido que estava na chapa foi cancelado ou pausado
@@ -102,6 +115,22 @@ export default function CozinhaKDSPage() {
         return timeA - timeB; // Mais antigos primeiro
       });
   }, [sales]);
+
+  // Resumo de Hambúrgueres na Chapa no Momento
+  const currentGrillBurgersSummary = useMemo(() => {
+    let total = 0;
+    const map: Record<string, number> = {};
+    productionOrders.forEach(o => {
+      o.items?.forEach(i => {
+        total += i.quantity;
+        map[i.productName] = (map[i.productName] || 0) + i.quantity;
+      });
+    });
+    return {
+      total,
+      items: Object.entries(map).map(([name, qty]) => `${qty}x ${name}`).join(' • ')
+    };
+  }, [productionOrders]);
 
   // 2. Pedidos em Espera ou Agendados (Previsão de Demanda)
   const queueOrders = useMemo(() => {
@@ -311,7 +340,33 @@ export default function CozinhaKDSPage() {
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+            <div className="space-y-6">
+              {/* Resumo Consolidado de Carnes para a Chapa */}
+              <div className="p-4 md:p-5 rounded-3xl bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-red-500/20 border-2 border-amber-500/40 shadow-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="flex items-center gap-3.5">
+                  <div className="p-3 bg-amber-500 text-slate-950 rounded-2xl font-black shrink-0 shadow-lg shadow-amber-500/30">
+                    <Flame size={26} />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-black text-white text-base md:text-xl uppercase tracking-wide">
+                        Total na Chapa: {currentGrillBurgersSummary.total} Hambúrgueres
+                      </span>
+                      <span className="px-2.5 py-0.5 bg-amber-500 text-slate-950 font-black text-xs rounded-full">
+                        {productionOrders.length} comanda(s)
+                      </span>
+                    </div>
+                    <p className="text-xs md:text-sm text-amber-200 mt-1 font-semibold">
+                      {currentGrillBurgersSummary.items || 'Nenhum lanche'}
+                    </p>
+                  </div>
+                </div>
+                <div className="text-xs text-slate-300 font-bold bg-slate-950/70 px-4 py-2.5 rounded-2xl border border-slate-800 shrink-0 text-center">
+                  🍔 Jogue as carnes na chapa conforme o total acima!
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
               {productionOrders.map(order => {
                 const startTime = new Date(order.productionStartedAt || order.date).getTime();
                 const elapsedSeconds = Math.max(0, Math.floor((now - startTime) / 1000));
@@ -423,7 +478,8 @@ export default function CozinhaKDSPage() {
                 );
               })}
             </div>
-          )}
+          </div>
+        )}
         </div>
       )}
 

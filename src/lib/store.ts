@@ -176,6 +176,26 @@ const defaultChecklistTasks: ChecklistTask[] = [
   { id: '5', label: 'Verificar o freezer de verduras e queijos', checked: false },
 ];
 
+function getSavedProductionOverrides(): Record<string, { status: ProductionStatus; startedAt?: string }> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem('hum_vicio_prod_status_map') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveProductionOverrides(updates: { id: string; status: ProductionStatus; startedAt?: string }[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedProductionOverrides();
+    updates.forEach(u => {
+      map[u.id] = { status: u.status, startedAt: u.startedAt };
+    });
+    localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(map));
+  } catch {}
+}
+
 export function useInventory() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
@@ -254,33 +274,40 @@ export function useInventory() {
         const { data: saleItemsData } = await supabase.from('sale_items').select('*');
         
         if (salesData && salesData.length > 0) {
-          const mappedSales: Sale[] = salesData.map(s => ({
-            id: s.id, 
-            customerName: s.customer_name || 'Balcão',
-            orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
-            channel: s.channel, 
-            total: Number(s.total) || 0, 
-            paymentMethod: s.payment_method, 
-            date: s.created_at, 
-            status: s.status,
-            productionStatus: (s.production_status || 'em_espera') as any,
-            productionStartedAt: s.production_started_at || s.created_at,
-            productionCompletedAt: s.production_completed_at || undefined,
-            productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
-            targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
-            delayReason: s.delay_reason || undefined,
-            delayNotes: s.delay_notes || undefined,
-            items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
-              id: i.id,
-              productId: i.product_id, 
-              productName: i.product_name, 
-              quantity: Number(i.quantity) || 0, 
-              unitPrice: Number(i.unit_price) || 0,
-              combo: i.combo || undefined,
-              notes: i.notes || undefined,
-              additionals: Array.isArray(i.additionals) ? i.additionals : undefined
-            }))
-          }));
+          const overrides = getSavedProductionOverrides();
+          const mappedSales: Sale[] = salesData.map(s => {
+            const override = overrides[s.id];
+            const prodStatus = (override?.status || s.production_status || 'em_espera') as ProductionStatus;
+            const prodStarted = override?.startedAt || s.production_started_at || s.created_at;
+
+            return {
+              id: s.id, 
+              customerName: s.customer_name || 'Balcão',
+              orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
+              channel: s.channel, 
+              total: Number(s.total) || 0, 
+              paymentMethod: s.payment_method, 
+              date: s.created_at, 
+              status: s.status,
+              productionStatus: prodStatus,
+              productionStartedAt: prodStarted,
+              productionCompletedAt: s.production_completed_at || undefined,
+              productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
+              targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
+              delayReason: s.delay_reason || undefined,
+              delayNotes: s.delay_notes || undefined,
+              items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
+                id: i.id,
+                productId: i.product_id, 
+                productName: i.product_name, 
+                quantity: Number(i.quantity) || 0, 
+                unitPrice: Number(i.unit_price) || 0,
+                combo: i.combo || undefined,
+                notes: i.notes || undefined,
+                additionals: Array.isArray(i.additionals) ? i.additionals : undefined
+              }))
+            };
+          });
           setSales(mappedSales);
           if (typeof window !== 'undefined') {
             try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(mappedSales.slice(0, 100))); } catch {}
@@ -497,35 +524,43 @@ export function useInventory() {
         const { data: latestSales } = await supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(60);
         const { data: latestItems } = await supabase.from('sale_items').select('*');
         if (latestSales && latestSales.length > 0) {
+          const overrides = getSavedProductionOverrides();
           setSales(prev => {
             const localOnly = prev.filter(p => p.id.startsWith('local_') && !latestSales.some(ls => ls.id === p.id));
-            const remoteMapped: Sale[] = latestSales.map(s => ({
-              id: s.id,
-              customerName: s.customer_name || 'Balcão',
-              orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
-              channel: s.channel,
-              total: Number(s.total) || 0,
-              paymentMethod: s.payment_method,
-              date: s.created_at,
-              status: s.status,
-              productionStatus: (s.production_status || 'em_espera') as any,
-              productionStartedAt: s.production_started_at || s.created_at,
-              productionCompletedAt: s.production_completed_at || undefined,
-              productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
-              targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
-              delayReason: s.delay_reason || undefined,
-              delayNotes: s.delay_notes || undefined,
-              items: (latestItems || []).filter(i => i.sale_id === s.id).map(i => ({
-                id: i.id,
-                productId: i.product_id,
-                productName: i.product_name,
-                quantity: Number(i.quantity) || 0,
-                unitPrice: Number(i.unit_price) || 0,
-                combo: i.combo || undefined,
-                notes: i.notes || undefined,
-                additionals: Array.isArray(i.additionals) ? i.additionals : undefined
-              }))
-            }));
+            const remoteMapped: Sale[] = latestSales.map(s => {
+              const existing = prev.find(p => p.id === s.id);
+              const override = overrides[s.id];
+              const prodStatus = (override?.status || s.production_status || existing?.productionStatus || 'em_espera') as ProductionStatus;
+              const prodStarted = override?.startedAt || s.production_started_at || existing?.productionStartedAt || s.created_at;
+
+              return {
+                id: s.id,
+                customerName: s.customer_name || 'Balcão',
+                orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
+                channel: s.channel,
+                total: Number(s.total) || 0,
+                paymentMethod: s.payment_method,
+                date: s.created_at,
+                status: s.status,
+                productionStatus: prodStatus,
+                productionStartedAt: prodStarted,
+                productionCompletedAt: s.production_completed_at || undefined,
+                productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
+                targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
+                delayReason: s.delay_reason || undefined,
+                delayNotes: s.delay_notes || undefined,
+                items: (latestItems || []).filter(i => i.sale_id === s.id).map(i => ({
+                  id: i.id,
+                  productId: i.product_id,
+                  productName: i.product_name,
+                  quantity: Number(i.quantity) || 0,
+                  unitPrice: Number(i.unit_price) || 0,
+                  combo: i.combo || undefined,
+                  notes: i.notes || undefined,
+                  additionals: Array.isArray(i.additionals) ? i.additionals : undefined
+                }))
+              };
+            });
             return [...localOnly, ...remoteMapped];
           });
         }
@@ -1089,6 +1124,9 @@ export function useInventory() {
       status: 'completed'
     };
 
+    // Salvar override do pedido para persistir localmente e nunca voltar para espera
+    saveProductionOverrides([{ id: saleId, status: initialProductionStatus, startedAt: initialProductionStarted }]);
+
     setSales(prev => {
       const updated = [newSaleLocal, ...prev];
       if (typeof window !== 'undefined') {
@@ -1102,6 +1140,10 @@ export function useInventory() {
   const updateOrderProductionStatus = async (saleId: string, newStatus: ProductionStatus) => {
     const startedAt = newStatus === 'em_producao' ? new Date().toISOString() : undefined;
     
+    // 1. Salvar override no storage local para nunca ser sobrescrito pelo polling
+    saveProductionOverrides([{ id: saleId, status: newStatus, startedAt: startedAt || new Date().toISOString() }]);
+
+    // 2. Atualizar no Supabase
     try {
       const updateData: any = { production_status: newStatus };
       if (startedAt) updateData.production_started_at = startedAt;
@@ -1113,6 +1155,45 @@ export function useInventory() {
     setSales(prev => {
       const updated = prev.map(s => {
         if (s.id === saleId) {
+          return {
+            ...s,
+            productionStatus: newStatus,
+            productionStartedAt: startedAt || s.productionStartedAt || s.date
+          };
+        }
+        return s;
+      });
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      }
+      return updated;
+    });
+  };
+
+  // Ação do Balcão: Enviar múltiplos pedidos em lote para a Chapa de uma vez
+  const updateBatchProductionStatus = async (saleIds: string[], newStatus: ProductionStatus) => {
+    if (!saleIds || saleIds.length === 0) return;
+    const startedAt = newStatus === 'em_producao' ? new Date().toISOString() : undefined;
+
+    // 1. Salvar overrides de todos os pedidos selecionados
+    saveProductionOverrides(saleIds.map(id => ({ 
+      id, 
+      status: newStatus, 
+      startedAt: startedAt || new Date().toISOString() 
+    })));
+
+    // 2. Atualizar no Supabase em lote
+    try {
+      const updateData: any = { production_status: newStatus };
+      if (startedAt) updateData.production_started_at = startedAt;
+      await supabase.from('sales').update(updateData).in('id', saleIds);
+    } catch (err) {
+      console.warn('Erro ao atualizar lote de pedidos no Supabase:', err);
+    }
+
+    setSales(prev => {
+      const updated = prev.map(s => {
+        if (saleIds.includes(s.id)) {
           return {
             ...s,
             productionStatus: newStatus,
@@ -1286,6 +1367,6 @@ export function useInventory() {
     purchaseRecords, recordPurchaseWithSupplier,
     stockAudits, saveStockAudit,
     subRecipes, saveSubRecipe, removeSubRecipe, getIngredientTrueCost,
-    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, completeOrderProduction
+    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus, completeOrderProduction
   };
 }

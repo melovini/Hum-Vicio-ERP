@@ -5,7 +5,7 @@ import {
   MonitorDot, ArrowLeft, Lock, Unlock, DollarSign, History, 
   Send, XCircle, ShoppingCart as CartIcon, Plus, Minus, Trash2, 
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
-  Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed,
+  Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
   Clock, Play, Pause, AlertOctagon
 } from 'lucide-react';
 import Link from 'next/link';
@@ -16,11 +16,12 @@ export default function CaixaPage() {
     products, items, isOpen, activeCashSession, 
     openCaixa, closeCaixa, sales, addSale, cancelSale, 
     movements, addMovement,
-    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus 
+    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus 
   } = useInventory();
 
   const [activeTab, setActiveTab] = useState<'pdv' | 'producao' | 'historico' | 'sangria'>('pdv');
   const [productionFilter, setProductionFilter] = useState<'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido'>('todos');
+  const [selectedOrdersForBatch, setSelectedOrdersForBatch] = useState<string[]>([]);
   
   // Modais de Abertura e Fechamento
   const [showOpenModal, setShowOpenModal] = useState(false);
@@ -243,6 +244,26 @@ export default function CaixaPage() {
   };
 
   const cartTotal = cart.reduce((acc, item) => acc + (item.unitPrice * item.quantity), 0);
+
+  const waitingOrders = useMemo(() => {
+    return sales.filter(s => s.status !== 'cancelled' && (s.productionStatus === 'em_espera' || s.productionStatus === 'agendado'));
+  }, [sales]);
+
+  const batchBurgersSummary = useMemo(() => {
+    const selectedSales = sales.filter(s => selectedOrdersForBatch.includes(s.id));
+    let totalBurgers = 0;
+    const itemsMap: Record<string, number> = {};
+
+    selectedSales.forEach(s => {
+      s.items?.forEach(i => {
+        totalBurgers += i.quantity;
+        itemsMap[i.productName] = (itemsMap[i.productName] || 0) + i.quantity;
+      });
+    });
+
+    const summaryList = Object.entries(itemsMap).map(([name, qty]) => `${qty}x ${name}`).join(', ');
+    return { totalBurgers, summaryList, count: selectedSales.length };
+  }, [sales, selectedOrdersForBatch]);
 
   const handleCheckout = () => {
     if (cart.length === 0) return;
@@ -972,6 +993,52 @@ export default function CaixaPage() {
                     </div>
                   </div>
 
+                  {/* BARRA DE AÇÃO EM LOTE PARA A CHAPA */}
+                  {waitingOrders.length > 0 && (
+                    <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-950/60 to-orange-950/40 border border-amber-500/40 space-y-3 shadow-xl">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <label className="flex items-center gap-2.5 text-xs font-bold text-slate-200 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={selectedOrdersForBatch.length > 0 && selectedOrdersForBatch.length === waitingOrders.length}
+                            onChange={e => {
+                              if (e.target.checked) {
+                                setSelectedOrdersForBatch(waitingOrders.map(o => o.id));
+                              } else {
+                                setSelectedOrdersForBatch([]);
+                              }
+                            }}
+                            className="w-4 h-4 rounded text-amber-500 focus:ring-amber-400 bg-slate-900 border-slate-700 cursor-pointer"
+                          />
+                          <span>Selecionar todos em espera ({waitingOrders.length} pedidos)</span>
+                        </label>
+
+                        {selectedOrdersForBatch.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              updateBatchProductionStatus(selectedOrdersForBatch, 'em_producao');
+                              setSelectedOrdersForBatch([]);
+                            }}
+                            className="py-2.5 px-5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-orange-500/30 cursor-pointer transition-all animate-pulse"
+                          >
+                            <Flame size={16} /> Enviar Remessa em Lote ({selectedOrdersForBatch.length} Pedidos)
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Resumo da Remessa de Hambúrgueres */}
+                      {selectedOrdersForBatch.length > 0 && (
+                        <div className="pt-2 border-t border-amber-500/20 flex items-start gap-2 text-xs text-amber-300">
+                          <Utensils size={15} className="shrink-0 mt-0.5" />
+                          <span>
+                            <strong>Total da remessa ({batchBurgersSummary.totalBurgers} lanches):</strong> {batchBurgersSummary.summaryList}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {/* Lista de Pedidos de Produção */}
                   {sales.filter(s => {
                     if (s.status === 'cancelled') return false;
@@ -1003,17 +1070,34 @@ export default function CaixaPage() {
                                 isCooking 
                                   ? 'bg-amber-950/20 border-amber-500/40 shadow-lg' 
                                   : isWaiting 
-                                    ? 'bg-slate-950/70 border-slate-800' 
+                                    ? selectedOrdersForBatch.includes(sale.id)
+                                      ? 'bg-amber-950/40 border-amber-500 ring-2 ring-amber-500/50'
+                                      : 'bg-slate-950/70 border-slate-800' 
                                     : 'bg-emerald-950/15 border-emerald-500/30'
                               }`}
                             >
                               <div>
                                 <div className="flex justify-between items-start pb-3 mb-2 border-b border-slate-800/80">
-                                  <div>
-                                    <div className="flex items-center gap-2">
-                                      <span className="font-mono font-bold text-white text-base">
-                                        #{sale.id.slice(0, 5).toUpperCase()}
-                                      </span>
+                                  <div className="flex items-start gap-3">
+                                    {isWaiting && (
+                                      <input
+                                        type="checkbox"
+                                        checked={selectedOrdersForBatch.includes(sale.id)}
+                                        onChange={() => {
+                                          if (selectedOrdersForBatch.includes(sale.id)) {
+                                            setSelectedOrdersForBatch(selectedOrdersForBatch.filter(id => id !== sale.id));
+                                          } else {
+                                            setSelectedOrdersForBatch([...selectedOrdersForBatch, sale.id]);
+                                          }
+                                        }}
+                                        className="w-5 h-5 mt-0.5 rounded text-amber-500 focus:ring-amber-400 bg-slate-900 border-slate-700 cursor-pointer"
+                                      />
+                                    )}
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="font-mono font-bold text-white text-base">
+                                          #{sale.id.slice(0, 5).toUpperCase()}
+                                        </span>
                                       <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
                                         isCooking
                                           ? 'bg-amber-500 text-slate-950 animate-pulse'
@@ -1031,6 +1115,7 @@ export default function CaixaPage() {
                                       Modalidade: {sale.orderType?.toUpperCase() || 'BALCÃO'} • {new Date(sale.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                                     </span>
                                   </div>
+                                </div>
 
                                   <button
                                     type="button"
