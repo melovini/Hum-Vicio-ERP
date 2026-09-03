@@ -41,12 +41,23 @@ export interface Product {
 }
 
 // === VENDAS ===
+export type GiftReason = 
+  | 'falta_pedido_anterior' // Esquecimento / Falta no último pedido (ex: batata que faltou)
+  | 'fidelidade_cliente'    // Brinde por ser excelente cliente / fidelidade
+  | 'atraso_preparo'        // Compensação por atraso na cozinha / entrega
+  | 'cortesia_casa'         // Cortesia da gerência / amigo / degustação
+  | 'outro';                // Outro motivo com justificativa
+
 export interface SaleItem {
   id?: string; // id único no carrinho
   productId: string;
   productName: string;
   quantity: number;
   unitPrice: number;
+  originalPrice?: number; // Preço original antes de ser marcado como brinde
+  isGift?: boolean; // Marcação de brinde / cortesia
+  giftReason?: GiftReason; // Motivo do brinde
+  giftNotes?: string; // Observação explicativa do brinde
   combo?: string;
   comboPrice?: number;
   additionals?: { name: string; price: number }[];
@@ -61,11 +72,18 @@ export interface Sale {
   customerName?: string;
   orderType?: 'mesa' | 'retirada' | 'delivery';
   channel: 'balcao' | 'ifood';
-  total: number;
+  subtotal?: number; // Valor bruto dos itens antes de desconto e taxa
+  discount?: number; // Desconto em R$ concedido no pedido
+  deliveryFee?: number; // Taxa de entrega em R$ (para modalidade delivery)
+  storeCouponSubsidy?: number; // Cupom do iFood custeado pela loja (ex: Cupom Hits R$ 10,00)
+  total: number; // Subtotal - discount + deliveryFee
   paymentMethod: string;
   items: SaleItem[];
   date: string;
   status: 'completed' | 'cancelled';
+  // Auditoria de Brindes no Pedido:
+  hasGifts?: boolean;
+  giftsTotalValue?: number; // Total financeiro em R$ dos itens doados
   // Campos KDS & Produção:
   productionStatus?: ProductionStatus;
   productionStartedAt?: string;
@@ -114,7 +132,10 @@ export type AuditAction =
   | 'AJUSTE_ESTOQUE' 
   | 'EXCLUSAO_ITEM'
   | 'CADASTRO_PRODUTO'
-  | 'DESATIVACAO_PRODUTO';
+  | 'DESATIVACAO_PRODUTO'
+  | 'ITEM_BRINDE'
+  | 'DESCONTO_CONCEDIDO'
+  | 'CUPOM_HITS_IFOOD';
 
 export interface AuditLog {
   id: string;
@@ -1277,12 +1298,62 @@ export function useInventory() {
     });
     setItems(newItems);
 
+    // Identificação de Brindes no Pedido
+    const giftItems = (sale.items || []).filter(i => i.isGift);
+    const hasGifts = giftItems.length > 0;
+    const giftsTotalValue = giftItems.reduce((acc, i) => acc + ((i.originalPrice || 0) * i.quantity), 0);
+
+    // Auditoria automática de brindes concedidos pelo operador
+    giftItems.forEach(g => {
+      const reasonLabel = 
+        g.giftReason === 'falta_pedido_anterior' ? 'Falta / Esquecimento no pedido anterior' :
+        g.giftReason === 'fidelidade_cliente' ? 'Fidelidade / Excelente cliente' :
+        g.giftReason === 'atraso_preparo' ? 'Atraso no preparo / Atendimento' :
+        g.giftReason === 'cortesia_casa' ? 'Cortesia da casa' : 'Outro motivo';
+      
+      addAuditLog(
+        'ITEM_BRINDE',
+        `Item marcado como Brinde no pedido de "${sale.customerName || 'Balcão'}": ${g.quantity}x ${g.productName}. Motivo: ${reasonLabel}${g.giftNotes ? ` (Obs: ${g.giftNotes})` : ''}. Valor estornado: R$ ${((g.originalPrice || 0) * g.quantity).toFixed(2)}`,
+        'Operador',
+        `R$ ${((g.originalPrice || 0) * g.quantity).toFixed(2)}`,
+        'R$ 0.00'
+      );
+    });
+
+    // Auditoria de desconto concedido
+    if (sale.discount && sale.discount > 0) {
+      addAuditLog(
+        'DESCONTO_CONCEDIDO',
+        `Desconto de R$ ${sale.discount.toFixed(2)} concedido no pedido de "${sale.customerName || 'Balcão'}". Subtotal: R$ ${(sale.subtotal || sale.total).toFixed(2)} -> Total Final: R$ ${sale.total.toFixed(2)}`,
+        'Operador',
+        `R$ ${(sale.subtotal || sale.total).toFixed(2)}`,
+        `R$ ${sale.total.toFixed(2)}`
+      );
+    }
+
+    // Auditoria de cupom iFood custeado pela loja (Hits)
+    if (sale.storeCouponSubsidy && sale.storeCouponSubsidy > 0) {
+      addAuditLog(
+        'CUPOM_HITS_IFOOD',
+        `Pedido no iFood com cupom custeado pela loja no valor de R$ ${sale.storeCouponSubsidy.toFixed(2)} (${sale.customerName || 'Cliente iFood'}).`,
+        'Operador',
+        undefined,
+        `Subsídio Loja: R$ ${sale.storeCouponSubsidy.toFixed(2)}`
+      );
+    }
+
     // O pedido É SEMPRE INCLUÍDO E NUNCA SE PERDE!
     const newSaleLocal: Sale = {
       ...sale,
       id: saleId,
       customerName: sale.customerName || 'Balcão',
       orderType: sale.orderType || 'mesa',
+      subtotal: sale.subtotal !== undefined ? sale.subtotal : sale.total,
+      discount: sale.discount || 0,
+      deliveryFee: sale.deliveryFee || 0,
+      storeCouponSubsidy: sale.storeCouponSubsidy || 0,
+      hasGifts,
+      giftsTotalValue,
       productionStatus: initialProductionStatus,
       productionStartedAt: initialProductionStarted,
       targetPrepMinutes: initialTargetPrep,

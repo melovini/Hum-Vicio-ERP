@@ -1,12 +1,12 @@
 'use client';
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useInventory, Product, SaleItem, Sale, ProductionStatus } from '@/lib/store';
+import { useInventory, Product, SaleItem, Sale, ProductionStatus, GiftReason } from '@/lib/store';
 import { 
   MonitorDot, ArrowLeft, Lock, Unlock, DollarSign, History, 
   Send, XCircle, ShoppingCart as CartIcon, Plus, Minus, Trash2, 
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
-  Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt
+  Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -100,6 +100,19 @@ export default function CaixaPage() {
   const [saleMethod, setSaleMethod] = useState('credito');
   const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_espera');
   const [pendingRemovalFromGrill, setPendingRemovalFromGrill] = useState<{ sale: Sale; action: 'pause' | 'cancel' } | null>(null);
+
+  // Estados de Brindes / Cortesias
+  const [giftModalItemIndex, setGiftModalItemIndex] = useState<number | null>(null);
+  const [selectedGiftReason, setSelectedGiftReason] = useState<GiftReason>('falta_pedido_anterior');
+  const [giftNotesInput, setGiftNotesInput] = useState('');
+
+  // Estados de Taxa de Entrega e Desconto
+  const [deliveryFeeInput, setDeliveryFeeInput] = useState('');
+  const [discountInput, setDiscountInput] = useState('');
+
+  // Cupom iFood Custeado pela Loja (Cupom Hits)
+  const [hasStoreCoupon, setHasStoreCoupon] = useState(false);
+  const [storeCouponInput, setStoreCouponInput] = useState('10.00');
 
   // Customizer Modal do Hambúrguer
   const [selectedBurgerForConfig, setSelectedBurgerForConfig] = useState<Product | null>(null);
@@ -303,7 +316,74 @@ export default function CaixaPage() {
     setCart(cart.filter((_, idx) => idx !== itemIndex));
   };
 
-  const cartTotal = cart.reduce((acc, item) => acc + (item.unitPrice * item.quantity), 0);
+  // Funções de Gestão de Brindes / Cortesias
+  const handleOpenGiftModal = (index: number) => {
+    const item = cart[index];
+    if (item.isGift) {
+      if (confirm(`Remover condição de brinde de "${item.productName}" e voltar a cobrar normal?`)) {
+        setCart(cart.map((it, idx) => idx === index ? {
+          ...it,
+          isGift: false,
+          unitPrice: it.originalPrice !== undefined ? it.originalPrice : it.unitPrice,
+          giftReason: undefined,
+          giftNotes: undefined
+        } : it));
+      }
+      return;
+    }
+    setGiftModalItemIndex(index);
+    setSelectedGiftReason('falta_pedido_anterior');
+    setGiftNotesInput('');
+  };
+
+  const handleConfirmGift = () => {
+    if (giftModalItemIndex === null) return;
+    setCart(cart.map((item, idx) => {
+      if (idx === giftModalItemIndex) {
+        return {
+          ...item,
+          isGift: true,
+          originalPrice: item.originalPrice !== undefined ? item.originalPrice : item.unitPrice,
+          unitPrice: 0,
+          giftReason: selectedGiftReason,
+          giftNotes: giftNotesInput.trim() || undefined
+        };
+      }
+      return item;
+    }));
+    setGiftModalItemIndex(null);
+  };
+
+  // Cálculos Financeiros da Comanda (Subtotal, Desconto, Taxa de Entrega e Total)
+  const cartSubtotal = useMemo(() => {
+    return cart.reduce((acc, item) => acc + (item.unitPrice * item.quantity), 0);
+  }, [cart]);
+
+  const deliveryFeeAmount = useMemo(() => {
+    if (orderType !== 'delivery' && saleChannel !== 'ifood') return 0;
+    const fee = parseFloat(deliveryFeeInput);
+    return isNaN(fee) || fee < 0 ? 0 : fee;
+  }, [deliveryFeeInput, orderType, saleChannel]);
+
+  const discountAmount = useMemo(() => {
+    if (!discountInput.trim()) return 0;
+    if (discountInput.trim().endsWith('%')) {
+      const pct = parseFloat(discountInput.replace('%', ''));
+      return !isNaN(pct) && pct > 0 ? (cartSubtotal * pct) / 100 : 0;
+    }
+    const val = parseFloat(discountInput);
+    return !isNaN(val) && val > 0 ? Math.min(cartSubtotal, val) : 0;
+  }, [discountInput, cartSubtotal]);
+
+  const cartTotal = useMemo(() => {
+    return Math.max(0, cartSubtotal - discountAmount + deliveryFeeAmount);
+  }, [cartSubtotal, discountAmount, deliveryFeeAmount]);
+
+  const storeCouponSubsidyAmount = useMemo(() => {
+    if (saleChannel !== 'ifood' || !hasStoreCoupon) return 0;
+    const val = parseFloat(storeCouponInput);
+    return !isNaN(val) && val > 0 ? val : 0;
+  }, [saleChannel, hasStoreCoupon, storeCouponInput]);
 
   const waitingOrders = useMemo(() => {
     return sales.filter(s => s.status !== 'cancelled' && (s.productionStatus === 'em_espera' || s.productionStatus === 'agendado'));
@@ -332,6 +412,10 @@ export default function CaixaPage() {
       customerName: customerName.trim() || (orderType === 'mesa' ? 'Mesa' : orderType === 'retirada' ? 'Retirada' : 'Delivery'),
       orderType,
       channel: saleChannel,
+      subtotal: cartSubtotal,
+      discount: discountAmount,
+      deliveryFee: deliveryFeeAmount,
+      storeCouponSubsidy: storeCouponSubsidyAmount,
       total: cartTotal,
       paymentMethod: saleMethod,
       items: cart,
@@ -341,6 +425,9 @@ export default function CaixaPage() {
 
     setCart([]);
     setCustomerName('');
+    setDiscountInput('');
+    setDeliveryFeeInput('');
+    setHasStoreCoupon(false);
     setOrderProductionStatus('em_espera');
   };
 
@@ -988,10 +1075,26 @@ export default function CaixaPage() {
                           </div>
                         ) : (
                           cart.map((item, idx) => (
-                            <div key={idx} className="bg-slate-950/70 border border-slate-800/90 p-3.5 rounded-2xl space-y-1.5">
+                            <div key={idx} className={`border p-3.5 rounded-2xl space-y-1.5 transition-all ${
+                              item.isGift 
+                                ? 'bg-emerald-950/25 border-emerald-500/40' 
+                                : 'bg-slate-950/70 border-slate-800/90'
+                            }`}>
                               <div className="flex justify-between items-start">
-                                <div>
-                                  <p className="font-bold text-slate-200 text-sm">{item.productName}</p>
+                                <div className="space-y-1">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <p className="font-bold text-slate-200 text-sm">{item.productName}</p>
+                                    {item.isGift && (
+                                      <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                                        <Gift size={10} /> BRINDE ({
+                                          item.giftReason === 'falta_pedido_anterior' ? 'Falta anterior' :
+                                          item.giftReason === 'fidelidade_cliente' ? 'Fidelidade' :
+                                          item.giftReason === 'atraso_preparo' ? 'Atraso' :
+                                          item.giftReason === 'cortesia_casa' ? 'Cortesia' : 'Outro'
+                                        })
+                                      </span>
+                                    )}
+                                  </div>
                                   {item.combo && (
                                     <p className="text-[11px] text-amber-400 font-semibold">
                                       + {item.combo}
@@ -1002,21 +1105,55 @@ export default function CaixaPage() {
                                       + {item.additionals.map(a => a.name).join(', ')}
                                     </p>
                                   )}
+                                  {item.giftNotes && (
+                                    <p className="text-[10px] text-emerald-300 bg-emerald-950/50 px-2 py-0.5 rounded-md inline-block">
+                                      Motivo: {item.giftNotes}
+                                    </p>
+                                  )}
                                   {item.notes && (
-                                    <p className="text-[10px] italic text-slate-400 bg-slate-900 px-2 py-0.5 rounded-md mt-1 inline-block">
+                                    <p className="text-[10px] italic text-slate-400 bg-slate-900 px-2 py-0.5 rounded-md inline-block">
                                       Obs: {item.notes}
                                     </p>
                                   )}
                                 </div>
-                                <span className="font-mono font-bold text-emerald-400 text-sm">
-                                  R$ {(item.unitPrice * item.quantity).toFixed(2)}
-                                </span>
+                                <div className="text-right font-mono">
+                                  {item.isGift ? (
+                                    <div>
+                                      <span className="line-through text-slate-500 text-xs block">
+                                        R$ {((item.originalPrice || 0) * item.quantity).toFixed(2)}
+                                      </span>
+                                      <span className="font-black text-emerald-400 text-sm">
+                                        R$ 0,00
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span className="font-bold text-emerald-400 text-sm">
+                                      R$ {(item.unitPrice * item.quantity).toFixed(2)}
+                                    </span>
+                                  )}
+                                </div>
                               </div>
 
                               <div className="flex justify-between items-center pt-1 border-t border-slate-900">
-                                <span className="text-xs text-slate-500 font-mono">
-                                  R$ {item.unitPrice.toFixed(2)} un
-                                </span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-slate-500 font-mono">
+                                    {item.isGift ? 'Cortesia' : `R$ ${item.unitPrice.toFixed(2)} un`}
+                                  </span>
+                                  {/* Botão de Conceder / Gerenciar Brinde */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenGiftModal(idx)}
+                                    className={`px-2 py-0.5 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-all cursor-pointer ${
+                                      item.isGift
+                                        ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30'
+                                        : 'bg-slate-900 text-slate-400 hover:text-emerald-400 border border-slate-800'
+                                    }`}
+                                    title={item.isGift ? 'Clique para remover ou editar brinde' : 'Marcar este item como Brinde / Cortesia'}
+                                  >
+                                    <Gift size={11} /> {item.isGift ? 'Remover Brinde' : 'Dar como Brinde'}
+                                  </button>
+                                </div>
+
                                 <div className="flex items-center gap-2">
                                   <div className="flex items-center gap-1.5 bg-slate-900 rounded-lg p-1">
                                     <button onClick={() => updateCartQty(idx, -1)} className="text-slate-400 hover:text-white p-1 cursor-pointer">
@@ -1040,11 +1177,155 @@ export default function CaixaPage() {
 
                     {/* Finalização da Venda */}
                     <div className="pt-4 border-t border-slate-800 space-y-3">
-                      <div className="flex justify-between items-center">
-                        <span className="text-slate-400 text-sm font-bold">Total do Pedido:</span>
-                        <span className="text-2xl font-mono font-extrabold text-emerald-400">
-                          R$ {cartTotal.toFixed(2)}
-                        </span>
+                      
+                      {/* Controles Financeiros: Taxa de Entrega, Desconto e Cupom Loja */}
+                      <div className="space-y-2">
+                        
+                        {/* Taxa de Entrega (se Delivery ou iFood) */}
+                        {(orderType === 'delivery' || saleChannel === 'ifood') && (
+                          <div className="bg-slate-950/60 p-2.5 rounded-2xl border border-slate-800/80 space-y-1">
+                            <div className="flex justify-between items-center text-xs">
+                              <span className="font-bold text-slate-300 flex items-center gap-1.5">
+                                <Truck size={13} className="text-blue-400" /> Taxa de Entrega:
+                              </span>
+                              <div className="flex items-center gap-1">
+                                <span className="text-slate-500 font-mono text-xs">R$</span>
+                                <input
+                                  type="number"
+                                  step="0.50"
+                                  placeholder="0.00"
+                                  value={deliveryFeeInput}
+                                  onChange={e => setDeliveryFeeInput(e.target.value)}
+                                  className="w-20 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-right text-xs font-mono font-bold text-white outline-none focus:border-blue-500"
+                                />
+                              </div>
+                            </div>
+                            <div className="flex gap-1 justify-end">
+                              {[0, 5, 7, 10].map(val => (
+                                <button
+                                  key={val}
+                                  type="button"
+                                  onClick={() => setDeliveryFeeInput(val === 0 ? '' : val.toFixed(2))}
+                                  className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white rounded text-[10px] font-mono cursor-pointer"
+                                >
+                                  {val === 0 ? 'Grátis' : `R$ ${val}`}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Desconto no Pedido */}
+                        <div className="bg-slate-950/60 p-2.5 rounded-2xl border border-slate-800/80 space-y-1">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="font-bold text-slate-300 flex items-center gap-1.5">
+                              <Tag size={13} className="text-amber-400" /> Desconto (R$ ou %):
+                            </span>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="text"
+                                placeholder="Ex: 5 ou 10%"
+                                value={discountInput}
+                                onChange={e => setDiscountInput(e.target.value)}
+                                className="w-24 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-right text-xs font-mono font-bold text-amber-300 outline-none focus:border-amber-500"
+                              />
+                            </div>
+                          </div>
+                          <div className="flex gap-1 justify-end">
+                            {['R$ 5', 'R$ 10', '5%', '10%'].map(val => (
+                              <button
+                                key={val}
+                                type="button"
+                                onClick={() => setDiscountInput(val.replace('R$ ', ''))}
+                                className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-white rounded text-[10px] font-mono cursor-pointer"
+                              >
+                                {val}
+                              </button>
+                            ))}
+                            {discountInput && (
+                              <button
+                                type="button"
+                                onClick={() => setDiscountInput('')}
+                                className="px-1.5 py-0.5 text-red-400 text-[10px] hover:underline cursor-pointer"
+                              >
+                                Limpar
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Declaração de Cupom iFood Custeado pela Loja */}
+                        {saleChannel === 'ifood' && (
+                          <div className="bg-red-950/20 p-2.5 rounded-2xl border border-red-500/30 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-red-200">
+                                <input
+                                  type="checkbox"
+                                  checked={hasStoreCoupon}
+                                  onChange={e => setHasStoreCoupon(e.target.checked)}
+                                  className="rounded border-red-500 accent-red-600"
+                                />
+                                <span>Cupom pago pela Loja? (Ex: Hits)</span>
+                              </label>
+                              {hasStoreCoupon && (
+                                <div className="flex items-center gap-1">
+                                  <span className="text-red-400 font-mono text-xs font-bold">-R$</span>
+                                  <input
+                                    type="number"
+                                    step="1"
+                                    value={storeCouponInput}
+                                    onChange={e => setStoreCouponInput(e.target.value)}
+                                    className="w-16 bg-slate-900 border border-red-500/50 rounded-lg px-1.5 py-0.5 text-right text-xs font-mono font-black text-red-400 outline-none"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                            {hasStoreCoupon && (
+                              <div className="flex gap-1 justify-end">
+                                {[5, 10, 12, 15].map(v => (
+                                  <button
+                                    key={v}
+                                    type="button"
+                                    onClick={() => setStoreCouponInput(v.toFixed(2))}
+                                    className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold cursor-pointer ${
+                                      parseFloat(storeCouponInput) === v 
+                                        ? 'bg-red-600 text-white' 
+                                        : 'bg-slate-900 text-red-300 hover:bg-slate-800'
+                                    }`}
+                                  >
+                                    R$ {v}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Resumo Discriminado de Valores */}
+                      <div className="space-y-1 text-xs pt-1 border-t border-slate-800/80">
+                        <div className="flex justify-between text-slate-400">
+                          <span>Subtotal Itens:</span>
+                          <span className="font-mono text-slate-200">R$ {cartSubtotal.toFixed(2)}</span>
+                        </div>
+                        {discountAmount > 0 && (
+                          <div className="flex justify-between text-amber-400 font-semibold">
+                            <span>Desconto Concedido:</span>
+                            <span className="font-mono">- R$ {discountAmount.toFixed(2)}</span>
+                          </div>
+                        )}
+                        {deliveryFeeAmount > 0 && (
+                          <div className="flex justify-between text-blue-400 font-semibold">
+                            <span>Taxa de Entrega:</span>
+                            <span className="font-mono">+ R$ {deliveryFeeAmount.toFixed(2)}</span>
+                          </div>
+                        )}
+                        <div className="flex justify-between items-center pt-2 border-t border-slate-800">
+                          <span className="text-slate-300 text-sm font-bold">Total a Pagar:</span>
+                          <span className="text-2xl font-mono font-extrabold text-emerald-400">
+                            R$ {cartTotal.toFixed(2)}
+                          </span>
+                        </div>
                       </div>
 
                       <div className="space-y-1.5">
@@ -1968,6 +2249,95 @@ export default function CaixaPage() {
                   className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider cursor-pointer transition-all shadow-md"
                 >
                   Concluir & Sair
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE CONCESSÃO DE BRINDE / CORTESIA */}
+        {giftModalItemIndex !== null && cart[giftModalItemIndex] && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-emerald-500/40 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl animate-fade-in space-y-5">
+              <div className="flex items-center gap-3 text-emerald-400">
+                <div className="p-3 bg-emerald-500/10 rounded-2xl border border-emerald-500/20">
+                  <Gift size={28} />
+                </div>
+                <div>
+                  <h3 className="text-xl font-black text-white">Conceder como Brinde</h3>
+                  <p className="text-xs text-slate-400">O valor será zerado para o cliente e auditado pela gerência.</p>
+                </div>
+              </div>
+
+              {/* Detalhes do Produto */}
+              <div className="bg-slate-950/70 p-4 rounded-2xl border border-slate-800 space-y-1 text-xs">
+                <span className="text-slate-500">Item Selecionado:</span>
+                <div className="flex justify-between items-center">
+                  <p className="text-white font-bold text-sm">{cart[giftModalItemIndex].productName}</p>
+                  <span className="font-mono text-emerald-400 font-bold">
+                    R$ {((cart[giftModalItemIndex].originalPrice || cart[giftModalItemIndex].unitPrice) * cart[giftModalItemIndex].quantity).toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Motivo Obrigatório */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-300">
+                  Motivo da Concessão do Brinde <span className="text-emerald-400">*</span>
+                </label>
+                <div className="space-y-1.5">
+                  {[
+                    { id: 'falta_pedido_anterior', label: '🍟 Falta / Esquecimento no pedido anterior', desc: 'Ex: batata esquecida que o cliente combinou de receber hoje' },
+                    { id: 'fidelidade_cliente', label: '⭐ Fidelidade / Excelente cliente', desc: 'Mimo de relacionamento para cliente assíduo' },
+                    { id: 'atraso_preparo', label: '⏱️ Atraso no preparo / Atendimento', desc: 'Compensação por demora na cozinha ou entrega' },
+                    { id: 'cortesia_casa', label: '🎁 Cortesia da casa / Degustação', desc: 'Amigo da casa, degustação ou parceiro' },
+                    { id: 'outro', label: '📝 Outro motivo', desc: 'Especifique nas observações' },
+                  ].map(opt => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      onClick={() => setSelectedGiftReason(opt.id as GiftReason)}
+                      className={`w-full text-left p-2.5 rounded-xl border transition-all cursor-pointer ${
+                        selectedGiftReason === opt.id
+                          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-200 shadow-md font-bold'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <div className="text-xs font-bold">{opt.label}</div>
+                      <div className="text-[10px] text-slate-500">{opt.desc}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Observação Opcional */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Observações Adicionais (opcional)
+                </label>
+                <input
+                  type="text"
+                  value={giftNotesInput}
+                  onChange={e => setGiftNotesInput(e.target.value)}
+                  placeholder="Ex: Cliente Lucas avisou pelo WhatsApp sobre o pedido de ontem..."
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white text-xs outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setGiftModalItemIndex(null)}
+                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer transition-all"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmGift}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 cursor-pointer transition-all"
+                >
+                  Confirmar Brinde
                 </button>
               </div>
             </div>
