@@ -48,12 +48,38 @@ export interface Sale {
   status: 'completed' | 'cancelled';
 }
 
+// === CAIXA EM NUVEM ===
 export interface CashMovement {
   id: string;
   type: 'sangria' | 'suprimento';
   amount: number;
   description: string;
   date: string;
+}
+
+export interface CashSession {
+  id: string;
+  status: 'open' | 'closed';
+  initialAmount: number;
+  finalAmount?: number;
+  openedBy: string;
+  closedBy?: string;
+  openedAt: string;
+  closedAt?: string;
+}
+
+// === REGISTRO DE PERDAS (COZINHA) ===
+export interface WasteRecord {
+  id: string;
+  ingredientId: string;
+  ingredientName: string;
+  quantity: number;
+  unit: string;
+  costAtTime: number;
+  totalLoss: number;
+  reason: string;
+  responsibleName: string;
+  createdAt: string;
 }
 
 // === CHECKLIST DE COZINHA ===
@@ -84,10 +110,14 @@ export function useInventory() {
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   
-  // Caixa State
+  // Caixa State (em Nuvem)
   const [isOpen, setIsOpen] = useState(false);
+  const [activeCashSession, setActiveCashSession] = useState<CashSession | null>(null);
   const [sales, setSales] = useState<Sale[]>([]);
   const [movements, setMovements] = useState<CashMovement[]>([]);
+
+  // Perdas State (em Nuvem)
+  const [wasteRecords, setWasteRecords] = useState<WasteRecord[]>([]);
 
   // Checklist State
   const [checklist, setChecklist] = useState<DailyChecklist | null>(null);
@@ -102,7 +132,9 @@ export function useInventory() {
       if (invData) {
         setItems(invData.map(i => ({
           id: i.id, name: i.name, category: i.category, unit: i.unit, 
-          costPerUnit: i.cost_per_unit, currentStock: i.current_stock, status: i.status
+          costPerUnit: Number(i.cost_per_unit) || 0, 
+          currentStock: Number(i.current_stock) || 0, 
+          status: i.status
         })));
       }
 
@@ -113,10 +145,11 @@ export function useInventory() {
       if (prodData) {
         setProducts(prodData.map(p => ({
           id: p.id, name: p.name, category: p.category, 
-          priceBalcao: p.price_balcao, priceIfood: p.price_ifood,
+          priceBalcao: Number(p.price_balcao) || 0, 
+          priceIfood: Number(p.price_ifood) || 0,
           recipe: (recData || []).filter(r => r.product_id === p.id).map(r => ({
             ingredientId: r.ingredient_id,
-            quantity: r.quantity
+            quantity: Number(r.quantity) || 0
           }))
         })));
       }
@@ -127,21 +160,93 @@ export function useInventory() {
       
       if (salesData) {
         setSales(salesData.map(s => ({
-          id: s.id, channel: s.channel, total: s.total, paymentMethod: s.payment_method, 
+          id: s.id, channel: s.channel, total: Number(s.total) || 0, paymentMethod: s.payment_method, 
           date: s.created_at, status: s.status,
           items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
-            productId: i.product_id, productName: i.product_name, quantity: i.quantity, unitPrice: i.unit_price
+            productId: i.product_id, productName: i.product_name, 
+            quantity: Number(i.quantity) || 0, 
+            unitPrice: Number(i.unit_price) || 0
           }))
         })));
       }
 
-      // Caixa Status (still local storage since it's device specific usually, or we could use a DB table)
-      const storedCaixa = localStorage.getItem('hum_vicio_caixa_status_v2');
-      if (storedCaixa) setIsOpen(JSON.parse(storedCaixa));
+      // 4. Fetch Caixa Ativo (Sessão de Caixa em Nuvem)
+      try {
+        const { data: sessData } = await supabase
+          .from('cash_sessions')
+          .select('*')
+          .eq('status', 'open')
+          .order('opened_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-      // 4. Fetch Daily Checklist & All Checklists
-      const today = new Date().toLocaleDateString('en-CA'); // format YYYY-MM-DD
-      
+        if (sessData) {
+          setActiveCashSession({
+            id: sessData.id,
+            status: sessData.status,
+            initialAmount: Number(sessData.initial_amount) || 0,
+            finalAmount: sessData.final_amount ? Number(sessData.final_amount) : undefined,
+            openedBy: sessData.opened_by,
+            closedBy: sessData.closed_by,
+            openedAt: sessData.opened_at,
+            closedAt: sessData.closed_at
+          });
+          setIsOpen(true);
+        } else {
+          setActiveCashSession(null);
+          setIsOpen(false);
+        }
+      } catch (err) {
+        console.warn('Tabela cash_sessions ainda não criada:', err);
+      }
+
+      // 5. Fetch Movimentações de Caixa (Sangrias / Suprimentos)
+      try {
+        const { data: movData } = await supabase
+          .from('cash_movements')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (movData) {
+          setMovements(movData.map(m => ({
+            id: m.id,
+            type: m.type,
+            amount: Number(m.amount) || 0,
+            description: m.description,
+            date: m.created_at
+          })));
+        }
+      } catch (err) {
+        console.warn('Tabela cash_movements ainda não criada:', err);
+      }
+
+      // 6. Fetch Perdas / Desperdícios (Cozinha)
+      try {
+        const { data: wasteData } = await supabase
+          .from('waste_records')
+          .select('*')
+          .order('created_at', { ascending: false });
+
+        if (wasteData) {
+          setWasteRecords(wasteData.map(w => ({
+            id: w.id,
+            ingredientId: w.ingredient_id,
+            ingredientName: w.ingredient_name,
+            quantity: Number(w.quantity) || 0,
+            unit: w.unit,
+            costAtTime: Number(w.cost_at_time) || 0,
+            totalLoss: Number(w.total_loss) || 0,
+            reason: w.reason,
+            responsibleName: w.responsible_name,
+            createdAt: w.created_at
+          })));
+        }
+      } catch (err) {
+        console.warn('Tabela waste_records ainda não criada:', err);
+      }
+
+      // 7. Fetch Daily Checklist & All Checklists
+      const today = new Date().toLocaleDateString('en-CA'); // YYYY-MM-DD
       const { data: allChecks } = await supabase.from('kitchen_checklists').select('*').order('date', { ascending: false });
       
       if (allChecks) {
@@ -215,9 +320,63 @@ export function useInventory() {
 
   const registerPurchase = async (id: string, quantity: number, newCost: number) => {
     const item = items.find(i => i.id === id);
-    if(item) {
+    if (item) {
       await updateInventoryItem(id, { currentStock: item.currentStock + quantity, costPerUnit: newCost, status: 'ok' });
     }
+  };
+
+  // --- PERDAS / DESPERDÍCIO (COZINHA) ---
+  const registerWaste = async (ingredientId: string, quantity: number, reason: string, responsibleName: string) => {
+    const ing = items.find(i => i.id === ingredientId);
+    if (!ing) return { success: false, error: 'Insumo não encontrado no cadastro.' };
+
+    const costAtTime = ing.costPerUnit;
+    const totalLoss = costAtTime * quantity;
+
+    try {
+      // 1. Inserir registro na tabela waste_records
+      const { data: wData, error: wErr } = await supabase.from('waste_records').insert({
+        ingredient_id: ingredientId,
+        ingredient_name: ing.name,
+        quantity,
+        unit: ing.unit,
+        cost_at_time: costAtTime,
+        total_loss: totalLoss,
+        reason,
+        responsible_name: responsibleName
+      }).select().single();
+
+      if (wErr) {
+        console.error('Erro ao registrar perda:', wErr);
+        // Fallback local se a tabela ainda não foi criada
+      }
+
+      // 2. Abater estoque do insumo no banco e localmente
+      const newStock = Math.max(0, ing.currentStock - quantity);
+      await updateInventoryItem(ingredientId, { currentStock: newStock });
+
+      const newRecord: WasteRecord = {
+        id: wData ? wData.id : Math.random().toString(36).substring(2, 9),
+        ingredientId,
+        ingredientName: ing.name,
+        quantity,
+        unit: ing.unit,
+        costAtTime,
+        totalLoss,
+        reason,
+        responsibleName,
+        createdAt: wData ? wData.created_at : new Date().toISOString()
+      };
+
+      setWasteRecords([newRecord, ...wasteRecords]);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  };
+
+  const getTotalWasteCost = () => {
+    return wasteRecords.reduce((acc, w) => acc + (w.totalLoss || 0), 0);
   };
 
   // --- PRODUTOS ACTIONS ---
@@ -238,13 +397,11 @@ export function useInventory() {
   };
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
-    // Update product table
     await supabase.from('products').update({
       name: updates.name, category: updates.category, 
       price_balcao: updates.priceBalcao, price_ifood: updates.priceIfood
     }).eq('id', id);
 
-    // Update recipe (delete old, insert new)
     if (updates.recipe) {
       await supabase.from('recipes').delete().eq('product_id', id);
       if (updates.recipe.length > 0) {
@@ -271,10 +428,78 @@ export function useInventory() {
     }, 0);
   };
 
-  // --- CAIXA ACTIONS ---
+  // Cálculo de CMV Real Somando todas as Fichas Técnicas dos Lanches Vendidos
+  const getRealSalesCmv = () => {
+    const completedSales = sales.filter(s => s.status === 'completed');
+    let totalCmv = 0;
+    
+    completedSales.forEach(sale => {
+      if (sale.items && sale.items.length > 0) {
+        sale.items.forEach(item => {
+          const product = products.find(p => p.id === item.productId);
+          if (product && product.recipe && product.recipe.length > 0) {
+            totalCmv += getProductCmv(product.recipe) * item.quantity;
+          } else {
+            // Fallback: 30% caso o produto ainda não tenha ficha técnica cadastrada
+            totalCmv += (item.unitPrice * 0.30) * item.quantity;
+          }
+        });
+      } else {
+        totalCmv += sale.total * 0.30;
+      }
+    });
+
+    return totalCmv;
+  };
+
+  // --- CAIXA ACTIONS (EM NUVEM) ---
+  const openCaixa = async (initialAmount: number, operatorName: string) => {
+    try {
+      const { data, error } = await supabase.from('cash_sessions').insert({
+        status: 'open',
+        initial_amount: initialAmount,
+        opened_by: operatorName,
+        opened_at: new Date().toISOString()
+      }).select().single();
+
+      if (data) {
+        setActiveCashSession({
+          id: data.id,
+          status: 'open',
+          initialAmount: Number(data.initial_amount),
+          openedBy: data.opened_by,
+          openedAt: data.opened_at
+        });
+      }
+      setIsOpen(true);
+    } catch {
+      setIsOpen(true);
+    }
+  };
+
+  const closeCaixa = async (finalAmount: number, operatorName: string) => {
+    if (activeCashSession) {
+      try {
+        await supabase.from('cash_sessions').update({
+          status: 'closed',
+          final_amount: finalAmount,
+          closed_by: operatorName,
+          closed_at: new Date().toISOString()
+        }).eq('id', activeCashSession.id);
+      } catch (err) {
+        console.error('Erro ao fechar caixa no banco:', err);
+      }
+    }
+    setActiveCashSession(null);
+    setIsOpen(false);
+  };
+
   const toggleCaixa = (status: boolean) => {
-    setIsOpen(status);
-    localStorage.setItem('hum_vicio_caixa_status_v2', JSON.stringify(status));
+    if (status) {
+      openCaixa(0, 'Operador');
+    } else {
+      closeCaixa(0, 'Operador');
+    }
   };
 
   const addSale = async (sale: Omit<Sale, 'id' | 'date' | 'status'>) => {
@@ -291,7 +516,6 @@ export function useInventory() {
         await supabase.from('sale_items').insert(saleItems);
         
         // Simular o trigger localmente para refletir na UI imediatamente
-        // O trigger no DB já fará isso no backend.
         const newItems = [...items];
         sale.items.forEach(si => {
           const prod = products.find(p => p.id === si.productId);
@@ -319,20 +543,58 @@ export function useInventory() {
 
   const cancelSale = async (id: string) => {
     await supabase.from('sales').update({ status: 'cancelled' }).eq('id', id);
+    
+    // Estornar estoque localmente
+    const saleToCancel = sales.find(s => s.id === id);
+    if (saleToCancel && saleToCancel.items) {
+      const restoredItems = [...items];
+      saleToCancel.items.forEach(si => {
+        const prod = products.find(p => p.id === si.productId);
+        if (prod) {
+          prod.recipe.forEach(r => {
+            const invIdx = restoredItems.findIndex(inv => inv.id === r.ingredientId);
+            if (invIdx > -1) {
+              restoredItems[invIdx] = { 
+                ...restoredItems[invIdx], 
+                currentStock: restoredItems[invIdx].currentStock + (r.quantity * si.quantity) 
+              };
+            }
+          });
+        }
+      });
+      setItems(restoredItems);
+    }
+
     setSales(sales.map(s => s.id === id ? { ...s, status: 'cancelled' } : s));
   };
 
-  const addMovement = (mov: Omit<CashMovement, 'id' | 'date'>) => {
-    // Para simplificar, movimentos de caixa mantive em localstorage por agora
-    // (idealmente criaria uma tabela 'cash_movements')
-    const newMov: CashMovement = {
-      ...mov,
-      id: Math.random().toString(36).substr(2, 9),
-      date: new Date().toISOString()
-    };
-    const newMovs = [newMov, ...movements];
-    setMovements(newMovs);
-    localStorage.setItem('hum_vicio_movements_v2', JSON.stringify(newMovs));
+  const addMovement = async (mov: Omit<CashMovement, 'id' | 'date'>) => {
+    try {
+      const { data } = await supabase.from('cash_movements').insert({
+        type: mov.type,
+        amount: mov.amount,
+        description: mov.description
+      }).select().single();
+
+      const newMov: CashMovement = {
+        id: data ? data.id : Math.random().toString(36).substr(2, 9),
+        type: mov.type,
+        amount: mov.amount,
+        description: mov.description,
+        date: data ? data.created_at : new Date().toISOString()
+      };
+
+      setMovements([newMov, ...movements]);
+    } catch {
+      const fallbackMov: CashMovement = {
+        id: Math.random().toString(36).substr(2, 9),
+        type: mov.type,
+        amount: mov.amount,
+        description: mov.description,
+        date: new Date().toISOString()
+      };
+      setMovements([fallbackMov, ...movements]);
+    }
   };
 
   // --- CHECKLIST ACTIONS ---
@@ -370,10 +632,11 @@ export function useInventory() {
 
   return { 
     items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
-    products, addProduct, updateProduct, removeProduct, getProductCmv,
-    isLoaded, isOpen, toggleCaixa,
+    products, addProduct, updateProduct, removeProduct, getProductCmv, getRealSalesCmv,
+    isLoaded, isOpen, activeCashSession, openCaixa, closeCaixa, toggleCaixa,
     sales, addSale, cancelSale,
     movements, addMovement,
+    wasteRecords, registerWaste, getTotalWasteCost,
     checklist, toggleChecklistTask, signChecklist, allChecklists
   };
 }
