@@ -94,7 +94,7 @@ export default function ReceiptModal({ sale, onClose }: ReceiptModalProps) {
               /* --- VIA DA COZINHA --- */
               <div className="space-y-3">
                 <div className="text-center border-b-2 border-dashed border-black pb-3">
-                  <h3 className="font-extrabold text-lg uppercase tracking-wider">HUM VÍCIO BURGER</h3>
+                  <h3 className="font-extrabold text-lg uppercase tracking-wider">HUM VÍCIO HAMBURGUERIA</h3>
                   <p className="font-bold text-sm bg-black text-white px-2 py-0.5 mt-1 inline-block uppercase">
                     VIA DE PRODUÇÃO (CHAPA)
                   </p>
@@ -146,7 +146,7 @@ export default function ReceiptModal({ sale, onClose }: ReceiptModalProps) {
               /* --- VIA DO CLIENTE --- */
               <div className="space-y-3">
                 <div className="text-center border-b-2 border-dashed border-black pb-3">
-                  <h3 className="font-extrabold text-lg uppercase tracking-wider">HUM VÍCIO BURGER</h3>
+                  <h3 className="font-extrabold text-lg uppercase tracking-wider">HUM VÍCIO HAMBURGUERIA</h3>
                   <p className="text-[10px]">CUPOM NÃO FISCAL DE CONFERÊNCIA</p>
                   <p className="text-xs font-bold mt-1">PEDIDO #{sale.id.slice(0, 6).toUpperCase()}</p>
                   {sale.orderType && (
@@ -198,13 +198,22 @@ export default function ReceiptModal({ sale, onClose }: ReceiptModalProps) {
                   </div>
                   <div className="flex justify-between text-[11px]">
                     <span>FORMA DE PAGAMENTO:</span>
-                    <span className="uppercase font-bold">{sale.paymentMethod}</span>
+                    <span className="uppercase font-bold">
+                      {sale.paymentMethod === 'ifood_online' 
+                        ? 'iFood Online (App)' 
+                        : sale.paymentMethod === 'ifood_entrega' 
+                          ? 'iFood na Entrega' 
+                          : sale.paymentMethod}
+                    </span>
                   </div>
                 </div>
 
-                <div className="text-center text-[10px] pt-2">
-                  <p className="font-bold">Obrigado pela preferência!</p>
-                  <p>Volte Sempre ao Hum Vício Burger 🍔</p>
+                {/* Rodapé com Razão Social e CNPJ Solicitados */}
+                <div className="text-center text-[10px] pt-2 border-t border-dashed border-black mt-2 space-y-0.5">
+                  <p className="font-bold text-xs uppercase tracking-wider">HUM VÍCIO HAMBURGUERIA</p>
+                  <p className="font-bold text-[11px]">CNPJ: 32.588.610/0001-44</p>
+                  <p className="pt-1 font-semibold">Obrigado pela preferência!</p>
+                  <p>Volte Sempre ao Hum Vício! 🍔</p>
                 </div>
               </div>
             )}

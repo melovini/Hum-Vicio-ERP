@@ -185,7 +185,7 @@ export default function FornecedoresPage() {
           {filteredSuppliers.map(sup => {
             const rawPhone = sup.phone.replace(/\D/g, '');
             const whatsappUrl = rawPhone 
-              ? `https://wa.me/55${rawPhone}?text=Olá%20${encodeURIComponent(sup.contactName || sup.name)},%20gostaria%20de%20fazer%20um%20pedido%20para%20o%20Hum%20Vício%20Burger.`
+              ? `https://wa.me/55${rawPhone}?text=Olá%20${encodeURIComponent(sup.contactName || sup.name)},%20gostaria%20de%20fazer%20um%20pedido%20para%20o%20Hum%20Vício%20Hamburgueria.`
               : null;
 
             return (
