@@ -99,15 +99,37 @@ export default function ReceiptModal({ sale, onClose }: ReceiptModalProps) {
                     VIA DE PRODUÇÃO (CHAPA)
                   </p>
                   <p className="text-xs mt-1">PEDIDO #{sale.id.slice(0, 6).toUpperCase()} • {sale.channel.toUpperCase()}</p>
-                  <p className="text-[11px]">{formattedDate} - {formattedTime}</p>
+                  {sale.customerName && (
+                    <p className="text-sm font-black mt-1 bg-black text-white px-2 py-0.5 inline-block uppercase">
+                      CLIENTE: {sale.customerName}
+                    </p>
+                  )}
+                  <p className="text-[11px] mt-1">{formattedDate} - {formattedTime}</p>
                 </div>
 
                 <div className="py-2 border-b-2 border-dashed border-black">
                   <p className="font-bold mb-2 uppercase text-xs">ITENS DO PEDIDO:</p>
-                  <div className="space-y-2 text-sm">
+                  <div className="space-y-3 text-sm">
                     {sale.items.map((item, idx) => (
-                      <div key={idx} className="flex justify-between items-start font-bold">
-                        <span className="text-base">[{item.quantity}x] {item.productName}</span>
+                      <div key={idx} className="border-b border-dashed border-black/50 pb-2 last:border-0">
+                        <div className="flex justify-between items-start font-bold">
+                          <span className="text-base">[{item.quantity}x] {item.productName}</span>
+                        </div>
+                        {item.combo && (
+                          <p className="text-xs font-bold pl-3">
+                            + {item.combo.toUpperCase()}
+                          </p>
+                        )}
+                        {item.additionals && item.additionals.length > 0 && (
+                          <p className="text-xs font-bold pl-3">
+                            + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
+                          </p>
+                        )}
+                        {item.notes && (
+                          <p className="text-xs font-black bg-black text-white px-1.5 py-0.5 mt-1 ml-2 inline-block">
+                            *** OBS: {item.notes.toUpperCase()} ***
+                          </p>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -124,19 +146,39 @@ export default function ReceiptModal({ sale, onClose }: ReceiptModalProps) {
                   <h3 className="font-extrabold text-lg uppercase tracking-wider">HUM VÍCIO BURGER</h3>
                   <p className="text-[10px]">CUPOM NÃO FISCAL DE CONFERÊNCIA</p>
                   <p className="text-xs font-bold mt-1">PEDIDO #{sale.id.slice(0, 6).toUpperCase()}</p>
+                  {sale.customerName && (
+                    <p className="text-xs font-bold uppercase mt-0.5">Cliente: {sale.customerName}</p>
+                  )}
                   <p className="text-[11px]">{formattedDate} às {formattedTime}</p>
                   <p className="text-[11px] font-bold">Canal: {sale.channel.toUpperCase()}</p>
                 </div>
 
-                <div className="py-2 border-b-2 border-dashed border-black space-y-1">
+                <div className="py-2 border-b-2 border-dashed border-black space-y-2">
                   <div className="flex justify-between font-bold text-[11px] border-b border-black pb-1 mb-1">
                     <span>ITEM</span>
                     <span>QTD x VALOR</span>
                   </div>
                   {sale.items.map((item, idx) => (
-                    <div key={idx} className="flex justify-between items-start">
-                      <span className="font-bold">{item.productName}</span>
-                      <span>{item.quantity} x R$ {item.unitPrice.toFixed(2)}</span>
+                    <div key={idx} className="border-b border-dashed border-black/40 pb-1 last:border-0">
+                      <div className="flex justify-between items-start">
+                        <span className="font-bold">{item.productName}</span>
+                        <span>{item.quantity} x R$ {item.unitPrice.toFixed(2)}</span>
+                      </div>
+                      {item.combo && (
+                        <p className="text-[10px] text-slate-700 pl-2">
+                          + {item.combo}
+                        </p>
+                      )}
+                      {item.additionals && item.additionals.length > 0 && (
+                        <p className="text-[10px] text-slate-700 pl-2">
+                          + {item.additionals.map(a => a.name).join(', ')}
+                        </p>
+                      )}
+                      {item.notes && (
+                        <p className="text-[10px] italic pl-2">
+                          Obs: {item.notes}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>

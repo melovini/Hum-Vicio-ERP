@@ -40,14 +40,20 @@ export interface Product {
 
 // === VENDAS ===
 export interface SaleItem {
+  id?: string; // id único no carrinho
   productId: string;
   productName: string;
   quantity: number;
   unitPrice: number;
+  combo?: string;
+  comboPrice?: number;
+  additionals?: { name: string; price: number }[];
+  notes?: string;
 }
 
 export interface Sale {
   id: string;
+  customerName?: string;
   channel: 'balcao' | 'ifood';
   total: number;
   paymentMethod: string;
@@ -221,12 +227,22 @@ export function useInventory() {
       
       if (salesData) {
         setSales(salesData.map(s => ({
-          id: s.id, channel: s.channel, total: Number(s.total) || 0, paymentMethod: s.payment_method, 
-          date: s.created_at, status: s.status,
+          id: s.id, 
+          customerName: s.customer_name || 'Balcão',
+          channel: s.channel, 
+          total: Number(s.total) || 0, 
+          paymentMethod: s.payment_method, 
+          date: s.created_at, 
+          status: s.status,
           items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
-            productId: i.product_id, productName: i.product_name, 
+            id: i.id,
+            productId: i.product_id, 
+            productName: i.product_name, 
             quantity: Number(i.quantity) || 0, 
-            unitPrice: Number(i.unit_price) || 0
+            unitPrice: Number(i.unit_price) || 0,
+            combo: i.combo || undefined,
+            notes: i.notes || undefined,
+            additionals: Array.isArray(i.additionals) ? i.additionals : undefined
           }))
         })));
       }
@@ -839,16 +855,45 @@ export function useInventory() {
   };
 
   const addSale = async (sale: Omit<Sale, 'id' | 'date' | 'status'>) => {
-    const { data: sData } = await supabase.from('sales').insert({
-      channel: sale.channel, total: sale.total, payment_method: sale.paymentMethod
-    }).select().single();
+    let sData: any = null;
+    const payload: any = {
+      channel: sale.channel, 
+      total: sale.total, 
+      payment_method: sale.paymentMethod,
+      customer_name: sale.customerName || 'Balcão'
+    };
+
+    const { data, error } = await supabase.from('sales').insert(payload).select().single();
+    if (error) {
+      // Fallback seguro caso a coluna customer_name ainda não exista
+      const { data: retryData } = await supabase.from('sales').insert({
+        channel: sale.channel, 
+        total: sale.total, 
+        payment_method: sale.paymentMethod
+      }).select().single();
+      sData = retryData;
+    } else {
+      sData = data;
+    }
 
     if (sData) {
       if (sale.items && sale.items.length > 0) {
-        const saleItems = sale.items.map(i => ({
-          sale_id: sData.id, product_id: i.productId, product_name: i.productName,
-          quantity: i.quantity, unit_price: i.unitPrice
-        }));
+        const saleItems = sale.items.map(i => {
+          let displayName = i.productName;
+          if (i.combo) displayName += ` (${i.combo})`;
+          if (i.additionals && i.additionals.length > 0) {
+            displayName += ` + [${i.additionals.map(a => a.name).join(', ')}]`;
+          }
+          if (i.notes) displayName += ` *Obs: ${i.notes}*`;
+
+          return {
+            sale_id: sData.id, 
+            product_id: i.productId, 
+            product_name: displayName,
+            quantity: i.quantity, 
+            unit_price: i.unitPrice
+          };
+        });
         await supabase.from('sale_items').insert(saleItems);
         
         // Simular o trigger localmente para refletir na UI imediatamente
@@ -870,7 +915,8 @@ export function useInventory() {
       const newSaleLocal: Sale = {
         ...sale,
         id: sData.id,
-        date: sData.created_at,
+        customerName: sale.customerName || 'Balcão',
+        date: sData.created_at || new Date().toISOString(),
         status: 'completed'
       };
       setSales([newSaleLocal, ...sales]);
