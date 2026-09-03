@@ -755,6 +755,17 @@ export function useInventory() {
     }
   };
 
+  const removeSubRecipe = async (parentIngredientId: string) => {
+    try {
+      await supabase.from('sub_recipes').delete().eq('parent_ingredient_id', parentIngredientId);
+      await removeInventoryItem(parentIngredientId);
+      setSubRecipes(subRecipes.filter(s => s.parentIngredientId !== parentIngredientId));
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  };
+
   const getRealSalesCmv = () => {
     const completedSales = sales.filter(s => s.status === 'completed');
     let totalCmv = 0;
@@ -966,6 +977,6 @@ export function useInventory() {
     suppliers, addSupplier, updateSupplier, removeSupplier,
     purchaseRecords, recordPurchaseWithSupplier,
     stockAudits, saveStockAudit,
-    subRecipes, saveSubRecipe, getIngredientTrueCost
+    subRecipes, saveSubRecipe, removeSubRecipe, getIngredientTrueCost
   };
 }

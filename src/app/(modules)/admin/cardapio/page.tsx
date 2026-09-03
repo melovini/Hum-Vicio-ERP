@@ -10,7 +10,8 @@ import Link from 'next/link';
 export default function EngenhariaCardapioPage() {
   const { 
     items, products, addProduct, updateProduct, removeProduct, 
-    getProductCmv, isLoaded, subRecipes, saveSubRecipe, getIngredientTrueCost 
+    getProductCmv, isLoaded, subRecipes, saveSubRecipe, removeSubRecipe, 
+    getIngredientTrueCost, addInventoryItem 
   } = useInventory();
   
   const [activeTab, setActiveTab] = useState<'produtos' | 'subreceitas'>('produtos');
@@ -34,6 +35,9 @@ export default function EngenhariaCardapioPage() {
   const [selectedPrepId, setSelectedPrepId] = useState<string>('');
   const [subChildId, setSubChildId] = useState('');
   const [subChildQty, setSubChildQty] = useState('');
+  const [showNewSubModal, setShowNewSubModal] = useState(false);
+  const [newSubName, setNewSubName] = useState('');
+  const [newSubUnit, setNewSubUnit] = useState('kg');
 
   if (!isLoaded) return null;
 
@@ -123,6 +127,23 @@ export default function EngenhariaCardapioPage() {
         quantity: c.quantity
       }));
     await saveSubRecipe(activePrep.id, currentComponents);
+  };
+
+  const handleCreateSubRecipe = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newSubName.trim()) return;
+
+    await addInventoryItem({
+      name: newSubName.trim(),
+      category: 'Pré-preparos',
+      unit: newSubUnit,
+      costPerUnit: 0,
+      currentStock: 0,
+      status: 'ok'
+    });
+
+    setNewSubName('');
+    setShowNewSubModal(false);
   };
 
   const filteredProducts = products.filter(p => {
@@ -429,16 +450,25 @@ export default function EngenhariaCardapioPage() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
             {/* Lista de Pré-preparos à esquerda */}
             <div className="lg:col-span-4 space-y-3">
-              <h2 className="text-base font-bold text-slate-400 uppercase tracking-wider mb-2">
-                Pré-preparos Cadastrados
-              </h2>
+              <div className="flex justify-between items-center mb-2">
+                <h2 className="text-base font-bold text-slate-400 uppercase tracking-wider">
+                  Pré-preparos ({prepIngredients.length})
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowNewSubModal(true)}
+                  className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 transition-all cursor-pointer shadow-md shadow-purple-600/30"
+                >
+                  <Plus size={14} /> Nova Sub-Receita
+                </button>
+              </div>
 
               {prepIngredients.map(prep => {
                 const isSelected = activePrep?.id === prep.id;
                 const cost = getIngredientTrueCost(prep.id);
 
                 return (
-                  <button
+                  <div
                     key={prep.id}
                     onClick={() => setSelectedPrepId(prep.id)}
                     className={`w-full p-4 rounded-2xl border text-left transition-all cursor-pointer flex justify-between items-center ${
@@ -447,17 +477,38 @@ export default function EngenhariaCardapioPage() {
                         : 'bg-slate-900/60 border-slate-800 text-slate-400 hover:bg-slate-800'
                     }`}
                   >
-                    <div>
+                    <div className="flex-1 pr-2">
                       <p className="font-bold text-sm text-slate-200">{prep.name}</p>
                       <p className="text-xs text-slate-500">Unidade: {prep.unit}</p>
                     </div>
-                    <div className="text-right">
-                      <span className="text-[10px] text-slate-500 block">Custo Calculado</span>
-                      <span className="font-mono font-bold text-amber-400 text-sm">R$ {cost.toFixed(2)}</span>
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-500 block">Custo Calculado</span>
+                        <span className="font-mono font-bold text-amber-400 text-sm">R$ {cost.toFixed(2)}</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (confirm(`Deseja realmente excluir a sub-receita "${prep.name}" e toda a sua fórmula?`)) {
+                            removeSubRecipe(prep.id);
+                            if (activePrep?.id === prep.id) {
+                              setSelectedPrepId('');
+                            }
+                          }
+                        }}
+                        className="p-2 text-slate-500 hover:text-red-400 rounded-xl hover:bg-slate-800 transition-all cursor-pointer"
+                        title="Excluir esta sub-receita"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
-                  </button>
+                  </div>
                 );
               })}
+              {prepIngredients.length === 0 && (
+                <p className="text-slate-500 text-xs text-center py-6">Nenhum pré-preparo cadastrado.</p>
+              )}
             </div>
 
             {/* Editor da Sub-Receita Selecionada */}
@@ -522,7 +573,22 @@ export default function EngenhariaCardapioPage() {
 
                   {/* Lista de Componentes da Sub-Receita */}
                   <div className="space-y-3">
-                    <h3 className="text-xs text-slate-400 font-bold uppercase">Componentes da Fórmula:</h3>
+                    <div className="flex justify-between items-center">
+                      <h3 className="text-xs text-slate-400 font-bold uppercase">Componentes da Fórmula:</h3>
+                      {currentSubItems.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (confirm(`Deseja limpar todos os ingredientes da fórmula de "${activePrep.name}"?`)) {
+                              await saveSubRecipe(activePrep.id, []);
+                            }
+                          }}
+                          className="text-xs text-red-400 hover:text-red-300 font-semibold cursor-pointer underline"
+                        >
+                          Limpar fórmula inteira
+                        </button>
+                      )}
+                    </div>
                     {currentSubItems.map((c, idx) => {
                       const childIng = items.find(i => i.id === c.childIngredientId);
                       const cost = childIng ? getIngredientTrueCost(childIng.id) : 0;
@@ -559,6 +625,65 @@ export default function EngenhariaCardapioPage() {
                   Selecione um pré-preparo à esquerda para ver sua composição.
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Modal Nova Sub-Receita */}
+        {showNewSubModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl animate-fade-in">
+              <div className="flex justify-between items-center mb-4 pb-2 border-b border-slate-800">
+                <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                  <FlaskConical size={20} className="text-purple-400" /> Nova Sub-Receita / Pré-Preparo
+                </h2>
+                <button onClick={() => setShowNewSubModal(false)} className="text-slate-400 hover:text-white p-1 cursor-pointer">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateSubRecipe} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">Nome da Sub-Receita / Molho</label>
+                  <input 
+                    type="text" 
+                    required 
+                    placeholder="Ex: Molho Especial de Alho" 
+                    value={newSubName} 
+                    onChange={e => setNewSubName(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white outline-none focus:border-purple-500 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-300 mb-1">Unidade de Medida Produzida</label>
+                  <select 
+                    value={newSubUnit} 
+                    onChange={e => setNewSubUnit(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-slate-200 outline-none focus:border-purple-500 text-sm"
+                  >
+                    <option value="kg">Quilograma (kg)</option>
+                    <option value="L">Litro (L)</option>
+                    <option value="un">Unidade (un)</option>
+                  </select>
+                </div>
+
+                <div className="flex gap-2 pt-2">
+                  <button 
+                    type="button" 
+                    onClick={() => setShowNewSubModal(false)} 
+                    className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                  <button 
+                    type="submit" 
+                    className="flex-1 py-3 bg-purple-600 hover:bg-purple-500 text-white rounded-xl font-bold text-xs shadow-lg shadow-purple-600/30 cursor-pointer"
+                  >
+                    Criar Sub-Receita
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}

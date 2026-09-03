@@ -1,7 +1,8 @@
 'use client';
 import { useInventory, InventoryItem } from '@/lib/store';
-import { ChefHat, AlertTriangle, CheckCircle, ArrowLeft } from 'lucide-react';
+import { ChefHat, AlertTriangle, CheckCircle, ArrowLeft, Trash2, ClipboardList } from 'lucide-react';
 import Link from 'next/link';
+import LogoutButton from '@/components/LogoutButton';
 
 export default function CozinhaPage() {
   const { items, updateStatus, isLoaded, checklist, toggleChecklistTask, signChecklist } = useInventory();
@@ -21,15 +22,27 @@ export default function CozinhaPage() {
   return (
     <div className="min-h-screen bg-slate-950 p-4 md:p-8">
       <div className="max-w-5xl mx-auto">
-        <header className="flex items-center gap-4 mb-8">
-          <Link href="/" className="p-3 bg-slate-900 rounded-2xl hover:bg-slate-800 text-slate-400 transition-colors">
-            <ArrowLeft size={24} />
-          </Link>
-          <div>
-            <h1 className="text-3xl md:text-4xl font-bold text-slate-100 mb-2 flex items-center gap-3">
-              <ChefHat className="text-amber-500" /> Operação Cozinha
-            </h1>
-            <p className="text-slate-500 text-lg">Sinalize rupturas de estoque imediatamente para a Gestão de Compras.</p>
+        <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8 pb-6 border-b border-slate-800">
+          <div className="flex items-center gap-4">
+            <Link href="/" className="p-3 bg-slate-900 rounded-2xl hover:bg-slate-800 text-slate-400 transition-colors">
+              <ArrowLeft size={24} />
+            </Link>
+            <div>
+              <h1 className="text-3xl md:text-4xl font-bold text-slate-100 mb-1 flex items-center gap-3">
+                <ChefHat className="text-amber-500" /> Operação Cozinha
+              </h1>
+              <p className="text-slate-500 text-sm">Sinalize rupturas, registre perdas de insumos e preencha o checklist diário.</p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Link 
+              href="/cozinha/perdas" 
+              className="px-5 py-3 bg-red-600/20 hover:bg-red-600 border border-red-500/40 text-red-300 hover:text-white rounded-2xl font-bold text-sm flex items-center gap-2 transition-all shadow-lg shadow-red-600/10 cursor-pointer"
+            >
+              <Trash2 size={18} /> Lançar Perdas
+            </Link>
+            <LogoutButton />
           </div>
         </header>
 
