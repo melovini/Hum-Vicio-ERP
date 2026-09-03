@@ -20,7 +20,7 @@ export async function middleware(request: NextRequest) {
   // Se estiver na tela de login
   if (pathname === '/login') {
     if (session.valid && session.role) {
-      const dest = session.role === 'admin' ? '/' : `/${session.role}`;
+      const dest = (session.role === 'admin' || session.role === 'gerente') ? '/' : `/${session.role}`;
       return NextResponse.redirect(new URL(dest, request.url));
     }
     return NextResponse.next();
@@ -50,7 +50,7 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Admin tem acesso a todos os módulos e à Home (/)
+  // Admin e Gerente têm acesso irrestrito a todos os módulos, Gestão Executiva e à Home (/)
   return NextResponse.next();
 }
 

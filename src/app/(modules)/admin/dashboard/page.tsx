@@ -31,7 +31,14 @@ export default function DashboardPage() {
     setEditingExpense(false);
   };
 
-  if (!isLoaded) return null;
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-surface-ground text-slate-100 p-6 flex flex-col items-center justify-center space-y-4">
+        <div className="w-10 h-10 rounded-xl border-2 border-brand-primary border-t-transparent animate-spin" />
+        <p className="text-sm font-semibold text-slate-400">Carregando indicadores do DRE & Gestão Executiva...</p>
+      </div>
+    );
+  }
 
   // Filtra apenas vendas concluídas
   const validSales = sales.filter(s => s.status === 'completed');
@@ -131,12 +138,18 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
+            <Link
+              href="/admin/colaboradores"
+              className="py-2.5 px-4 bg-surface-card hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-xl text-xs font-semibold flex items-center gap-2 cursor-pointer transition-colors shadow-xs"
+            >
+              👥 Colaboradores
+            </Link>
             <Link
               href="/admin/engenharia"
-              className="px-5 py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-2xl font-extrabold text-xs md:text-sm shadow-[0_0_20px_rgba(245,158,11,0.25)] transition-all flex items-center gap-2 cursor-pointer"
+              className="py-2.5 px-4 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-xl font-semibold text-xs shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
             >
-              <Award size={18} /> Engenharia de Cardápio (BCG)
+              <Award size={15} /> BCG Cardápio
             </Link>
           </div>
         </header>

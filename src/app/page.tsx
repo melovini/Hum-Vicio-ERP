@@ -1,5 +1,6 @@
 import Link from 'next/link';
-import { ChefHat, MonitorDot, LayoutDashboard, ChevronRight, TrendingUp, SlidersHorizontal, ShieldCheck } from 'lucide-react';
+import { ChefHat, MonitorDot, LayoutDashboard, ChevronRight, TrendingUp, SlidersHorizontal, ShieldCheck, LogOut, Users } from 'lucide-react';
+import { logoutAction } from '@/app/login/actions';
 import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Home() {
@@ -8,14 +9,27 @@ export default function Home() {
       {/* Background blueprint sutil */}
       <div className="absolute inset-0 dot-grid opacity-40 pointer-events-none" />
 
-      <div className="relative z-10 max-w-5xl w-full text-center space-y-10">
+      <div className="relative z-10 max-w-5xl w-full text-center space-y-8">
         
-        <div className="space-y-3">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface-card border border-surface-border text-xs font-semibold text-slate-300">
+        {/* Barra Superior com Status e Logout */}
+        <div className="flex items-center justify-between">
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-card border border-surface-border text-xs font-semibold text-slate-300 shadow-xs">
             <span className="w-2 h-2 rounded-full bg-status-free animate-pulse" />
-            <span>Hum Vício ERP • Produção e Salão Sincronizados</span>
+            <span>Hum Vício ERP • Produção & Salão Sincronizados</span>
           </div>
 
+          <form action={logoutAction}>
+            <button
+              type="submit"
+              className="px-3 py-1.5 rounded-lg bg-surface-card hover:bg-surface-elevated border border-surface-border text-xs font-medium text-slate-400 hover:text-slate-100 flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+              title="Encerrar turno ou trocar de perfil"
+            >
+              <LogOut size={13} /> Sair / Trocar Usuário
+            </button>
+          </form>
+        </div>
+
+        <div className="space-y-3">
           <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white">
             Operação & Gestão <span className="text-brand-primary">Industrial</span>
           </h1>
@@ -24,7 +38,7 @@ export default function Home() {
           </p>
         </div>
         
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 text-left">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 text-left">
           
           {/* Módulo Cozinha & KDS */}
           <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-6 transition-all flex flex-col justify-between space-y-5">
@@ -61,7 +75,7 @@ export default function Home() {
               <div>
                 <h2 className="text-lg font-bold text-white tracking-tight">Frente de Caixa & PDV</h2>
                 <p className="text-xs text-slate-400 leading-relaxed mt-1">
-                  Operação ágil de pedidos, sangrias, conferência cega e mapa interativo de mesas.
+                  Operação ágil de pedidos, sangrias, conferência cega e mapa interativo de mesas na barra lateral.
                 </p>
               </div>
             </div>
@@ -83,14 +97,17 @@ export default function Home() {
               <div>
                 <h2 className="text-lg font-bold text-white tracking-tight">Gestão Executiva</h2>
                 <p className="text-xs text-slate-400 leading-relaxed mt-1">
-                  DRE, ficha técnica, BCG de cardápio, estoque e central de auditoria antifraude.
+                  DRE, ficha técnica, BCG de cardápio, estoque, colaboradores e auditoria.
                 </p>
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-1 pt-3 border-t border-surface-border text-[11px] font-medium text-slate-400">
-              <Link href="/admin/dashboard" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
-                • DRE & Dashboard
+              <Link href="/admin/dashboard" className="text-brand-accent font-semibold hover:underline py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+                📊 DRE & Dashboard
+              </Link>
+              <Link href="/admin/colaboradores" className="text-brand-primary font-semibold hover:underline py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+                👥 Colaboradores
               </Link>
               <Link href="/admin/mesas" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
                 • Layout Salão
@@ -110,8 +127,8 @@ export default function Home() {
               <Link href="/admin/precificacao" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
                 • Precificação
               </Link>
-              <Link href="/admin/auditoria" className="text-status-free hover:underline py-1 px-1.5 rounded hover:bg-surface-elevated truncate font-semibold">
-                🛡️ Auditoria
+              <Link href="/admin/auditoria" className="text-status-free hover:underline py-1 px-1.5 rounded hover:bg-surface-elevated truncate font-semibold col-span-2">
+                🛡️ Central de Auditoria & Segurança
               </Link>
             </div>
           </div>

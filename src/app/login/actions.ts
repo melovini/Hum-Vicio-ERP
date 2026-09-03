@@ -10,16 +10,16 @@ import {
 
 export async function loginAction(pinOrPassword: string): Promise<{ success: boolean; error?: string; redirectUrl?: string }> {
   try {
-    const { valid, role } = validateServerCredentials(pinOrPassword);
+    const { valid, role, userName, collaboratorId } = validateServerCredentials(pinOrPassword);
 
     if (!valid || !role) {
       return { 
         success: false, 
-        error: 'Senha incorreta ou credencial não autorizada.' 
+        error: 'Credencial inválida. Digite seu PIN de colaborador ou senha de acesso.' 
       };
     }
 
-    const token = await signSessionToken(role);
+    const token = await signSessionToken(role, userName, collaboratorId);
     const cookieStore = await cookies();
 
     // Cookie seguro HttpOnly
@@ -34,7 +34,8 @@ export async function loginAction(pinOrPassword: string): Promise<{ success: boo
     // Limpar cookie inseguro antigo se existir
     cookieStore.delete('hum_vicio_role');
 
-    const redirectUrl = role === 'admin' ? '/' : `/${role}`;
+    // Admin e Gerente acessam a Home Executiva
+    const redirectUrl = (role === 'admin' || role === 'gerente') ? '/' : `/${role}`;
     return { success: true, redirectUrl };
   } catch (err: any) {
     console.error('Erro na autenticação do servidor:', err);

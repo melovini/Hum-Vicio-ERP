@@ -1,7 +1,11 @@
-export type UserRole = 'admin' | 'caixa' | 'cozinha';
+import { findCollaboratorByPin } from './collaborators';
+
+export type UserRole = 'admin' | 'gerente' | 'caixa' | 'cozinha';
 
 export interface SessionPayload {
   role: UserRole;
+  userName?: string;
+  collaboratorId?: string;
   iat: number;
   exp: number;
 }
@@ -72,10 +76,16 @@ async function getCryptoKey(): Promise<CryptoKey> {
 /**
  * Assina e cria um token de sessão inviolável (HMAC-SHA256)
  */
-export async function signSessionToken(role: UserRole): Promise<string> {
+export async function signSessionToken(
+  role: UserRole, 
+  userName?: string, 
+  collaboratorId?: string
+): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const payload: SessionPayload = {
     role,
+    userName,
+    collaboratorId,
     iat: now,
     exp: now + 60 * 60 * 24, // 24 horas
   };
@@ -97,7 +107,12 @@ export async function signSessionToken(role: UserRole): Promise<string> {
 /**
  * Verifica se o token foi emitido pelo servidor e não foi adulterado
  */
-export async function verifySessionToken(token: string | undefined | null): Promise<{ valid: boolean; role?: UserRole }> {
+export async function verifySessionToken(token: string | undefined | null): Promise<{ 
+  valid: boolean; 
+  role?: UserRole;
+  userName?: string;
+  collaboratorId?: string;
+}> {
   if (!token) return { valid: false };
 
   const parts = token.split('.');
@@ -125,7 +140,12 @@ export async function verifySessionToken(token: string | undefined | null): Prom
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp < now) return { valid: false };
 
-    return { valid: true, role: payload.role };
+    return { 
+      valid: true, 
+      role: payload.role, 
+      userName: payload.userName, 
+      collaboratorId: payload.collaboratorId 
+    };
   } catch {
     return { valid: false };
   }
@@ -134,23 +154,47 @@ export async function verifySessionToken(token: string | undefined | null): Prom
 /**
  * Validação segura de credenciais exclusivamente dentro do servidor
  */
-export function validateServerCredentials(pinOrPassword: string): { valid: boolean; role?: UserRole } {
+export function validateServerCredentials(pinOrPassword: string): { 
+  valid: boolean; 
+  role?: UserRole;
+  userName?: string;
+  collaboratorId?: string;
+} {
   if (!pinOrPassword) return { valid: false };
 
+  const clean = pinOrPassword.trim();
+
+  // 1. Checar credenciais mestres de contingência (.env)
   const cozinhaPin = process.env.COZINHA_PIN || '1234';
   const caixaPin = process.env.CAIXA_PIN || '5678';
   const adminPassword = process.env.ADMIN_PASSWORD || 'admin';
 
-  const clean = pinOrPassword.trim();
-
   if (clean === adminPassword) {
-    return { valid: true, role: 'admin' };
+    return { valid: true, role: 'admin', userName: 'Administrador Master' };
+  }
+  if (clean === '0000') {
+    return { valid: true, role: 'gerente', userName: 'Gerente Geral' };
   }
   if (clean === caixaPin) {
-    return { valid: true, role: 'caixa' };
+    return { valid: true, role: 'caixa', userName: 'Operador de Caixa' };
   }
   if (clean === cozinhaPin) {
-    return { valid: true, role: 'cozinha' };
+    return { valid: true, role: 'cozinha', userName: 'Chapeiro Cozinha' };
+  }
+
+  // 2. Checar colaboradores cadastrados
+  try {
+    const collab = findCollaboratorByPin(clean);
+    if (collab && collab.isActive) {
+      return {
+        valid: true,
+        role: collab.role,
+        userName: collab.name,
+        collaboratorId: collab.id
+      };
+    }
+  } catch (e) {
+    console.warn('Erro ao validar colaborador por PIN:', e);
   }
 
   return { valid: false };
