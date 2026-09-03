@@ -100,32 +100,36 @@ export default function EditorMesasAdminPage() {
   const handleAddTableToTemplate = () => {
     if (!activeTemplate) return;
     const nextNum = activeTemplate.items.length + 1;
+    const formattedNum = nextNum < 10 ? `0${nextNum}` : `${nextNum}`;
+
     const newItem: LayoutTemplateItem = {
-      id: 'item_' + Math.random().toString(36).substring(2, 8),
+      id: 'item_' + Date.now().toString(36),
       layoutTemplateId: activeTemplate.id,
-      numeroIdentificador: `Mesa ${nextNum < 10 ? '0' + nextNum : nextNum}`,
-      posX: 100,
-      posY: 100,
+      numeroIdentificador: `Mesa ${formattedNum}`,
+      posX: 80,
+      posY: 80,
       largura: 100,
       altura: 100,
       capacidade: 4,
       formato: 'quadrada'
     };
 
-    setActiveTemplate({
+    const updated = {
       ...activeTemplate,
       items: [...activeTemplate.items, newItem]
-    });
+    };
+    setActiveTemplate(updated);
     setSelectedItemId(newItem.id);
   };
 
   // Remover Mesa do Template
   const handleRemoveTableFromTemplate = (itemId: string) => {
     if (!activeTemplate) return;
-    setActiveTemplate({
+    const updated = {
       ...activeTemplate,
-      items: activeTemplate.items.filter(i => i.id !== itemId)
-    });
+      items: activeTemplate.items.filter(it => it.id !== itemId)
+    };
+    setActiveTemplate(updated);
     if (selectedItemId === itemId) setSelectedItemId(null);
   };
 
@@ -134,37 +138,44 @@ export default function EditorMesasAdminPage() {
     const item = activeTemplate?.items.find(i => i.id === itemId);
     if (!item || !canvasRef.current) return;
 
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - canvasRect.left;
-    const mouseY = e.clientY - canvasRect.top;
-
-    setDraggingItemId(itemId);
     setSelectedItemId(itemId);
+    setDraggingItemId(itemId);
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left;
+    const cursorY = e.clientY - rect.top;
+
     setDragOffset({
-      x: mouseX - item.posX,
-      y: mouseY - item.posY
+      x: cursorX - item.posX,
+      y: cursorY - item.posY
     });
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!draggingItemId || !activeTemplate || !canvasRef.current) return;
 
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-    let rawX = e.clientX - canvasRect.left - dragOffset.x;
-    let rawY = e.clientY - canvasRect.top - dragOffset.y;
+    const rect = canvasRef.current.getBoundingClientRect();
+    let newX = e.clientX - rect.left - dragOffset.x;
+    let newY = e.clientY - rect.top - dragOffset.y;
 
-    // Snap to Grid de 20px
     if (snapToGrid) {
-      rawX = Math.round(rawX / 20) * 20;
-      rawY = Math.round(rawY / 20) * 20;
+      newX = Math.round(newX / 20) * 20;
+      newY = Math.round(newY / 20) * 20;
     }
 
-    rawX = Math.max(10, Math.min(canvasRect.width - 110, rawX));
-    rawY = Math.max(10, Math.min(canvasRect.height - 110, rawY));
+    newX = Math.max(10, Math.min(newX, rect.width - 110));
+    newY = Math.max(30, Math.min(newY, rect.height - 110));
+
+    const updatedItems = activeTemplate.items.map(it => {
+      if (it.id === draggingItemId) {
+        return { ...it, posX: newX, posY: newY };
+      }
+      return it;
+    });
 
     setActiveTemplate({
       ...activeTemplate,
-      items: activeTemplate.items.map(it => it.id === draggingItemId ? { ...it, posX: rawX, posY: rawY } : it)
+      items: updatedItems
     });
   };
 
@@ -172,104 +183,118 @@ export default function EditorMesasAdminPage() {
     setDraggingItemId(null);
   };
 
+  // Atualizar Propriedades da Mesa Selecionada
+  const handleUpdateSelectedItem = (fields: Partial<LayoutTemplateItem>) => {
+    if (!activeTemplate || !selectedItemId) return;
+    const updatedItems = activeTemplate.items.map(it => {
+      if (it.id === selectedItemId) {
+        return { ...it, ...fields };
+      }
+      return it;
+    });
+    setActiveTemplate({
+      ...activeTemplate,
+      items: updatedItems
+    });
+  };
+
   const selectedItem = activeTemplate?.items.find(i => i.id === selectedItemId);
 
   return (
-    <main className="min-h-screen p-6 max-w-7xl mx-auto space-y-6 animate-fade-in pb-20">
+    <div className="min-h-screen bg-surface-ground text-slate-100 p-4 md:p-6 space-y-6">
       
       {/* Topo / Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-800">
-        <div className="flex items-center gap-4">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-surface-border">
+        <div className="flex items-center gap-3">
           <Link 
             href="/"
-            className="p-3 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-2xl transition-all cursor-pointer shadow-sm hover:border-slate-700"
+            className="p-2.5 bg-surface-card border border-surface-border text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
           >
-            <ArrowLeft size={20} />
+            <ArrowLeft size={18} />
           </Link>
           <div>
-            <div className="inline-flex items-center gap-2 text-emerald-400 font-extrabold text-xs uppercase tracking-wider mb-1">
-              <LayoutGrid size={16} /> Configuração do Administrador
+            <div className="inline-flex items-center gap-1.5 text-brand-accent font-medium text-xs tracking-wider mb-0.5">
+              <LayoutGrid size={14} /> Configuração do Administrador
             </div>
-            <h1 className="text-3xl font-black text-white tracking-tight">Editor de Layouts Mestre de Salão</h1>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <h1 className="text-2xl font-bold text-white tracking-tight">Editor de Layouts Mestre de Salão</h1>
+            <p className="text-xs text-slate-400">
               Defina a arquitetura e disposição base das mesas. A operação do turno clonará estes padrões.
             </p>
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           <button
             type="button"
             onClick={handleSaveActiveTemplate}
-            className="py-3 px-5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 cursor-pointer shadow-lg shadow-emerald-600/30 transition-all"
+            className="py-2 px-4 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg font-semibold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
           >
-            {saveSuccess ? <Check size={16} className="text-white" /> : <Save size={16} />}
-            {saveSuccess ? 'Layout Salvo!' : 'Salvar Layout Mestre'}
+            {saveSuccess ? <Check size={15} /> : <Save size={15} />}
+            {saveSuccess ? 'Layout Salvo!' : 'Salvar Layout'}
           </button>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
         
         {/* Coluna Lateral: Gerenciador de Templates & Propriedades da Mesa */}
-        <div className="space-y-6">
+        <div className="space-y-4">
           
           {/* Caixa de Seleção e Criação de Templates */}
-          <div className="glass-card p-5 rounded-3xl border border-slate-800 space-y-4">
+          <div className="bg-surface-card p-4 rounded-xl border border-surface-border space-y-3">
             <div className="flex justify-between items-center">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Templates Salvos</span>
+              <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Templates Salvos</span>
               <button
                 type="button"
                 onClick={handleCreateNewTemplate}
-                className="p-1.5 bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer"
-                title="Criar Novo Layout"
+                className="py-1 px-2.5 bg-brand-primary/10 text-brand-primary hover:bg-brand-primary/20 border border-brand-primary/30 rounded-md text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
               >
-                <Plus size={14} /> Novo
+                <Plus size={13} /> Novo
               </button>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-1.5">
               {templates.filter(t => t.ativo).map(t => (
                 <button
                   key={t.id}
                   type="button"
                   onClick={() => handleSelectTemplate(t.id)}
-                  className={`w-full text-left p-3 rounded-2xl border transition-all cursor-pointer flex justify-between items-center ${
+                  className={`w-full text-left p-2.5 rounded-lg border transition-colors cursor-pointer flex justify-between items-center ${
                     selectedTemplateId === t.id
-                      ? 'bg-emerald-600/20 border-emerald-500 text-white font-bold shadow-md'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
+                      ? 'bg-surface-elevated border-brand-primary text-white font-semibold'
+                      : 'bg-surface-ground border-surface-border text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   <div className="truncate pr-2">
-                    <p className="text-xs font-bold truncate">{t.nome}</p>
-                    <span className="text-[10px] text-slate-500 font-mono">{t.items.length} mesas</span>
+                    <p className="text-xs font-semibold truncate">{t.nome}</p>
+                    <span className="text-[10px] text-slate-500 font-mono tabular-nums">{t.items.length} mesas</span>
                   </div>
                   {selectedTemplateId === t.id && (
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="w-1.5 h-1.5 rounded-full bg-brand-primary" />
                   )}
                 </button>
               ))}
             </div>
 
             {activeTemplate && (
-              <div className="pt-3 border-t border-slate-800 space-y-2">
-                <label className="block text-[11px] font-bold text-slate-400 uppercase">
-                  Nome do Template:
+              <div className="pt-3 border-t border-surface-border space-y-2">
+                <label className="block text-[10px] font-medium tracking-wider text-slate-400 uppercase">
+                  Nome do Template
                 </label>
                 <input
                   type="text"
                   value={activeTemplate.nome}
                   onChange={e => setActiveTemplate({ ...activeTemplate, nome: e.target.value })}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white outline-none focus:border-emerald-500"
+                  className="w-full input-util text-xs"
                 />
 
                 <div className="flex gap-2 pt-1">
                   <button
                     type="button"
                     onClick={handleDuplicateTemplate}
-                    className="flex-1 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 rounded-xl text-[11px] font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+                    className="flex-1 py-1.5 bg-surface-ground hover:bg-surface-elevated border border-surface-border text-slate-300 rounded-md text-xs font-medium flex items-center justify-center gap-1 cursor-pointer transition-colors"
                   >
-                    <Copy size={13} /> Duplicar
+                    <Copy size={12} /> Duplicar
                   </button>
                 </div>
               </div>
@@ -278,86 +303,74 @@ export default function EditorMesasAdminPage() {
 
           {/* Painel de Propriedades da Mesa Selecionada */}
           {selectedItem ? (
-            <div className="glass-card p-5 rounded-3xl border border-emerald-500/40 space-y-4 animate-fade-in bg-slate-950/60">
-              <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-                <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
-                  <Edit2 size={13} /> Propriedades da Mesa
+            <div className="bg-surface-card p-4 rounded-xl border border-surface-border space-y-3">
+              <div className="flex justify-between items-center pb-2 border-b border-surface-border">
+                <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                  <Edit2 size={13} className="text-brand-accent" /> Propriedades
                 </span>
                 <button
                   type="button"
                   onClick={() => handleRemoveTableFromTemplate(selectedItem.id)}
-                  className="text-red-400 hover:text-red-300 p-1 rounded-lg hover:bg-red-500/10 cursor-pointer"
-                  title="Remover do Template"
+                  className="text-status-danger hover:text-red-300 p-1 cursor-pointer transition-colors"
+                  title="Excluir Mesa do Template"
                 >
-                  <Trash2 size={15} />
+                  <Trash2 size={14} />
                 </button>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1">Rótulo / Identificador:</label>
+                <label className="block text-[10px] font-medium tracking-wider text-slate-400 uppercase mb-1">
+                  Identificador
+                </label>
                 <input
                   type="text"
                   value={selectedItem.numeroIdentificador}
-                  onChange={e => {
-                    const val = e.target.value;
-                    setActiveTemplate({
-                      ...activeTemplate!,
-                      items: activeTemplate!.items.map(it => it.id === selectedItem.id ? { ...it, numeroIdentificador: val } : it)
-                    });
-                  }}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white font-bold outline-none focus:border-emerald-500"
+                  onChange={e => handleUpdateSelectedItem({ numeroIdentificador: e.target.value })}
+                  className="w-full input-util text-xs"
                 />
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1">Formato Visual:</label>
-                <div className="grid grid-cols-3 gap-2">
+                <label className="block text-[10px] font-medium tracking-wider text-slate-400 uppercase mb-1">
+                  Formato da Mesa
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
                   {[
                     { id: 'quadrada', label: 'Quadrada', icon: Square },
                     { id: 'redonda', label: 'Redonda', icon: Circle },
                     { id: 'retangular', label: 'Retangular', icon: RectangleHorizontal }
-                  ].map(f => (
+                  ].map(fmt => (
                     <button
-                      key={f.id}
+                      key={fmt.id}
                       type="button"
-                      onClick={() => {
-                        const largura = f.id === 'retangular' ? 140 : 100;
-                        const altura = 100;
-                        setActiveTemplate({
-                          ...activeTemplate!,
-                          items: activeTemplate!.items.map(it => it.id === selectedItem.id ? { ...it, formato: f.id as any, largura, altura } : it)
-                        });
-                      }}
-                      className={`p-2 rounded-xl border text-center transition-all cursor-pointer flex flex-col items-center gap-1 ${
-                        selectedItem.formato === f.id
-                          ? 'bg-emerald-600 text-white border-emerald-500 font-bold'
-                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                      onClick={() => handleUpdateSelectedItem({ formato: fmt.id as any })}
+                      className={`py-1.5 rounded-md border text-[11px] font-medium flex flex-col items-center gap-1 cursor-pointer transition-colors ${
+                        selectedItem.formato === fmt.id
+                          ? 'bg-brand-primary/10 border-brand-primary text-brand-primary font-semibold'
+                          : 'bg-surface-ground border-surface-border text-slate-400 hover:text-slate-200'
                       }`}
                     >
-                      <f.icon size={16} />
-                      <span className="text-[10px]">{f.label}</span>
+                      <fmt.icon size={13} />
+                      {fmt.label}
                     </button>
                   ))}
                 </div>
               </div>
 
               <div>
-                <label className="block text-[11px] font-bold text-slate-400 mb-1">Capacidade de Assentos:</label>
-                <div className="flex gap-2">
+                <label className="block text-[10px] font-medium tracking-wider text-slate-400 uppercase mb-1">
+                  Capacidade (Lugares)
+                </label>
+                <div className="grid grid-cols-4 gap-1">
                   {[2, 4, 6, 8].map(cap => (
                     <button
                       key={cap}
                       type="button"
-                      onClick={() => {
-                        setActiveTemplate({
-                          ...activeTemplate!,
-                          items: activeTemplate!.items.map(it => it.id === selectedItem.id ? { ...it, capacidade: cap } : it)
-                        });
-                      }}
-                      className={`flex-1 py-1.5 rounded-xl border text-xs font-mono font-bold transition-all cursor-pointer ${
+                      onClick={() => handleUpdateSelectedItem({ capacidade: cap })}
+                      className={`py-1 rounded-md text-xs font-mono tabular-nums font-semibold border cursor-pointer transition-colors ${
                         selectedItem.capacidade === cap
-                          ? 'bg-emerald-600 text-white border-emerald-500'
-                          : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                          ? 'bg-brand-primary text-white border-brand-primary'
+                          : 'bg-surface-ground text-slate-400 border-surface-border hover:text-slate-200'
                       }`}
                     >
                       {cap}L
@@ -366,20 +379,20 @@ export default function EditorMesasAdminPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-2 text-xs font-mono text-slate-400">
-                <div className="bg-slate-900 p-2 rounded-xl border border-slate-800">
-                  <span className="text-[10px] text-slate-500 block">Posição X:</span>
-                  <span className="font-bold text-white">{Math.round(selectedItem.posX)} px</span>
+              <div className="grid grid-cols-2 gap-2 text-xs font-mono tabular-nums text-slate-400">
+                <div className="bg-surface-ground p-2 rounded-lg border border-surface-border">
+                  <span className="text-[10px] text-slate-500 block">Posição X</span>
+                  <span className="font-semibold text-slate-200">{Math.round(selectedItem.posX)} px</span>
                 </div>
-                <div className="bg-slate-900 p-2 rounded-xl border border-slate-800">
-                  <span className="text-[10px] text-slate-500 block">Posição Y:</span>
-                  <span className="font-bold text-white">{Math.round(selectedItem.posY)} px</span>
+                <div className="bg-surface-ground p-2 rounded-lg border border-surface-border">
+                  <span className="text-[10px] text-slate-500 block">Posição Y</span>
+                  <span className="font-semibold text-slate-200">{Math.round(selectedItem.posY)} px</span>
                 </div>
               </div>
             </div>
           ) : (
-            <div className="glass-card p-6 rounded-3xl border border-slate-800 text-center text-slate-500 space-y-2">
-              <Move size={28} className="mx-auto opacity-30" />
+            <div className="bg-surface-card p-6 rounded-xl border border-surface-border text-center text-slate-500 space-y-1.5">
+              <Move size={24} className="mx-auto opacity-30" />
               <p className="text-xs">Clique em qualquer mesa no mapa para editar suas propriedades.</p>
             </div>
           )}
@@ -387,51 +400,47 @@ export default function EditorMesasAdminPage() {
         </div>
 
         {/* Coluna Central: Canvas Interativo do Salão */}
-        <div className="lg:col-span-3 space-y-4">
+        <div className="lg:col-span-3 space-y-3">
           
           {/* Barra de Controle do Canvas */}
-          <div className="glass-card p-4 rounded-3xl border border-slate-800 flex flex-wrap items-center justify-between gap-4 bg-slate-950/40">
-            <div className="flex items-center gap-3">
+          <div className="bg-surface-card p-3 rounded-xl border border-surface-border flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleAddTableToTemplate}
-                className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
+                className="py-1.5 px-3 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer transition-colors"
               >
-                <Plus size={15} /> Adicionar Mesa
+                <Plus size={14} /> Adicionar Mesa
               </button>
 
-              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-400 bg-slate-900 px-3 py-2 rounded-xl border border-slate-800">
+              <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-400 bg-surface-ground px-2.5 py-1.5 rounded-lg border border-surface-border">
                 <input
                   type="checkbox"
                   checked={snapToGrid}
                   onChange={e => setSnapToGrid(e.target.checked)}
-                  className="rounded border-slate-700 accent-emerald-500"
+                  className="rounded border-surface-border accent-brand-primary"
                 />
-                <span>Grade Magnética (Snap 20px)</span>
+                <span>Snap 20px</span>
               </label>
             </div>
 
-            <div className="text-xs text-slate-400 flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
+            <div className="text-xs text-slate-400 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-status-free" />
               <span>Arraste as mesas livremente pelo salão para compor a planta mestre.</span>
             </div>
           </div>
 
-          {/* Área de Canvas Bidimensional */}
+          {/* Área de Canvas Bidimensional com Dot Grid */}
           <div
             ref={canvasRef}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
-            className="relative w-full h-[580px] bg-slate-950 rounded-3xl border border-slate-800 shadow-2xl overflow-hidden select-none"
-            style={{
-              backgroundImage: 'radial-gradient(#1e293b 1px, transparent 1px)',
-              backgroundSize: '20px 20px'
-            }}
+            className="relative w-full h-[580px] bg-surface-ground dot-grid rounded-xl border border-surface-border overflow-hidden select-none"
           >
             {/* Linha indicadora de Entrada / Balcão */}
-            <div className="absolute top-0 left-0 right-0 h-6 bg-slate-900/60 border-b border-slate-800/80 flex items-center justify-center text-[10px] font-black uppercase text-slate-500 tracking-widest">
-              🚪 Frente de Caixa / Entrada do Salão
+            <div className="absolute top-0 left-0 right-0 h-6 bg-surface-card/80 border-b border-surface-border flex items-center justify-center text-[10px] font-medium uppercase tracking-widest text-slate-500">
+              FRENTE DE CAIXA / ENTRADA DO SALÃO
             </div>
 
             {/* Mesas do Template */}
@@ -448,19 +457,31 @@ export default function EditorMesasAdminPage() {
                     top: `${item.posY}px`,
                     width: `${item.largura || 100}px`,
                     height: `${item.altura || 100}px`,
-                    borderRadius: item.formato === 'redonda' ? '9999px' : '20px'
+                    borderRadius: item.formato === 'redonda' ? '9999px' : '12px'
                   }}
-                  className={`absolute cursor-grab active:cursor-grabbing transition-shadow flex flex-col items-center justify-center p-2 border-2 ${
-                    isSelected
-                      ? 'bg-emerald-600/30 border-emerald-400 shadow-xl shadow-emerald-500/20 ring-4 ring-emerald-500/20'
-                      : 'bg-slate-900/90 border-slate-700 hover:border-slate-500 shadow-lg'
-                  } ${isDragging ? 'opacity-90 scale-105 z-30' : 'z-10'}`}
+                  className={`absolute cursor-grab active:cursor-grabbing transition-all flex flex-col justify-between p-2.5 border bg-surface-card ${
+                    isSelected 
+                      ? 'border-brand-primary ring-2 ring-brand-primary/40 z-30' 
+                      : 'border-surface-border hover:border-surface-borderHover z-10'
+                  } ${isDragging ? 'opacity-90 scale-105 z-40 shadow-xl' : 'shadow-xs'}`}
                 >
-                  <span className="font-black text-white text-xs tracking-tight text-center leading-tight">
-                    {item.numeroIdentificador}
-                  </span>
-                  <div className="flex items-center gap-1 text-[10px] text-slate-400 mt-1 font-mono">
-                    <Users size={11} /> {item.capacidade} lugares
+                  <div className="flex justify-between items-center">
+                    <span className="font-semibold text-white text-xs tracking-tight truncate">
+                      {item.numeroIdentificador}
+                    </span>
+                    <span className="text-[10px] font-mono tabular-nums text-slate-400 flex items-center gap-0.5">
+                      <Users size={10} /> {item.capacidade}
+                    </span>
+                  </div>
+
+                  <div className="text-center my-auto">
+                    <span className="text-[9px] uppercase font-medium tracking-wider text-slate-500 bg-surface-ground px-1.5 py-0.5 rounded border border-surface-border">
+                      {item.formato}
+                    </span>
+                  </div>
+
+                  <div className="text-[9px] font-mono tabular-nums text-slate-500 text-center">
+                    ({Math.round(item.posX)}, {Math.round(item.posY)})
                   </div>
                 </div>
               );
@@ -471,6 +492,6 @@ export default function EditorMesasAdminPage() {
 
       </div>
 
-    </main>
+    </div>
   );
 }

@@ -604,10 +604,10 @@ export function lancarPagamentoMesa(
   valorPago: number,
   metodo: string,
   operador: string = 'Operador'
-): { success: boolean; sessao: SessaoCaixaSalao; saldoRestante: number } {
+): { success: boolean; sessao: SessaoCaixaSalao; saldoRestante: number; error?: string } {
   let saldo = 0;
   const mesa = sessao.mesas.find(m => m.id === mesaId);
-  if (!mesa) return { success: false, sessao, saldoRestante: 0 };
+  if (!mesa) return { success: false, sessao, saldoRestante: 0, error: 'Mesa não encontrada.' };
 
   const novoTotalPago = (mesa.totalPago || 0) + valorPago;
   saldo = Math.max(0, (mesa.totalConsumo || 0) - novoTotalPago);

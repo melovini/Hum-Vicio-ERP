@@ -1,131 +1,127 @@
 import Link from 'next/link';
-import { ChefHat, MonitorDot, LayoutDashboard, ChevronRight, TrendingUp } from 'lucide-react';
+import { ChefHat, MonitorDot, LayoutDashboard, ChevronRight, TrendingUp, SlidersHorizontal, ShieldCheck } from 'lucide-react';
+import StatusBadge from '@/components/ui/StatusBadge';
 
 export default function Home() {
   return (
-    <main className="relative flex min-h-screen flex-col items-center justify-center p-6 overflow-hidden">
-      {/* Background decorations */}
-      <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-amber-500/20 blur-[120px] pointer-events-none" />
-      <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-blue-500/20 blur-[120px] pointer-events-none" />
+    <main className="relative flex min-h-screen flex-col items-center justify-center p-6 bg-surface-ground text-slate-100 overflow-hidden">
+      {/* Background blueprint sutil */}
+      <div className="absolute inset-0 dot-grid opacity-40 pointer-events-none" />
 
-      <div className="relative z-10 max-w-5xl w-full text-center space-y-12">
+      <div className="relative z-10 max-w-5xl w-full text-center space-y-10">
         
-        <div className="space-y-4 animate-float">
-          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full glass-card text-amber-400 text-sm font-semibold mb-4">
-            <span className="relative flex h-3 w-3">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
-            </span>
-            Sistema Online e Sincronizado
+        <div className="space-y-3">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface-card border border-surface-border text-xs font-semibold text-slate-300">
+            <span className="w-2 h-2 rounded-full bg-status-free animate-pulse" />
+            <span>Hum Vício ERP • Produção e Salão Sincronizados</span>
           </div>
-          <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight">
-            Hum Vício <span className="text-gradient">ERP</span>
+
+          <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-white">
+            Operação & Gestão <span className="text-brand-primary">Industrial</span>
           </h1>
-          <p className="text-slate-400 text-xl md:text-2xl max-w-2xl mx-auto font-light">
-            Gestão inteligente, controle de rupturas e engenharia de cardápio de alta performance.
+          <p className="text-slate-400 text-base md:text-lg max-w-xl mx-auto font-normal leading-relaxed">
+            Frente de caixa, controle em tempo real de salão com mapa visual de mesas, KDS de cozinha e inteligência de cardápio.
           </p>
         </div>
         
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-8">
-          {/* Módulo Cozinha */}
-          <div className="group relative overflow-hidden flex flex-col items-start text-left gap-4 p-8 glass-card rounded-3xl hover:-translate-y-2 transition-all duration-300">
-            <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-150 duration-500">
-              <ChefHat size={120} />
-            </div>
-            <div className="p-4 bg-gradient-to-br from-amber-400/20 to-orange-500/20 text-amber-400 rounded-2xl shadow-[0_0_20px_rgba(245,158,11,0.1)]">
-              <ChefHat size={32} />
-            </div>
-            <div className="z-10 mt-4">
-              <h2 className="text-2xl font-bold text-white mb-2 group-hover:text-amber-400 transition-colors">Cozinha & KDS</h2>
-              <p className="text-sm text-slate-400 leading-relaxed mb-6">KDS Chapa em tempo real, fila futura, rupturas e perdas.</p>
-              
-              <div className="flex flex-col gap-2 mt-4">
-                <Link href="/cozinha" className="text-amber-400 text-sm font-extrabold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> 🔥 KDS Digital (Chapa)
-                </Link>
-                <Link href="/cozinha/perdas" className="text-slate-300 text-sm font-semibold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Lançar Perdas
-                </Link>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4 text-left">
+          
+          {/* Módulo Cozinha & KDS */}
+          <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-6 transition-all flex flex-col justify-between space-y-5">
+            <div className="space-y-3">
+              <div className="w-10 h-10 rounded-lg bg-status-occupied/10 border border-status-occupied/20 flex items-center justify-center text-status-occupied">
+                <ChefHat size={20} />
               </div>
+              <div>
+                <h2 className="text-lg font-bold text-white tracking-tight">Cozinha & KDS</h2>
+                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                  Chapa digital em tempo real, fila futura e controle de rupturas e perdas.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5 pt-3 border-t border-surface-border text-xs font-medium">
+              <Link href="/cozinha" className="text-status-occupied hover:text-amber-300 flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-surface-elevated transition-colors">
+                <span>🔥 KDS Chapa Digital</span>
+                <ChevronRight size={14} />
+              </Link>
+              <Link href="/cozinha/perdas" className="text-slate-400 hover:text-slate-200 flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-surface-elevated transition-colors">
+                <span>Lançar Perdas & Desperdício</span>
+                <ChevronRight size={14} />
+              </Link>
             </div>
           </div>
 
-          {/* Módulo Caixa */}
-          <div className="group relative overflow-hidden flex flex-col items-start text-left gap-4 p-8 glass-card rounded-3xl hover:-translate-y-2 transition-all duration-300">
-            <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-150 duration-500 pointer-events-none">
-              <MonitorDot size={120} />
-            </div>
-            <div className="p-4 bg-gradient-to-br from-emerald-400/20 to-teal-500/20 text-emerald-400 rounded-2xl shadow-[0_0_20px_rgba(16,185,129,0.1)]">
-              <MonitorDot size={32} />
-            </div>
-            <div className="z-10 mt-4">
-              <h2 className="text-2xl font-bold text-white mb-2 group-hover:text-emerald-400 transition-colors">Frente de Caixa</h2>
-              <p className="text-sm text-slate-400 leading-relaxed mb-6">PDV ágil, controle diário, sangrias e histórico de vendas.</p>
-              
-              <div className="flex flex-col gap-2 mt-4">
-                <Link href="/caixa" className="text-emerald-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Acessar Caixa / PDV
-                </Link>
-                <Link href="/caixa" className="text-purple-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> 🗺️ Mapa Visual de Mesas (Salão)
-                </Link>
+          {/* Módulo Caixa & Salão */}
+          <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-6 transition-all flex flex-col justify-between space-y-5 ring-1 ring-brand-primary/20">
+            <div className="space-y-3">
+              <div className="w-10 h-10 rounded-lg bg-brand-primary/10 border border-brand-primary/20 flex items-center justify-center text-brand-primary">
+                <MonitorDot size={20} />
               </div>
+              <div>
+                <h2 className="text-lg font-bold text-white tracking-tight">Frente de Caixa & PDV</h2>
+                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                  Operação ágil de pedidos, sangrias, conferência cega e mapa interativo de mesas.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5 pt-3 border-t border-surface-border text-xs font-medium">
+              <Link href="/caixa" className="text-brand-primary hover:text-orange-400 font-semibold flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-surface-elevated transition-colors">
+                <span>⚡ Acessar Caixa / PDV</span>
+                <ChevronRight size={14} />
+              </Link>
+              <Link href="/caixa" className="text-slate-300 hover:text-white flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-surface-elevated transition-colors">
+                <span>🗺️ Mapa Visual de Mesas</span>
+                <ChevronRight size={14} />
+              </Link>
             </div>
           </div>
 
-          {/* Módulo Gestão */}
-          <div className="group relative overflow-hidden flex flex-col items-start text-left gap-4 p-8 glass-card rounded-3xl hover:-translate-y-2 transition-all duration-300 ring-1 ring-blue-500/30 shadow-[0_0_40px_rgba(59,130,246,0.15)]">
-            <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity transform group-hover:scale-150 duration-500 pointer-events-none">
-              <LayoutDashboard size={120} />
-            </div>
-            <div className="p-4 bg-gradient-to-br from-blue-400/20 to-indigo-500/20 text-blue-400 rounded-2xl shadow-[0_0_20px_rgba(59,130,246,0.2)]">
-              <TrendingUp size={32} />
-            </div>
-            <div className="z-10 mt-4">
-              <h2 className="text-2xl font-bold text-white mb-2 group-hover:text-blue-400 transition-colors">Gestão Executiva</h2>
-              <p className="text-sm text-slate-400 leading-relaxed mb-6">DRE, Compras, Cardápio e Simuladores Estratégicos.</p>
-              
-              <div className="flex flex-col gap-2 mt-4">
-                <Link href="/admin/dashboard" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> DRE & Dashboard
-                </Link>
-                <Link href="/admin/mesas" className="text-purple-400 font-extrabold text-sm flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> 🗺️ Editor de Layouts de Salão
-                </Link>
-                <Link href="/admin/insumos" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> CRUD Insumos
-                </Link>
-                <Link href="/admin/compras" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Gestão de Compras
-                </Link>
-                <Link href="/admin/engenharia" className="text-amber-400 font-extrabold text-sm flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> 🍔 Engenharia de Cardápio (BCG)
-                </Link>
-                <Link href="/admin/cardapio" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Ficha Técnica & Receitas
-                </Link>
-                <Link href="/admin/precificacao" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Precificação (iFood)
-                </Link>
-                <Link href="/admin/simulador" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Simulador de Combos
-                </Link>
-                <Link href="/admin/fornecedores" className="text-blue-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Gestão de Fornecedores
-                </Link>
-                <Link href="/admin/inventario" className="text-emerald-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Auditoria de Inventário Físico
-                </Link>
-                <Link href="/admin/checklists" className="text-emerald-400 text-sm font-bold flex items-center gap-2 hover:gap-3 transition-all">
-                  <ChevronRight size={16} /> Relatórios de Checklists
-                </Link>
-                <Link href="/admin/auditoria" className="text-emerald-400 font-extrabold text-sm flex items-center gap-2 hover:gap-3 transition-all pt-1 border-t border-slate-800/80">
-                  <ChevronRight size={16} /> 🛡️ Central de Auditoria & Segurança
-                </Link>
+          {/* Módulo Gestão Executiva */}
+          <div className="bg-surface-card border border-surface-border hover:border-surface-borderHover rounded-xl p-6 transition-all flex flex-col justify-between space-y-5">
+            <div className="space-y-3">
+              <div className="w-10 h-10 rounded-lg bg-brand-accent/10 border border-brand-accent/20 flex items-center justify-center text-brand-accent">
+                <TrendingUp size={20} />
+              </div>
+              <div>
+                <h2 className="text-lg font-bold text-white tracking-tight">Gestão Executiva</h2>
+                <p className="text-xs text-slate-400 leading-relaxed mt-1">
+                  DRE, ficha técnica, BCG de cardápio, estoque e central de auditoria antifraude.
+                </p>
               </div>
             </div>
+
+            <div className="grid grid-cols-2 gap-1 pt-3 border-t border-surface-border text-[11px] font-medium text-slate-400">
+              <Link href="/admin/dashboard" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+                • DRE & Dashboard
+              </Link>
+              <Link href="/admin/mesas" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+                • Layout Salão
+              </Link>
+              <Link href="/admin/engenharia" className="hover:text-amber-400 py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+                • BCG Cardápio
+              </Link>
+              <Link href="/admin/insumos" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+                • Insumos
+              </Link>
+              <Link href="/admin/compras" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+                • Compras
+              </Link>
+              <Link href="/admin/cardapio" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+                • Ficha Técnica
+              </Link>
+              <Link href="/admin/precificacao" className="hover:text-brand-accent py-1 px-1.5 rounded hover:bg-surface-elevated truncate">
+                • Precificação
+              </Link>
+              <Link href="/admin/auditoria" className="text-status-free hover:underline py-1 px-1.5 rounded hover:bg-surface-elevated truncate font-semibold">
+                🛡️ Auditoria
+              </Link>
+            </div>
           </div>
+
         </div>
+
       </div>
     </main>
   );

@@ -1,41 +1,112 @@
 @import "tailwindcss";
 
 @theme {
-  --color-background: #0f111a;
-  --color-surface: #161b22;
-  --color-surface-hover: #1e242d;
-  --color-primary: #f59e0b; /* amber-500 */
-  --color-primary-glow: rgba(245, 158, 11, 0.5);
-  --color-secondary: #3b82f6; /* blue-500 */
-  --color-success: #10b981; /* emerald-500 */
-  --color-danger: #ef4444; /* red-500 */
+  /* Tokens de Superfície (Contraste por Camadas - Dark Neutral Slate) */
+  --color-surface-ground: #090A0F;
+  --color-surface-card: #12141C;
+  --color-surface-elevated: #1A1D27;
+  --color-surface-border: #242838;
+  --color-surface-border-hover: #373D54;
+
+  /* Tokens de Marca (Ação Primária Industrial & Acento Técnico) */
+  --color-brand-primary: #F97316;
+  --color-brand-primary-hover: #EA580C;
+  --color-brand-accent: #38BDF8;
+
+  /* Tokens de Estado Semântico */
+  --color-status-free: #10B981;
+  --color-status-occupied: #F59E0B;
+  --color-status-partial: #8B5CF6;
+  --color-status-paid: #06B6D4;
+  --color-status-danger: #EF4444;
+  --color-status-neutral: #64748B;
+
+  /* Compatibilidade Legada Suave */
+  --color-background: #090A0F;
+  --color-surface: #12141C;
+  --color-surface-hover: #1A1D27;
+  --color-primary: #F97316;
+  --color-secondary: #38BDF8;
+  --color-success: #10B981;
+  --color-danger: #EF4444;
 }
 
 @layer utilities {
+  /* Tipografia Numérica Tabular para 100% de valores contábeis e relógios */
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum" 1, "cv05" 1;
+  }
+
+  /* Dot Grid Blueprint em baixa opacidade para Canvas */
+  .dot-grid {
+    background-image: radial-gradient(#242838 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+
+  /* Superfícies Padronizadas */
+  .surface-card {
+    background-color: var(--color-surface-card);
+    border: 1px solid var(--color-surface-border);
+    border-radius: 0.75rem;
+  }
+
+  .surface-elevated {
+    background-color: var(--color-surface-elevated);
+    border: 1px solid var(--color-surface-border);
+  }
+
+  /* Inputs Utilitários com foco luminoso */
+  .input-util {
+    background-color: var(--color-surface-ground);
+    border: 1px solid var(--color-surface-border);
+    color: #f8fafc;
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    outline: none;
+    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .input-util:focus {
+    border-color: var(--color-brand-primary);
+    box-shadow: 0 0 0 1px var(--color-brand-primary);
+  }
+
+  /* Legado suave */
   .glass {
-    @apply bg-white/5 backdrop-blur-md border border-white/10 shadow-xl;
+    background: rgba(18, 20, 28, 0.7);
+    backdrop-filter: blur(12px);
+    border: 1px solid rgba(36, 40, 56, 0.8);
   }
   .glass-card {
-    @apply bg-slate-900/60 backdrop-blur-xl border border-slate-700/50 shadow-2xl;
+    background: rgba(18, 20, 28, 0.85);
+    backdrop-filter: blur(16px);
+    border: 1px solid rgba(36, 40, 56, 0.9);
   }
-  .text-gradient {
-    @apply bg-clip-text text-transparent bg-gradient-to-r from-amber-400 to-orange-500;
-  }
-  .animate-float {
-    animation: float 6s ease-in-out infinite;
-  }
-}
-
-@keyframes float {
-  0% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
-  100% { transform: translateY(0px); }
 }
 
 html,
 body {
   max-width: 100vw;
   overflow-x: hidden;
-  background-color: var(--color-background);
-  color: #e2e8f0;
+  background-color: #090A0F;
+  color: #f1f5f9;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbars customizadas e discretas */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #090A0F;
+}
+::-webkit-scrollbar-thumb {
+  background: #242838;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #373D54;
 }

@@ -742,55 +742,55 @@ export default function CaixaPage() {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Abas Laterais */}
-            <div className="lg:col-span-2 space-y-3">
+            <div className="lg:col-span-2 space-y-2">
               <button 
                 onClick={() => setActiveTab('pdv')} 
-                className={`w-full flex items-center gap-3 p-4 rounded-2xl font-bold transition-all text-left cursor-pointer ${
+                className={`w-full flex items-center gap-2.5 p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
                   activeTab === 'pdv' 
-                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 shadow-lg' 
-                    : 'bg-slate-900/50 text-slate-400 hover:bg-slate-800 border border-slate-800/50'
+                    ? 'bg-surface-elevated text-slate-100 border-surface-borderHover shadow-xs' 
+                    : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
                 }`}
               >
-                <CartIcon size={20} /> Pedidos
+                <CartIcon size={16} className="text-brand-primary" /> Pedidos
               </button>
 
               <button 
                 onClick={() => setActiveTab('mesas')} 
-                className={`w-full flex items-center justify-between p-4 rounded-2xl font-bold transition-all text-left cursor-pointer ${
+                className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
                   activeTab === 'mesas' 
-                    ? 'bg-purple-600/30 text-purple-300 border border-purple-500/40 shadow-lg ring-2 ring-purple-500/20' 
-                    : 'bg-slate-900/50 text-slate-400 hover:bg-slate-800 border border-slate-800/50'
+                    ? 'bg-surface-elevated text-slate-100 border-surface-borderHover shadow-xs' 
+                    : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
                 }`}
               >
-                <div className="flex items-center gap-3">
-                  <LayoutGrid size={20} /> Mapa de Mesas
+                <div className="flex items-center gap-2.5">
+                  <LayoutGrid size={16} className="text-brand-accent" /> Mapa de Mesas
                 </div>
                 {floorSession.mesas.filter(m => m.statusVisual !== 'GUARDADA' && (m.statusConsumo === 'OCUPADA_ABERTA' || m.statusConsumo === 'PARCIALMENTE_PAGA')).length > 0 && (
-                  <span className="px-2 py-0.5 bg-amber-500 text-slate-950 text-[10px] font-black rounded-full animate-pulse">
-                    {floorSession.mesas.filter(m => m.statusVisual !== 'GUARDADA' && (m.statusConsumo === 'OCUPADA_ABERTA' || m.statusConsumo === 'PARCIALMENTE_PAGA')).length} ocupadas
+                  <span className="px-1.5 py-0.5 bg-status-occupied text-slate-950 text-[10px] font-mono tabular-nums font-bold rounded-full animate-pulse">
+                    {floorSession.mesas.filter(m => m.statusVisual !== 'GUARDADA' && (m.statusConsumo === 'OCUPADA_ABERTA' || m.statusConsumo === 'PARCIALMENTE_PAGA')).length}
                   </span>
                 )}
               </button>
 
               <button 
                 onClick={() => setActiveTab('producao')} 
-                className={`w-full flex items-center justify-between p-4 rounded-2xl font-bold transition-all text-left cursor-pointer ${
+                className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
                   activeTab === 'producao' 
-                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 shadow-lg' 
-                    : 'bg-slate-900/50 text-slate-400 hover:bg-slate-800 border border-slate-800/50'
+                    ? 'bg-surface-elevated text-slate-100 border-surface-borderHover shadow-xs' 
+                    : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
                 }`}
               >
-                <div className="flex items-center gap-3">
-                  <Flame size={20} /> Produção / KDS
+                <div className="flex items-center gap-2.5">
+                  <Flame size={16} className="text-status-occupied" /> Produção / KDS
                 </div>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1">
                   {sales.filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido').length > 0 && (
-                    <span className="px-2 py-0.5 bg-emerald-500 text-slate-950 text-[10px] font-black rounded-full animate-pulse" title="Pedidos Prontos">
-                      🛎️ {sales.filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido').length} prontos
+                    <span className="px-1.5 py-0.5 bg-status-free text-slate-950 text-[10px] font-mono tabular-nums font-bold rounded-full animate-pulse" title="Pedidos Prontos">
+                      🛎️ {sales.filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido').length}
                     </span>
                   )}
                   {sales.filter(s => s.status !== 'cancelled' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length > 0 && (
-                    <span className="px-2 py-0.5 bg-amber-500 text-slate-950 text-[10px] font-black rounded-full">
+                    <span className="px-1.5 py-0.5 bg-status-occupied text-slate-950 text-[10px] font-mono tabular-nums font-bold rounded-full">
                       {sales.filter(s => s.status !== 'cancelled' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length}
                     </span>
                   )}
@@ -799,24 +799,24 @@ export default function CaixaPage() {
 
               <button 
                 onClick={() => setActiveTab('historico')} 
-                className={`w-full flex items-center gap-3 p-4 rounded-2xl font-bold transition-all text-left cursor-pointer ${
+                className={`w-full flex items-center gap-2.5 p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
                   activeTab === 'historico' 
-                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30 shadow-lg' 
-                    : 'bg-slate-900/50 text-slate-400 hover:bg-slate-800 border border-slate-800/50'
+                    ? 'bg-surface-elevated text-slate-100 border-surface-borderHover shadow-xs' 
+                    : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
                 }`}
               >
-                <History size={20} /> Histórico ({sales.filter(s => s.status === 'completed').length})
+                <History size={16} className="text-brand-accent" /> Histórico ({sales.filter(s => s.status === 'completed').length})
               </button>
 
               <button 
                 onClick={() => setActiveTab('sangria')} 
-                className={`w-full flex items-center gap-3 p-4 rounded-2xl font-bold transition-all text-left cursor-pointer ${
+                className={`w-full flex items-center gap-2.5 p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
                   activeTab === 'sangria' 
-                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30 shadow-lg' 
-                    : 'bg-slate-900/50 text-slate-400 hover:bg-slate-800 border border-slate-800/50'
+                    ? 'bg-surface-elevated text-slate-100 border-surface-borderHover shadow-xs' 
+                    : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
                 }`}
               >
-                <DollarSign size={20} /> Gaveta
+                <DollarSign size={16} className="text-status-danger" /> Gaveta
               </button>
 
               {/* Slider de Tempo Dinâmico para a Cozinha Solicitado */}
@@ -1440,9 +1440,9 @@ export default function CaixaPage() {
                         type="button"
                         onClick={handleCheckout}
                         disabled={cart.length === 0}
-                        className="w-full py-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-800 disabled:text-slate-600 text-white rounded-2xl font-bold shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all flex items-center justify-center gap-2 cursor-pointer text-base"
+                        className="w-full py-3.5 bg-brand-primary hover:bg-brand-primaryHover disabled:bg-surface-elevated disabled:text-slate-600 text-white rounded-xl font-semibold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer text-sm"
                       >
-                        <Send size={18} /> Finalizar Pedido
+                        <Send size={16} /> Finalizar Pedido
                       </button>
                     </div>
                   </div>

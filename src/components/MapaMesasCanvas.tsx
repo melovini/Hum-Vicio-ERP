@@ -4,9 +4,12 @@ import {
   LayoutGrid, Plus, Users, Move, Trash2, RotateCcw, 
   CheckCircle2, Clock, DollarSign, ArrowRight, Link2, 
   Unlink2, History, AlertTriangle, X, ShieldAlert, 
-  ChevronRight, Sparkles, CreditCard, Banknote, QrCode, Search
+  ChevronRight, Sparkles, CreditCard, Banknote, QrCode, Search,
+  SlidersHorizontal, Check
 } from 'lucide-react';
 import Link from 'next/link';
+import SlidingSheet from '@/components/ui/SlidingSheet';
+import StatusBadge, { StatusBadgeVariant } from '@/components/ui/StatusBadge';
 import { 
   SessaoCaixaSalao, SalaoMesaInstancia, LayoutTemplate,
   getStoredLayoutTemplates, createInitialSessionFromTemplate,
@@ -38,10 +41,10 @@ export default function MapaMesasCanvas({
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const canvasRef = useRef<HTMLDivElement>(null);
 
-  // Modais de Ação do Salão
+  // Gavetas Laterais Deslizantes (Sliding Sheets - Sem Bloquear a Tela)
   const [mesaParaPagamento, setMesaParaPagamento] = useState<SalaoMesaInstancia | null>(null);
   const [valorPagamentoInput, setValorPagamentoInput] = useState<string>('');
-  const [metodoPagamento, setMetodoPagamento] = useState<string>('cartao');
+  const [metodoPagamento, setMetodoPagamento] = useState<string>('cartao_credito');
   
   const [mesaParaJuntar, setMesaParaJuntar] = useState<SalaoMesaInstancia | null>(null);
   const [mesaMasterAlvoId, setMesaMasterAlvoId] = useState<string>('');
@@ -99,34 +102,35 @@ export default function MapaMesasCanvas({
     const mesa = floorSession.mesas.find(m => m.id === mesaId);
     if (!mesa || !canvasRef.current) return;
 
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-    const mouseX = e.clientX - canvasRect.left;
-    const mouseY = e.clientY - canvasRect.top;
-
-    setDraggingMesaId(mesaId);
     setSelectedMesaId(mesaId);
+    setDraggingMesaId(mesaId);
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left;
+    const cursorY = e.clientY - rect.top;
+
     setDragOffset({
-      x: mouseX - mesa.posX,
-      y: mouseY - mesa.posY
+      x: cursorX - mesa.posX,
+      y: cursorY - mesa.posY
     });
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!draggingMesaId || !canvasRef.current) return;
 
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-    let rawX = e.clientX - canvasRect.left - dragOffset.x;
-    let rawY = e.clientY - canvasRect.top - dragOffset.y;
+    const rect = canvasRef.current.getBoundingClientRect();
+    let newX = e.clientX - rect.left - dragOffset.x;
+    let newY = e.clientY - rect.top - dragOffset.y;
 
     if (snapToGrid) {
-      rawX = Math.round(rawX / 20) * 20;
-      rawY = Math.round(rawY / 20) * 20;
+      newX = Math.round(newX / 20) * 20;
+      newY = Math.round(newY / 20) * 20;
     }
 
-    rawX = Math.max(10, Math.min(canvasRect.width - 120, rawX));
-    rawY = Math.max(10, Math.min(canvasRect.height - 120, rawY));
+    newX = Math.max(10, Math.min(newX, rect.width - 120));
+    newY = Math.max(30, Math.min(newY, rect.height - 120));
 
-    const updated = atualizarPosicaoMesaInstancia(floorSession, draggingMesaId, rawX, rawY);
+    const updated = atualizarPosicaoMesaInstancia(floorSession, draggingMesaId, newX, newY);
     onUpdateSession(updated);
   };
 
@@ -134,68 +138,96 @@ export default function MapaMesasCanvas({
     setDraggingMesaId(null);
   };
 
-  // Ações Operacionais
+  // Guardar Mesa (Recolher do Salão com Bloqueio de Segurança)
   const handleGuardarMesa = (mesaId: string) => {
     const res = guardarMesaInstancia(floorSession, mesaId, operatorName);
     if (!res.success) {
-      showFeedback(res.error || 'Não foi possível guardar a mesa.', 'error');
+      showFeedback(res.error || 'Ação bloqueada.', 'error');
     } else {
       onUpdateSession(res.sessao);
-      showFeedback('Mesa recolhida para a gaveta virtual com sucesso!');
-      if (selectedMesaId === mesaId) setSelectedMesaId(null);
+      showFeedback('Mesa guardada com sucesso!');
     }
   };
 
-  const handleConfirmExtraTable = () => {
-    const res = adicionarMesaExtraInstancia(floorSession, extraTableNameInput, operatorName);
+  // Restaurar Posições Padrão
+  const handleRestaurarPadrao = () => {
+    if (confirm('Restaurar posições originais de todas as mesas livres para o layout inicial?')) {
+      const updated = restaurarPosicoesPadraoInstancias(floorSession);
+      onUpdateSession(updated);
+      showFeedback('Posições das mesas livres restauradas!');
+    }
+  };
+
+  // Adicionar Mesa Extra
+  const handleConfirmAddExtra = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!extraTableNameInput.trim()) return;
+
+    const res = adicionarMesaExtraInstancia(floorSession, extraTableNameInput.trim(), operatorName);
     onUpdateSession(res.sessao);
     setExtraTableNameInput('');
     setShowExtraTableModal(false);
-    showFeedback(`${res.mesaAdicionada.numeroIdentificador} adicionada ao mapa!`);
+    showFeedback(`Mesa extra "${extraTableNameInput.trim()}" adicionada ao salão!`);
   };
 
-  const handleRestaurarPadrao = () => {
-    if (confirm('Deseja reorganizar as mesas livres de volta para as posições do layout mestre?')) {
-      const updated = restaurarPosicoesPadraoInstancias(floorSession);
-      onUpdateSession(updated);
-      showFeedback('Posições padrão restauradas para as mesas livres!');
-    }
-  };
-
+  // Trocar Template de Salão
   const handleConfirmSwitchTemplate = () => {
     if (!selectedTemplateToSwitch) return;
-    const novaSessao = createInitialSessionFromTemplate(floorSession.sessaoCaixaId, selectedTemplateToSwitch);
+    const tpl = templates.find(t => t.id === selectedTemplateToSwitch);
+    if (!tpl) return;
+
+    const mesasOcupadas = floorSession.mesas.filter(m => m.statusConsumo !== 'LIVRE' && m.statusVisual !== 'GUARDADA');
+    if (mesasOcupadas.length > 0) {
+      if (!confirm(`Atenção: Existem ${mesasOcupadas.length} mesa(s) em atendimento. Trocar o layout preservará as comandas abertas mas reorganizará as mesas livres. Deseja continuar?`)) {
+        return;
+      }
+    }
+
+    const novaSessao = createInitialSessionFromTemplate(floorSession.sessaoCaixaId, tpl.id);
+    novaSessao.mesas = novaSessao.mesas.map(nm => {
+      const oc = mesasOcupadas.find(o => o.numeroIdentificador.toLowerCase() === nm.numeroIdentificador.toLowerCase());
+      if (oc) {
+        return { ...nm, ...oc, posX: nm.posX, posY: nm.posY };
+      }
+      return nm;
+    });
+
     onUpdateSession(novaSessao);
     setShowTemplateSwitchModal(false);
-    showFeedback(`Layout alterado para "${novaSessao.layoutNome}"!`);
+    showFeedback(`Layout alterado para "${tpl.nome}"!`);
   };
 
-  // Abrir Modal de Pagamento
+  // Abrir Gaveta de Pagamento
   const handleOpenPaymentModal = (mesa: SalaoMesaInstancia) => {
-    const saldo = Math.max(0, (mesa.totalConsumo || 0) - (mesa.totalPago || 0));
     setMesaParaPagamento(mesa);
+    const saldo = Math.max(0, (mesa.totalConsumo || 0) - (mesa.totalPago || 0));
     setValorPagamentoInput(saldo.toFixed(2));
   };
 
+  // Confirmar Pagamento
   const handleConfirmPayment = () => {
     if (!mesaParaPagamento) return;
-    const valor = parseFloat(valorPagamentoInput);
-    if (isNaN(valor) || valor <= 0) {
+    const valor = Number(valorPagamentoInput) || 0;
+    if (valor <= 0) {
       showFeedback('Informe um valor de pagamento válido.', 'error');
       return;
     }
 
     const res = lancarPagamentoMesa(floorSession, mesaParaPagamento.id, valor, metodoPagamento, operatorName);
-    onUpdateSession(res.sessao);
-    setMesaParaPagamento(null);
-    showFeedback(`Pagamento de R$ ${valor.toFixed(2)} registrado com sucesso!`);
+    if (!res.success) {
+      showFeedback(res.error || 'Erro ao processar pagamento.', 'error');
+    } else {
+      onUpdateSession(res.sessao);
+      setMesaParaPagamento(null);
+      showFeedback(`Pagamento de R$ ${valor.toFixed(2)} registrado com sucesso!`);
+    }
   };
 
-  // Liberar / Limpar Mesa
+  // Liberar Mesa
   const handleLiberarMesa = (mesaId: string) => {
     const updated = liberarMesaInstancia(floorSession, mesaId, operatorName);
     onUpdateSession(updated);
-    showFeedback('Mesa limpa e liberada com sucesso! Atendimento arquivado no histórico.');
+    showFeedback('Mesa liberada e pronta para o próximo cliente!');
   };
 
   // Juntar Mesas (Merge)
@@ -224,80 +256,88 @@ export default function MapaMesasCanvas({
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
+    <div className="space-y-4">
       
-      {/* Toast de Feedback */}
+      {/* Toast Flutuante Discreto (Canto Superior Direito) */}
       {feedbackMsg && (
-        <div className={`fixed bottom-6 right-6 z-50 p-4 rounded-2xl border shadow-2xl text-xs font-bold flex items-center gap-2 animate-bounce ${
+        <div className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-xl border shadow-xl text-xs font-semibold flex items-center gap-2.5 animate-in slide-in-from-top duration-200 ${
           feedbackMsg.type === 'success' 
-            ? 'bg-emerald-950 border-emerald-500 text-emerald-300' 
-            : 'bg-red-950 border-red-500 text-red-300'
+            ? 'bg-surface-card border-status-free/40 text-status-free' 
+            : 'bg-surface-card border-status-danger/40 text-status-danger'
         }`}>
           {feedbackMsg.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
           <span>{feedbackMsg.text}</span>
         </div>
       )}
 
-      {/* Topo: KPIs Executivos do Salão */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-          <span className="text-[11px] font-bold text-slate-400 uppercase">Mesas no Salão</span>
-          <p className="text-2xl font-mono font-black text-white">{kpis.total}</p>
-          <span className="text-[10px] text-slate-500 font-mono">Layout: {floorSession.layoutNome}</span>
+      {/* Topo: KPIs Executivos do Salão com Alta Densidade */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
+          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Mesas no Salão</span>
+          <p className="text-xl font-mono tabular-nums font-bold text-slate-100">{kpis.total}</p>
+          <span className="text-[10px] text-slate-500 truncate block">Layout: {floorSession.layoutNome}</span>
         </div>
 
-        <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-          <span className="text-[11px] font-bold text-slate-400 uppercase">Mesas Livres</span>
-          <p className="text-2xl font-mono font-black text-emerald-400">{kpis.livres}</p>
-          <span className="text-[10px] text-emerald-500/80 font-bold">🟢 Prontas p/ receber</span>
+        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
+          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Livres</span>
+          <p className="text-xl font-mono tabular-nums font-bold text-status-free">{kpis.livres}</p>
+          <span className="text-[10px] text-status-free/80 font-medium flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-status-free" /> Disponíveis
+          </span>
         </div>
 
-        <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-          <span className="text-[11px] font-bold text-slate-400 uppercase">Mesas Ocupadas</span>
-          <p className="text-2xl font-mono font-black text-amber-400">{kpis.ocupadas}</p>
-          <span className="text-[10px] text-amber-500/80 font-bold">🟠 Em consumo</span>
+        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
+          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Em Consumo</span>
+          <p className="text-xl font-mono tabular-nums font-bold text-status-occupied">{kpis.ocupadas}</p>
+          <span className="text-[10px] text-status-occupied/80 font-medium flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-status-occupied animate-pulse" /> Ativas
+          </span>
         </div>
 
-        <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-          <span className="text-[11px] font-bold text-slate-400 uppercase">Aguardando Limpeza</span>
-          <p className="text-2xl font-mono font-black text-teal-400">{kpis.pagas}</p>
-          <span className="text-[10px] text-teal-500/80 font-bold">🔵 Contas quitadas</span>
+        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
+          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Aguardando Limpeza</span>
+          <p className="text-xl font-mono tabular-nums font-bold text-status-paid">{kpis.pagas}</p>
+          <span className="text-[10px] text-status-paid/80 font-medium flex items-center gap-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-status-paid" /> Quitadas
+          </span>
         </div>
 
-        <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-          <span className="text-[11px] font-bold text-slate-400 uppercase">Total em Aberto</span>
-          <p className="text-2xl font-mono font-black text-purple-400">R$ {kpis.totalEmAberto.toFixed(2)}</p>
-          <span className="text-[10px] text-slate-500 font-mono">A receber no salão</span>
+        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
+          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Total a Receber</span>
+          <p className="text-xl font-mono tabular-nums font-bold text-status-partial">
+            R$ {kpis.totalEmAberto.toFixed(2)}
+          </p>
+          <span className="text-[10px] text-slate-500">Saldo em salão</span>
         </div>
 
-        <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-          <span className="text-[11px] font-bold text-slate-400 uppercase">Taxa de Ocupação</span>
-          <p className="text-2xl font-mono font-black text-blue-400">{kpis.taxaOcupacao.toFixed(0)}%</p>
-          <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
-            <div className="bg-blue-400 h-full rounded-full" style={{ width: `${kpis.taxaOcupacao}%` }} />
+        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
+          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Taxa de Ocupação</span>
+          <p className="text-xl font-mono tabular-nums font-bold text-brand-accent">{kpis.taxaOcupacao.toFixed(0)}%</p>
+          <div className="w-full bg-surface-ground rounded-full h-1 overflow-hidden">
+            <div className="bg-brand-accent h-full rounded-full transition-all duration-300" style={{ width: `${kpis.taxaOcupacao}%` }} />
           </div>
         </div>
       </div>
 
       {/* Barra de Ações Rápidas do Salão */}
-      <div className="glass-card p-4 rounded-3xl border border-slate-800 flex flex-wrap items-center justify-between gap-4 bg-slate-950/40">
+      <div className="bg-surface-card p-3 rounded-xl border border-surface-border flex flex-wrap items-center justify-between gap-3">
         
-        {/* Filtros de Status */}
-        <div className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
+        {/* Filtros de Status em Chips Compactos */}
+        <div className="flex flex-wrap items-center gap-1 bg-surface-ground p-1 rounded-lg border border-surface-border">
           {[
             { id: 'todas', label: `Todas (${kpis.total})` },
-            { id: 'livres', label: `🟢 Livres (${kpis.livres})` },
-            { id: 'ocupadas', label: `🟠 Ocupadas (${kpis.ocupadas})` },
-            { id: 'pagas', label: `🔵 Prontas (${kpis.pagas})` }
+            { id: 'livres', label: `Livres (${kpis.livres})` },
+            { id: 'ocupadas', label: `Ocupadas (${kpis.ocupadas})` },
+            { id: 'pagas', label: `Pagas (${kpis.pagas})` }
           ].map(f => (
             <button
               key={f.id}
               type="button"
               onClick={() => setStatusFilter(f.id as any)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
                 statusFilter === f.id
-                  ? 'bg-emerald-600 text-white shadow-md font-black'
-                  : 'text-slate-400 hover:text-white'
+                  ? 'bg-surface-elevated text-slate-100 border border-surface-borderHover shadow-xs'
+                  : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               {f.label}
@@ -305,26 +345,26 @@ export default function MapaMesasCanvas({
           ))}
         </div>
 
-        {/* Botões de Ação do Mapa */}
+        {/* Botões Utilitários de Ação */}
         <div className="flex flex-wrap items-center gap-2">
           
           {/* Adicionar Mesa Extra */}
           <button
             type="button"
             onClick={() => setShowExtraTableModal(true)}
-            className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-md transition-all"
+            className="py-1.5 px-3 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
           >
-            <Plus size={15} /> + Adicionar Mesa Extra
+            <Plus size={14} /> + Mesa Extra
           </button>
 
           {/* Restaurar Posições Padrão */}
           <button
             type="button"
             onClick={handleRestaurarPadrao}
-            className="py-2.5 px-3.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
-            title="Reposiciona apenas as mesas livres para o layout inicial"
+            className="py-1.5 px-3 bg-surface-elevated hover:bg-surface-border text-slate-300 hover:text-white border border-surface-border rounded-lg text-xs font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
+            title="Reposiciona mesas livres para o layout mestre"
           >
-            <RotateCcw size={14} /> Restaurar Posições
+            <RotateCcw size={13} /> Restaurar
           </button>
 
           {/* Trocar Template de Salão */}
@@ -334,78 +374,71 @@ export default function MapaMesasCanvas({
               setSelectedTemplateToSwitch(floorSession.layoutOrigemId);
               setShowTemplateSwitchModal(true);
             }}
-            className="py-2.5 px-3.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
+            className="py-1.5 px-3 bg-surface-elevated hover:bg-surface-border text-slate-300 hover:text-white border border-surface-border rounded-lg text-xs font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
           >
-            <LayoutGrid size={14} /> Mudar Layout
+            <LayoutGrid size={13} /> Mudar Layout
           </button>
 
           {/* Grade Magnética */}
-          <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-400 bg-slate-900 px-3 py-2 rounded-xl border border-slate-800">
+          <label className="flex items-center gap-1.5 cursor-pointer text-xs font-medium text-slate-400 bg-surface-ground px-2.5 py-1.5 rounded-lg border border-surface-border">
             <input
               type="checkbox"
               checked={snapToGrid}
               onChange={e => setSnapToGrid(e.target.checked)}
-              className="rounded border-slate-700 accent-emerald-500"
+              className="rounded border-surface-border accent-brand-primary cursor-pointer"
             />
-            <span>Grade (Snap 20px)</span>
+            <span>Snap 20px</span>
           </label>
 
           {/* Link para Editor Admin */}
           <Link
             href="/admin/mesas"
-            className="py-2.5 px-3.5 bg-purple-600/20 hover:bg-purple-600/30 text-purple-300 border border-purple-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all"
+            className="py-1.5 px-3 bg-surface-ground hover:bg-surface-elevated text-slate-400 hover:text-slate-200 border border-surface-border rounded-lg text-xs font-medium flex items-center gap-1.5 cursor-pointer transition-colors"
           >
-            ⚙️ Editor Mestre
+            <SlidersHorizontal size={13} /> Editor Mestre
           </Link>
         </div>
 
       </div>
 
-      {/* Canvas 2D Interativo do Salão */}
+      {/* Canvas 2D Interativo do Salão (Estética Linear / Dot Grid) */}
       <div
         ref={canvasRef}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseUp}
-        className="relative w-full h-[620px] bg-slate-950 rounded-3xl border border-slate-800 shadow-2xl overflow-hidden select-none"
-        style={{
-          backgroundImage: 'radial-gradient(#1e293b 1px, transparent 1px)',
-          backgroundSize: '20px 20px'
-        }}
+        className="relative w-full h-[620px] bg-surface-ground dot-grid rounded-xl border border-surface-border overflow-hidden select-none"
       >
-        {/* Entrada / Balcão */}
-        <div className="absolute top-0 left-0 right-0 h-6 bg-slate-900/60 border-b border-slate-800/80 flex items-center justify-center text-[10px] font-black uppercase text-slate-500 tracking-widest pointer-events-none">
-          🚪 Frente de Caixa / Entrada do Salão
+        {/* Marcador de Entrada / Balcão */}
+        <div className="absolute top-0 left-0 right-0 h-6 bg-surface-card/80 border-b border-surface-border flex items-center justify-center text-[10px] font-medium tracking-widest uppercase text-slate-500 pointer-events-none">
+          FRENTE DE CAIXA / ENTRADA DO SALÃO
         </div>
 
-        {/* Mesas Renderizadas no Canvas */}
+        {/* Mesas Renderizadas como Nós Arrastáveis */}
         {mesasFiltradas.map(mesa => {
           const isSelected = selectedMesaId === mesa.id;
           const isDragging = draggingMesaId === mesa.id;
           const isMerged = !!mesa.mesaPaiId;
           const masterTable = isMerged ? floorSession.mesas.find(m => m.id === mesa.mesaPaiId) : null;
 
-          // Status colors & styles
-          let statusBg = 'bg-slate-900/90 border-slate-700';
-          let badgeText = '🟢 LIVRE';
-          let badgeColor = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20';
+          // Configuração semântica de status
+          let badgeVariant: StatusBadgeVariant = 'free';
+          let borderAccent = 'border-surface-border hover:border-surface-borderHover';
+          let bgCard = 'bg-surface-card';
 
           if (mesa.statusConsumo === 'OCUPADA_ABERTA') {
-            statusBg = 'bg-amber-950/40 border-amber-500 shadow-amber-500/10 shadow-lg';
-            badgeText = '🟠 EM CONSUMO';
-            badgeColor = 'text-amber-400 bg-amber-500/20 border-amber-500/30';
+            badgeVariant = 'occupied';
+            borderAccent = 'border-status-occupied/40 shadow-xs';
           } else if (mesa.statusConsumo === 'PARCIALMENTE_PAGA') {
-            statusBg = 'bg-purple-950/40 border-purple-500 shadow-purple-500/10 shadow-lg';
-            badgeText = '🟣 PARCIAL';
-            badgeColor = 'text-purple-300 bg-purple-500/20 border-purple-500/30';
+            badgeVariant = 'partial';
+            borderAccent = 'border-status-partial/40 shadow-xs';
           } else if (mesa.statusConsumo === 'PAGA_AGUARDANDO') {
-            statusBg = 'bg-teal-950/40 border-teal-400 shadow-teal-500/20 shadow-xl animate-pulse';
-            badgeText = '🔵 PAGA / LIMPAR';
-            badgeColor = 'text-teal-300 bg-teal-500/20 border-teal-500/30';
+            badgeVariant = 'paid';
+            borderAccent = 'border-status-paid/60 ring-1 ring-status-paid/20 shadow-xs';
           }
 
           if (isMerged) {
-            statusBg += ' ring-2 ring-purple-400/50 border-dashed';
+            borderAccent += ' ring-1 ring-purple-400/40 border-dashed';
           }
 
           const saldoRestante = Math.max(0, (mesa.totalConsumo || 0) - (mesa.totalPago || 0));
@@ -419,54 +452,55 @@ export default function MapaMesasCanvas({
                 top: `${mesa.posY}px`,
                 width: `${mesa.largura || 110}px`,
                 minHeight: `${mesa.altura || 110}px`,
-                borderRadius: mesa.formato === 'redonda' ? '9999px' : '24px'
+                borderRadius: mesa.formato === 'redonda' ? '9999px' : '12px'
               }}
-              className={`absolute cursor-grab active:cursor-grabbing transition-shadow flex flex-col justify-between p-3 border-2 ${statusBg} ${
-                isSelected ? 'ring-4 ring-emerald-500/30 scale-105 z-30' : 'z-10'
-              } ${isDragging ? 'opacity-90 scale-110 z-40 shadow-2xl' : 'shadow-lg'}`}
+              className={`absolute cursor-grab active:cursor-grabbing transition-all flex flex-col justify-between p-2.5 border ${bgCard} ${borderAccent} ${
+                isSelected ? 'ring-2 ring-brand-primary z-30' : 'z-10'
+              } ${isDragging ? 'opacity-90 scale-105 z-40 shadow-xl ring-2 ring-brand-primary' : 'shadow-sm'}`}
             >
-              {/* Topo do Card da Mesa */}
+              {/* Topo do Card */}
               <div>
                 <div className="flex justify-between items-center gap-1">
-                  <span className="font-black text-white text-xs tracking-tight truncate">
+                  <span className="font-bold text-slate-100 text-xs tracking-tight truncate">
                     {mesa.numeroIdentificador}
                   </span>
-                  <span className="text-[10px] font-mono text-slate-400 flex items-center gap-0.5">
+                  <span className="text-[10px] font-mono tabular-nums text-slate-400 flex items-center gap-0.5">
                     <Users size={10} /> {mesa.capacidade}
                   </span>
                 </div>
 
-                {/* Badge de Status */}
+                {/* Badge de Status Glow Translúcido */}
                 <div className="mt-1">
-                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-black uppercase border ${badgeColor} inline-block`}>
-                    {isMerged ? `🔗 Junto à ${masterTable?.numeroIdentificador || 'Pai'}` : badgeText}
-                  </span>
+                  <StatusBadge 
+                    status={badgeVariant} 
+                    label={isMerged ? `🔗 Junto à ${masterTable?.numeroIdentificador || 'Pai'}` : undefined}
+                    pulse={mesa.statusConsumo === 'OCUPADA_ABERTA'}
+                  />
                 </div>
               </div>
 
-              {/* Corpo com Informações Financeiras */}
-              <div className="my-1 space-y-0.5 text-center">
+              {/* Informação Financeira Central com Fonte Tabular */}
+              <div className="my-1 text-center">
                 {mesa.statusConsumo !== 'LIVRE' && !isMerged && (
-                  <div className="font-mono">
-                    <span className="text-xs font-black text-white block">
-                      R$ {mesa.totalConsumo.toFixed(2)}
-                    </span>
-                    {mesa.statusConsumo === 'PARCIALMENTE_PAGA' && (
-                      <span className="text-[10px] text-purple-300 font-bold block">
-                        Falta: R$ {saldoRestante.toFixed(2)}
-                      </span>
+                  <div className="font-mono tabular-nums">
+                    <p className="text-[10px] text-slate-400">Saldo a Pagar</p>
+                    <p className="text-xs font-bold text-slate-100">
+                      R$ {saldoRestante.toFixed(2)}
+                    </p>
+                    {mesa.totalPago > 0 && (
+                      <p className="text-[9px] text-status-free font-medium">
+                        (Pago R$ {mesa.totalPago.toFixed(2)})
+                      </p>
                     )}
                   </div>
                 )}
-                {mesa.clienteNome && (
-                  <p className="text-[10px] text-slate-400 truncate max-w-[90px] mx-auto">
-                    {mesa.clienteNome}
-                  </p>
+                {mesa.statusConsumo === 'LIVRE' && !isMerged && (
+                  <p className="text-[10px] text-slate-500 font-medium">Disponível</p>
                 )}
               </div>
 
-              {/* Botões de Ação Rápida */}
-              <div className="pt-1.5 border-t border-slate-800/80 flex flex-wrap gap-1 justify-center">
+              {/* Barra de Ações Rápidas por Estado */}
+              <div className="flex items-center justify-center gap-1 pt-1 border-t border-surface-border">
                 {mesa.statusConsumo === 'LIVRE' && !isMerged && (
                   <>
                     <button
@@ -475,10 +509,10 @@ export default function MapaMesasCanvas({
                         e.stopPropagation();
                         onSelectTableForOrder(mesa);
                       }}
-                      className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold cursor-pointer transition-all shadow-sm"
-                      title="Abrir Comanda / Lançar Pedido"
+                      className="px-2 py-1 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-md text-[10px] font-semibold cursor-pointer transition-colors"
+                      title="Lançar comanda nesta mesa"
                     >
-                      Lançar Pedido
+                      + Pedido
                     </button>
                     <button
                       type="button"
@@ -486,8 +520,8 @@ export default function MapaMesasCanvas({
                         e.stopPropagation();
                         handleGuardarMesa(mesa.id);
                       }}
-                      className="p-1 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-lg cursor-pointer transition-all"
-                      title="Guardar Mesa na Gaveta Virtual"
+                      className="p-1 text-slate-500 hover:text-slate-300 hover:bg-surface-elevated rounded-md cursor-pointer transition-colors"
+                      title="Guardar mesa livre"
                     >
                       <Trash2 size={11} />
                     </button>
@@ -502,10 +536,10 @@ export default function MapaMesasCanvas({
                         e.stopPropagation();
                         onSelectTableForOrder(mesa);
                       }}
-                      className="px-1.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-[10px] font-bold cursor-pointer"
+                      className="px-1.5 py-1 bg-surface-elevated hover:bg-surface-border text-slate-200 rounded-md text-[10px] font-medium cursor-pointer transition-colors"
                       title="Adicionar mais itens"
                     >
-                      + Pedido
+                      + Item
                     </button>
                     <button
                       type="button"
@@ -513,7 +547,7 @@ export default function MapaMesasCanvas({
                         e.stopPropagation();
                         handleOpenPaymentModal(mesa);
                       }}
-                      className="px-2 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-[10px] font-bold cursor-pointer shadow-sm"
+                      className="px-2 py-1 bg-status-free/20 hover:bg-status-free/30 text-status-free border border-status-free/30 rounded-md text-[10px] font-semibold cursor-pointer transition-colors"
                     >
                       Pagar
                     </button>
@@ -523,7 +557,7 @@ export default function MapaMesasCanvas({
                         e.stopPropagation();
                         setMesaParaJuntar(mesa);
                       }}
-                      className="p-1 bg-purple-950/60 hover:bg-purple-900 text-purple-300 rounded-lg cursor-pointer"
+                      className="p-1 text-purple-400 hover:bg-purple-950/40 rounded-md cursor-pointer transition-colors"
                       title="Juntar à outra mesa"
                     >
                       <Link2 size={11} />
@@ -538,9 +572,9 @@ export default function MapaMesasCanvas({
                       e.stopPropagation();
                       handleOpenPaymentModal(mesa);
                     }}
-                    className="px-2 py-1 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-[10px] font-bold cursor-pointer shadow-sm"
+                    className="px-2 py-1 bg-status-partial/20 hover:bg-status-partial/30 text-status-partial border border-status-partial/30 rounded-md text-[10px] font-semibold cursor-pointer transition-colors"
                   >
-                    Quitar Saldo
+                    Quitar
                   </button>
                 )}
 
@@ -551,9 +585,9 @@ export default function MapaMesasCanvas({
                       e.stopPropagation();
                       handleLiberarMesa(mesa.id);
                     }}
-                    className="px-2 py-1 bg-teal-600 hover:bg-teal-500 text-white rounded-lg text-[10px] font-black uppercase cursor-pointer shadow-md"
+                    className="px-2 py-1 bg-status-paid/20 hover:bg-status-paid/30 text-status-paid border border-status-paid/30 rounded-md text-[10px] font-semibold cursor-pointer transition-colors"
                   >
-                    ✨ Liberar
+                    Liberar
                   </button>
                 )}
 
@@ -564,21 +598,21 @@ export default function MapaMesasCanvas({
                       e.stopPropagation();
                       handleSepararMesa(mesa.id);
                     }}
-                    className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-[10px] font-bold flex items-center gap-1 cursor-pointer"
+                    className="px-2 py-1 bg-surface-elevated hover:bg-surface-border text-slate-300 rounded-md text-[10px] font-medium flex items-center gap-1 cursor-pointer transition-colors"
                     title="Desvincular da mesa master"
                   >
                     <Unlink2 size={10} /> Separar
                   </button>
                 )}
 
-                {/* Botão de Histórico (Achados e Perdidos RF07) */}
+                {/* Histórico do Turno (Achados & Perdidos) */}
                 <button
                   type="button"
                   onClick={e => {
                     e.stopPropagation();
                     setMesaParaHistorico(mesa);
                   }}
-                  className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-500 hover:text-slate-300 rounded-lg cursor-pointer"
+                  className="p-1 text-slate-500 hover:text-slate-300 hover:bg-surface-elevated rounded-md cursor-pointer transition-colors"
                   title="Ver Histórico do Turno (Achados & Perdidos)"
                 >
                   <History size={11} />
@@ -589,42 +623,65 @@ export default function MapaMesasCanvas({
         })}
       </div>
 
-      {/* MODAL 1: RECEBER PAGAMENTO PARCIAL OU TOTAL */}
-      {mesaParaPagamento && (
-        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-emerald-500/40 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl animate-fade-in space-y-5">
-            <div className="flex items-center gap-3 text-emerald-400">
-              <div className="p-3 bg-emerald-500/10 rounded-2xl border border-emerald-500/20">
-                <DollarSign size={28} />
-              </div>
-              <div>
-                <h3 className="text-xl font-black text-white">Pagamento: {mesaParaPagamento.numeroIdentificador}</h3>
-                <p className="text-xs text-slate-400">Amortização parcial ou quitação total da comanda.</p>
-              </div>
-            </div>
-
-            {/* Extrato da Conta */}
-            <div className="bg-slate-950/70 p-4 rounded-2xl border border-slate-800 space-y-2 text-xs">
-              <div className="flex justify-between text-slate-300">
+      {/* GAVETA LATERAL DESLIZANTE (SLIDING SHEET): RECEBER PAGAMENTO */}
+      <SlidingSheet
+        isOpen={!!mesaParaPagamento}
+        onClose={() => setMesaParaPagamento(null)}
+        title={
+          <div className="flex items-center gap-2">
+            <DollarSign className="text-status-free" size={18} />
+            <span>Pagamento: {mesaParaPagamento?.numeroIdentificador}</span>
+          </div>
+        }
+        description="Amortização parcial ou quitação total da conta da mesa."
+        footer={
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setMesaParaPagamento(null)}
+              className="flex-1 py-2.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmPayment}
+              className="flex-1 py-2.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Confirmar Pagamento
+            </button>
+          </div>
+        }
+      >
+        {mesaParaPagamento && (
+          <div className="space-y-4">
+            
+            {/* Extrato com Tipografia Tabular */}
+            <div className="bg-surface-ground p-3.5 rounded-lg border border-surface-border space-y-2 text-xs">
+              <div className="flex justify-between text-slate-400">
                 <span>Total Consumido:</span>
-                <strong className="font-mono text-white text-sm">R$ {mesaParaPagamento.totalConsumo.toFixed(2)}</strong>
+                <strong className="font-mono tabular-nums text-slate-200">
+                  R$ {mesaParaPagamento.totalConsumo.toFixed(2)}
+                </strong>
               </div>
-              <div className="flex justify-between text-emerald-400">
+              <div className="flex justify-between text-status-free">
                 <span>Já Pago / Amortizado:</span>
-                <strong className="font-mono">- R$ {(mesaParaPagamento.totalPago || 0).toFixed(2)}</strong>
+                <strong className="font-mono tabular-nums">
+                  - R$ {(mesaParaPagamento.totalPago || 0).toFixed(2)}
+                </strong>
               </div>
-              <div className="pt-2 border-t border-slate-800 flex justify-between font-bold text-sm">
-                <span className="text-slate-200">Saldo Restante a Pagar:</span>
-                <span className="font-mono text-amber-400">
+              <div className="pt-2 border-t border-surface-border flex justify-between font-semibold">
+                <span className="text-slate-300">Saldo Restante a Pagar:</span>
+                <span className="font-mono tabular-nums text-status-occupied font-bold">
                   R$ {Math.max(0, mesaParaPagamento.totalConsumo - (mesaParaPagamento.totalPago || 0)).toFixed(2)}
                 </span>
               </div>
             </div>
 
-            {/* Atalhos Rápidos de Divisão da Conta */}
+            {/* Atalhos Rápidos de Divisão */}
             <div>
-              <label className="block text-[11px] font-bold text-slate-400 mb-1.5 uppercase">
-                Atalhos Rápidos de Amortização:
+              <label className="block text-[10px] font-medium tracking-wider text-slate-400 mb-1.5 uppercase">
+                Atalhos de Amortização
               </label>
               <div className="grid grid-cols-4 gap-1.5">
                 {[
@@ -637,7 +694,7 @@ export default function MapaMesasCanvas({
                     key={chip.label}
                     type="button"
                     onClick={() => setValorPagamentoInput(chip.val.toFixed(2))}
-                    className="py-1.5 bg-slate-950 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-mono font-bold border border-slate-800 cursor-pointer"
+                    className="py-1.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 rounded-md text-xs font-mono tabular-nums font-semibold border border-surface-border cursor-pointer transition-colors"
                   >
                     {chip.label}
                   </button>
@@ -645,9 +702,9 @@ export default function MapaMesasCanvas({
               </div>
             </div>
 
-            {/* Campo de Valor */}
+            {/* Input Utilitário de Valor */}
             <div>
-              <label className="block text-xs font-bold text-slate-300 mb-1">
+              <label className="block text-xs font-semibold text-slate-300 mb-1">
                 Valor a Receber Agora (R$):
               </label>
               <input
@@ -655,13 +712,13 @@ export default function MapaMesasCanvas({
                 step="0.50"
                 value={valorPagamentoInput}
                 onChange={e => setValorPagamentoInput(e.target.value)}
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-lg font-mono font-black text-emerald-400 outline-none focus:border-emerald-500"
+                className="w-full input-util font-mono tabular-nums text-lg font-bold text-status-free"
               />
             </div>
 
-            {/* Forma de Pagamento */}
+            {/* Método de Pagamento em Grade Compacta */}
             <div>
-              <label className="block text-xs font-bold text-slate-300 mb-1.5">
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
                 Método de Pagamento:
               </label>
               <div className="grid grid-cols-2 gap-2">
@@ -675,266 +732,250 @@ export default function MapaMesasCanvas({
                     key={m.id}
                     type="button"
                     onClick={() => setMetodoPagamento(m.id)}
-                    className={`p-2.5 rounded-xl border text-xs font-bold flex items-center gap-2 cursor-pointer transition-all ${
+                    className={`p-2 rounded-lg border text-xs font-medium flex items-center gap-2 cursor-pointer transition-colors ${
                       metodoPagamento === m.id
-                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-md'
-                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                        ? 'bg-brand-primary/10 border-brand-primary text-brand-primary font-semibold'
+                        : 'bg-surface-ground border-surface-border text-slate-400 hover:text-slate-200'
                     }`}
                   >
-                    <m.icon size={15} /> {m.label}
+                    <m.icon size={14} /> {m.label}
                   </button>
                 ))}
               </div>
             </div>
 
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setMesaParaPagamento(null)}
-                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmPayment}
-                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 cursor-pointer"
-              >
-                Confirmar Pagamento
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+        )}
+      </SlidingSheet>
 
-      {/* MODAL 2: JUNÇÃO DE MESAS (MERGE) */}
-      {mesaParaJuntar && (
-        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-purple-500/40 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl animate-fade-in space-y-5">
-            <div className="flex items-center gap-3 text-purple-400">
-              <div className="p-3 bg-purple-500/10 rounded-2xl border border-purple-500/20">
-                <Link2 size={28} />
-              </div>
+      {/* GAVETA LATERAL DESLIZANTE (SLIDING SHEET): HISTÓRICO DO TURNO (ACHADOS & PERDIDOS) */}
+      <SlidingSheet
+        isOpen={!!mesaParaHistorico}
+        onClose={() => setMesaParaHistorico(null)}
+        title={
+          <div className="flex items-center gap-2">
+            <History className="text-brand-accent" size={18} />
+            <span>Histórico: {mesaParaHistorico?.numeroIdentificador}</span>
+          </div>
+        }
+        description="Registro de ocupações do turno para devolução de pertences esquecidos."
+        width="lg"
+      >
+        {mesaParaHistorico && (
+          <div className="space-y-4">
+            
+            {/* Status Atual da Mesa */}
+            <div className="bg-surface-ground p-3 rounded-lg border border-surface-border flex items-center justify-between">
               <div>
-                <h3 className="text-xl font-black text-white">Juntar Mesas Físicas</h3>
-                <p className="text-xs text-slate-400">Vincular <strong>{mesaParaJuntar.numeroIdentificador}</strong> a uma mesa Master.</p>
+                <span className="text-[10px] uppercase text-slate-500 font-medium">Estado no Salão</span>
+                <p className="text-xs font-semibold text-slate-200">
+                  {mesaParaHistorico.statusConsumo} ({mesaParaHistorico.capacidade} Lugares)
+                </p>
               </div>
+              <StatusBadge status={mesaParaHistorico.statusConsumo === 'LIVRE' ? 'free' : 'occupied'} />
             </div>
 
-            <p className="text-xs text-slate-300 leading-relaxed bg-purple-950/20 p-3 rounded-xl border border-purple-500/30">
-              💡 Os pedidos e o saldo a pagar serão concentrados na mesa Master. A mesa vinculada exibirá um anel conector no mapa.
-            </p>
+            {/* Linha do Tempo dos Clientes Recentes */}
+            <div className="space-y-2">
+              <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">
+                Atendimentos Concluídos Neste Turno
+              </span>
 
-            <div>
-              <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                Selecione a Mesa Master (Concentradora):
-              </label>
-              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                {mesasNoSalao
-                  .filter(m => m.id !== mesaParaJuntar.id && !m.mesaPaiId)
-                  .map(other => (
-                    <button
-                      key={other.id}
-                      type="button"
-                      onClick={() => setMesaMasterAlvoId(other.id)}
-                      className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer flex justify-between items-center ${
-                        mesaMasterAlvoId === other.id
-                          ? 'bg-purple-600 border-purple-500 text-white font-bold shadow-md'
-                          : 'bg-slate-950 border-slate-800 text-slate-300 hover:text-white'
-                      }`}
-                    >
-                      <span>{other.numeroIdentificador}</span>
-                      <span className="text-[10px] font-mono opacity-80">
-                        {other.statusConsumo}
-                      </span>
-                    </button>
-                  ))}
-              </div>
-            </div>
-
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setMesaParaJuntar(null)}
-                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                disabled={!mesaMasterAlvoId}
-                onClick={handleConfirmMerge}
-                className="flex-1 py-3 bg-purple-600 hover:bg-purple-500 disabled:bg-slate-800 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-purple-600/30 cursor-pointer"
-              >
-                Unificar Mesas
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: HISTÓRICO RÁPIDO DO TURNO (ACHADOS E PERDIDOS RF07) */}
-      {mesaParaHistorico && (
-        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-lg w-full shadow-2xl animate-fade-in space-y-5">
-            <div className="flex justify-between items-start">
-              <div className="flex items-center gap-3 text-blue-400">
-                <div className="p-3 bg-blue-500/10 rounded-2xl border border-blue-500/20">
-                  <History size={26} />
-                </div>
-                <div>
-                  <h3 className="text-xl font-black text-white">Histórico do Turno (Achados & Perdidos)</h3>
-                  <p className="text-xs text-slate-400">{mesaParaHistorico.numeroIdentificador} • Ocupações recentes</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setMesaParaHistorico(null)}
-                className="text-slate-500 hover:text-white p-1"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-3 rounded-xl border border-slate-800">
-              🔍 Utilize este histórico para identificar clientes que deixaram pertences ou para auditar tempos de permanência do turno.
-            </p>
-
-            <div className="space-y-3 max-h-64 overflow-y-auto pr-1">
-              {!mesaParaHistorico.historicoTurno || mesaParaHistorico.historicoTurno.length === 0 ? (
-                <div className="py-8 text-center text-slate-500 text-xs">
-                  Nenhum atendimento finalizado nesta mesa durante o turno atual.
+              {(!mesaParaHistorico.historicoTurno || mesaParaHistorico.historicoTurno.length === 0) ? (
+                <div className="p-8 text-center bg-surface-ground rounded-lg border border-dashed border-surface-border">
+                  <History size={24} className="mx-auto text-slate-600 mb-2" />
+                  <p className="text-xs text-slate-400 font-medium">Nenhum atendimento anterior registrado nesta mesa hoje.</p>
                 </div>
               ) : (
-                mesaParaHistorico.historicoTurno.map((h, idx) => {
-                  const horaEntrada = new Date(h.abertaEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-                  const horaSaida = new Date(h.fechadaEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-
-                  return (
-                    <div key={idx} className="bg-slate-950 p-3.5 rounded-2xl border border-slate-800 space-y-1.5 text-xs">
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-white text-sm">{h.clienteNome}</span>
-                        <span className="font-mono text-emerald-400 font-bold">R$ {h.totalPago.toFixed(2)}</span>
+                <div className="space-y-2">
+                  {mesaParaHistorico.historicoTurno.map((item, idx) => (
+                    <div key={item.id || idx} className="p-3 bg-surface-ground rounded-lg border border-surface-border space-y-1.5">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <strong className="text-xs font-bold text-slate-100">{item.clienteNome || 'Cliente Não Identificado'}</strong>
+                          <span className="text-[10px] text-slate-500 block">Atendente: {item.garcomOuOperador || 'Operador'}</span>
+                        </div>
+                        <span className="text-xs font-mono tabular-nums font-bold text-status-free">
+                          R$ {item.totalConsumo.toFixed(2)}
+                        </span>
                       </div>
-                      <div className="flex justify-between text-[11px] text-slate-400 font-mono">
-                        <span>Horário: {horaEntrada} até {horaSaida}</span>
-                        <span>Atendente: {h.garcomOuOperador}</span>
+                      <div className="flex items-center gap-3 text-[10px] text-slate-400 pt-1 border-t border-surface-border font-mono tabular-nums">
+                        <span>Entrada: {new Date(item.abertaEm).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                        <span>Saída: {new Date(item.fechadaEm).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                       </div>
                     </div>
-                  );
-                })
+                  ))}
+                </div>
               )}
             </div>
 
+          </div>
+        )}
+      </SlidingSheet>
+
+      {/* GAVETA LATERAL DESLIZANTE (SLIDING SHEET): ADICIONAR MESA EXTRA */}
+      <SlidingSheet
+        isOpen={showExtraTableModal}
+        onClose={() => setShowExtraTableModal(false)}
+        title={
+          <div className="flex items-center gap-2">
+            <Plus className="text-brand-primary" size={18} />
+            <span>Adicionar Mesa Extra</span>
+          </div>
+        }
+        description="Insira uma mesa avulsa ou desdobre o salão para alta demanda."
+        footer={
+          <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => setMesaParaHistorico(null)}
-              className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl font-bold text-xs cursor-pointer"
+              onClick={() => setShowExtraTableModal(false)}
+              className="flex-1 py-2.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg text-xs font-semibold cursor-pointer transition-colors"
             >
-              Fechar Histórico
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmAddExtra}
+              className="flex-1 py-2.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Adicionar ao Mapa
             </button>
           </div>
-        </div>
-      )}
+        }
+      >
+        <form onSubmit={handleConfirmAddExtra} className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+              Identificador da Mesa
+            </label>
+            <input
+              type="text"
+              autoFocus
+              required
+              value={extraTableNameInput}
+              onChange={e => setExtraTableNameInput(e.target.value)}
+              placeholder="Ex: Mesa 10, Bistrô 02, Varanda 01"
+              className="w-full input-util text-sm"
+            />
+          </div>
+          <p className="text-[11px] text-slate-500 leading-relaxed">
+            A mesa surgirá imediatamente no centro do canvas e poderá ser posicionada por arraste.
+          </p>
+        </form>
+      </SlidingSheet>
 
-      {/* MODAL 4: ADICIONAR MESA EXTRA */}
-      {showExtraTableModal && (
-        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl animate-fade-in space-y-5">
-            <div className="flex items-center gap-3 text-emerald-400">
-              <div className="p-3 bg-emerald-500/10 rounded-2xl border border-emerald-500/20">
-                <Plus size={28} />
-              </div>
-              <div>
-                <h3 className="text-xl font-black text-white">Adicionar Mesa Extra</h3>
-                <p className="text-xs text-slate-400">Puxar mesa da gaveta virtual para o salão.</p>
-              </div>
-            </div>
-
+      {/* GAVETA LATERAL DESLIZANTE (SLIDING SHEET): JUNTAR MESAS (MERGE) */}
+      <SlidingSheet
+        isOpen={!!mesaParaJuntar}
+        onClose={() => setMesaParaJuntar(null)}
+        title={
+          <div className="flex items-center gap-2">
+            <Link2 className="text-purple-400" size={18} />
+            <span>Juntar: {mesaParaJuntar?.numeroIdentificador}</span>
+          </div>
+        }
+        description="Vincule esta mesa a outra mesa master para unificar o atendimento."
+        footer={
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setMesaParaJuntar(null)}
+              className="flex-1 py-2.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmMerge}
+              disabled={!mesaMasterAlvoId}
+              className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-40 text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Confirmar Junção
+            </button>
+          </div>
+        }
+      >
+        {mesaParaJuntar && (
+          <div className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-slate-300 mb-1">
-                Identificador da Mesa:
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Selecione a Mesa Master (Concentradora)
               </label>
-              <input
-                type="text"
-                value={extraTableNameInput}
-                onChange={e => setExtraTableNameInput(e.target.value)}
-                placeholder="Ex: Mesa Extra 07 ou Bistrô Jardim"
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-sm text-white font-bold outline-none focus:border-emerald-500"
-              />
-            </div>
-
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowExtraTableModal(false)}
-                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer"
+              <select
+                value={mesaMasterAlvoId}
+                onChange={e => setMesaMasterAlvoId(e.target.value)}
+                className="w-full input-util text-xs cursor-pointer"
               >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmExtraTable}
-                className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 cursor-pointer"
-              >
-                Colocar no Salão
-              </button>
+                <option value="">Selecione uma mesa...</option>
+                {mesasNoSalao
+                  .filter(m => m.id !== mesaParaJuntar.id && !m.mesaPaiId)
+                  .map(m => (
+                    <option key={m.id} value={m.id}>
+                      {m.numeroIdentificador} ({m.statusConsumo})
+                    </option>
+                  ))}
+              </select>
             </div>
+            <p className="text-[11px] text-slate-500 leading-relaxed">
+              A mesa vinculada permanecerá no mapa sinalizada visualmente com anel de junção e poderá ser desvinculada a qualquer instante.
+            </p>
           </div>
-        </div>
-      )}
+        )}
+      </SlidingSheet>
 
-      {/* MODAL 5: MUDAR LAYOUT DE SALÃO NO TURNO */}
-      {showTemplateSwitchModal && (
-        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl animate-fade-in space-y-5">
-            <div className="flex items-center gap-3 text-amber-400">
-              <div className="p-3 bg-amber-500/10 rounded-2xl border border-amber-500/20">
-                <LayoutGrid size={28} />
-              </div>
+      {/* GAVETA LATERAL DESLIZANTE (SLIDING SHEET): MUDAR LAYOUT */}
+      <SlidingSheet
+        isOpen={showTemplateSwitchModal}
+        onClose={() => setShowTemplateSwitchModal(false)}
+        title={
+          <div className="flex items-center gap-2">
+            <LayoutGrid className="text-brand-accent" size={18} />
+            <span>Alternar Layout de Salão</span>
+          </div>
+        }
+        description="Mude a disposição padrão das mesas no salão para o turno atual."
+        footer={
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => setShowTemplateSwitchModal(false)}
+              className="flex-1 py-2.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Cancelar
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmSwitchTemplate}
+              className="flex-1 py-2.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+            >
+              Aplicar Layout
+            </button>
+          </div>
+        }
+      >
+        <div className="space-y-2">
+          {templates.map(tpl => (
+            <button
+              key={tpl.id}
+              type="button"
+              onClick={() => setSelectedTemplateToSwitch(tpl.id)}
+              className={`w-full p-3 rounded-lg border text-left cursor-pointer transition-colors flex items-center justify-between ${
+                selectedTemplateToSwitch === tpl.id
+                  ? 'bg-brand-primary/10 border-brand-primary text-brand-primary'
+                  : 'bg-surface-ground border-surface-border text-slate-300 hover:border-surface-borderHover'
+              }`}
+            >
               <div>
-                <h3 className="text-xl font-black text-white">Alterar Layout do Turno</h3>
-                <p className="text-xs text-slate-400">Selecione o novo template para reorganizar o salão.</p>
+                <p className="text-xs font-semibold">{tpl.nome}</p>
+                <p className="text-[10px] text-slate-500">{tpl.items.length} mesas configuradas</p>
               </div>
-            </div>
-
-            <div className="space-y-2">
-              {templates.filter(t => t.ativo).map(t => (
-                <button
-                  key={t.id}
-                  type="button"
-                  onClick={() => setSelectedTemplateToSwitch(t.id)}
-                  className={`w-full text-left p-3 rounded-xl border transition-all cursor-pointer flex justify-between items-center ${
-                    selectedTemplateToSwitch === t.id
-                      ? 'bg-amber-500/20 border-amber-500 text-amber-200 font-bold shadow-md'
-                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
-                  }`}
-                >
-                  <span>{t.nome}</span>
-                  <span className="text-[10px] font-mono">{t.items.length} mesas</span>
-                </button>
-              ))}
-            </div>
-
-            <div className="flex gap-3 pt-2">
-              <button
-                type="button"
-                onClick={() => setShowTemplateSwitchModal(false)}
-                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmSwitchTemplate}
-                className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 text-slate-950 rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-amber-600/30 cursor-pointer"
-              >
-                Aplicar Layout
-              </button>
-            </div>
-          </div>
+              {selectedTemplateToSwitch === tpl.id && (
+                <Check size={16} className="text-brand-primary" />
+              )}
+            </button>
+          ))}
         </div>
-      )}
+      </SlidingSheet>
 
     </div>
   );
