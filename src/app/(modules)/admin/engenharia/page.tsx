@@ -4,9 +4,10 @@ import { useInventory, Product } from '@/lib/store';
 import { 
   ArrowLeft, TrendingUp, Sparkles, AlertCircle, DollarSign, Award, 
   Flame, Filter, Sliders, Check, BarChart2, HelpCircle, Info, ChevronRight,
-  TrendingDown, Store, Smartphone
+  TrendingDown, Store, Smartphone, ShieldAlert, CheckCircle2, XCircle, AlertTriangle
 } from 'lucide-react';
 import Link from 'next/link';
+import { calculateIfoodViability } from '@/lib/pricing';
 
 export type QuadrantType = 'star' | 'plowhorse' | 'puzzle' | 'dog';
 
@@ -29,7 +30,14 @@ export default function EngenhariaCardapioPage() {
   // Filtros
   const [channelFilter, setChannelFilter] = useState<'geral' | 'balcao' | 'ifood'>('geral');
   const [categoryFilter, setCategoryFilter] = useState<'todos' | 'lanche' | 'duplo' | 'porcao' | 'bebida'>('lanche');
-  const [viewMode, setViewMode] = useState<'quadrantes' | 'tabela' | 'matriz'>('quadrantes');
+  const [viewMode, setViewMode] = useState<'quadrantes' | 'tabela' | 'matriz' | 'viabilidade_ifood'>('quadrantes');
+
+  // Parâmetros de Viabilidade do iFood (Promoções, Cupom Hits e Ads)
+  const [ifoodCommissionPct, setIfoodCommissionPct] = useState<number>(23); // 23%
+  const [ifoodPaymentFeePct, setIfoodPaymentFeePct] = useState<number>(3.2); // 3.2%
+  const [packagingCostInput, setPackagingCostInput] = useState<number>(2.50); // R$ 2.50
+  const [adsCostInput, setAdsCostInput] = useState<number>(2.00); // R$ 2.00
+  const [hitsDiscountInput, setHitsDiscountInput] = useState<number>(10.00); // R$ 10.00 (custo do cupom bancado pela loja)
 
   // Simulador de Reprecificação
   const [selectedSimProduct, setSelectedSimProduct] = useState<string>('');
@@ -187,6 +195,49 @@ export default function EngenhariaCardapioPage() {
     };
   }, [simItem, simPriceIncrease]);
 
+  // Cálculos de Viabilidade do iFood (Hits, Ads & Embalagem)
+  const ifoodViabilityItems = useMemo(() => {
+    return eligibleProducts.map(p => {
+      const cmv = getProductCmv(p.recipe || []);
+      const viability = calculateIfoodViability({
+        priceIfood: p.priceIfood,
+        cmv,
+        commissionPct: ifoodCommissionPct / 100,
+        paymentFeePct: ifoodPaymentFeePct / 100,
+        packagingCost: packagingCostInput,
+        adsCostPerOrder: adsCostInput,
+        hitsDiscount: hitsDiscountInput
+      });
+
+      return {
+        product: p,
+        cmv,
+        ...viability
+      };
+    });
+  }, [eligibleProducts, getProductCmv, ifoodCommissionPct, ifoodPaymentFeePct, packagingCostInput, adsCostInput, hitsDiscountInput]);
+
+  const ifoodViabilitySummary = useMemo(() => {
+    const total = ifoodViabilityItems.length;
+    const viaveis = ifoodViabilityItems.filter(i => i.hitsStatus === 'viavel');
+    const alertas = ifoodViabilityItems.filter(i => i.hitsStatus === 'alerta');
+    const prejuizos = ifoodViabilityItems.filter(i => i.hitsStatus === 'prejuizo');
+
+    const avgNormalProfit = total > 0 ? ifoodViabilityItems.reduce((acc, i) => acc + i.normalNetProfit, 0) / total : 0;
+    const avgHitsProfit = total > 0 ? ifoodViabilityItems.reduce((acc, i) => acc + i.hitsNetProfit, 0) / total : 0;
+
+    return {
+      total,
+      viaveisCount: viaveis.length,
+      alertasCount: alertas.length,
+      prejuizosCount: prejuizos.length,
+      avgNormalProfit,
+      avgHitsProfit,
+      viaveisList: viaveis,
+      prejuizosList: prejuizos
+    };
+  }, [ifoodViabilityItems]);
+
   if (!isLoaded) return null;
 
   return (
@@ -312,6 +363,17 @@ export default function EngenhariaCardapioPage() {
                 }`}
               >
                 Tabela
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode('viabilidade_ifood')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  viewMode === 'viabilidade_ifood' 
+                    ? 'bg-red-600 text-white shadow-md font-black' 
+                    : 'text-amber-400 hover:text-white'
+                }`}
+              >
+                <Flame size={13} /> Viabilidade iFood (Hits & Ads)
               </button>
             </div>
           </div>
@@ -678,6 +740,310 @@ export default function EngenhariaCardapioPage() {
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {/* VISÃO 4: VIABILIDADE DO IFOOD (HITS, ADS, EMBALAGEM & COMISSÕES) */}
+        {viewMode === 'viabilidade_ifood' && (
+          <div className="space-y-8 animate-fade-in">
+            
+            {/* Topo da Aba de Viabilidade */}
+            <div className="glass-card rounded-3xl p-6 md:p-8 border-2 border-red-500/30 space-y-6">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+                <div>
+                  <div className="inline-flex items-center gap-2 text-red-400 font-extrabold text-xs uppercase tracking-wider mb-1">
+                    <Flame size={16} /> Inteligência de Delivery & Campanhas
+                  </div>
+                  <h2 className="text-2xl md:text-3xl font-black text-white tracking-tight">
+                    Viabilidade Financeira do iFood (Orgânico vs. Cupom Hits)
+                  </h2>
+                  <p className="text-xs text-slate-300 mt-1 max-w-3xl leading-relaxed">
+                    No iFood, campanhas como o <strong>Cupom Hits</strong> e <strong>iFood Ads</strong> atraem muitos clientes, mas o desconto do lanche (normalmente <strong>R$ 10,00</strong>) é custeado integralmente pela sua loja. Itens de baixo custo (como o <strong>EUA</strong>) são viáveis, mas lanches de alto CMV (como o <strong>México</strong>) geram prejuízo quando participam.
+                  </p>
+                </div>
+              </div>
+
+              {/* Parâmetros Operacionais Editáveis */}
+              <div className="bg-slate-950/70 p-5 rounded-2xl border border-slate-800 space-y-4">
+                <div className="flex items-center gap-2 text-xs font-black uppercase text-amber-400 tracking-wider">
+                  <Sliders size={15} /> Ajustar Parâmetros Reais da Sua Operação no iFood:
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4 text-xs">
+                  <div>
+                    <label className="block text-slate-400 font-bold mb-1">Comissão iFood (%)</label>
+                    <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-3 py-2">
+                      <input
+                        type="number"
+                        step="0.5"
+                        value={ifoodCommissionPct}
+                        onChange={e => setIfoodCommissionPct(parseFloat(e.target.value) || 0)}
+                        className="w-full bg-transparent text-white font-mono font-bold outline-none"
+                      />
+                      <span className="text-slate-500 font-bold">%</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-0.5 block">23% Entrega iFood / 12% Própria</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 font-bold mb-1">Taxa Pagamento (%)</label>
+                    <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-3 py-2">
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={ifoodPaymentFeePct}
+                        onChange={e => setIfoodPaymentFeePct(parseFloat(e.target.value) || 0)}
+                        className="w-full bg-transparent text-white font-mono font-bold outline-none"
+                      />
+                      <span className="text-slate-500 font-bold">%</span>
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-0.5 block">Transação no app (3.2%)</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 font-bold mb-1">Embalagem Delivery (R$)</label>
+                    <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-3 py-2">
+                      <span className="text-slate-500 font-mono mr-1">R$</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={packagingCostInput}
+                        onChange={e => setPackagingCostInput(parseFloat(e.target.value) || 0)}
+                        className="w-full bg-transparent text-white font-mono font-bold outline-none"
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-0.5 block">Sacola, papel e lacre</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 font-bold mb-1">iFood Ads por Pedido (R$)</label>
+                    <div className="flex items-center bg-slate-900 border border-slate-700 rounded-xl px-3 py-2">
+                      <span className="text-slate-500 font-mono mr-1">R$</span>
+                      <input
+                        type="number"
+                        step="0.5"
+                        value={adsCostInput}
+                        onChange={e => setAdsCostInput(parseFloat(e.target.value) || 0)}
+                        className="w-full bg-transparent text-white font-mono font-bold outline-none"
+                      />
+                    </div>
+                    <span className="text-[10px] text-slate-500 mt-0.5 block">Tráfego pago rateado</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 font-bold mb-1">Custo Cupom Hits (R$)</label>
+                    <div className="flex items-center bg-slate-900 border border-red-500/40 rounded-xl px-3 py-2">
+                      <span className="text-red-400 font-mono mr-1">-R$</span>
+                      <input
+                        type="number"
+                        step="1"
+                        value={hitsDiscountInput}
+                        onChange={e => setHitsDiscountInput(parseFloat(e.target.value) || 0)}
+                        className="w-full bg-transparent text-red-300 font-mono font-black outline-none"
+                      />
+                    </div>
+                    <span className="text-[10px] text-red-400 mt-0.5 block font-bold">Desconto pago pela loja</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Cards de Métricas da Viabilidade */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div className="p-5 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-400 uppercase">Itens Viáveis no Hits</span>
+                    <CheckCircle2 size={18} className="text-emerald-400" />
+                  </div>
+                  <h3 className="text-2xl font-mono font-black text-emerald-400">
+                    {ifoodViabilitySummary.viaveisCount} / {ifoodViabilitySummary.total} itens
+                  </h3>
+                  <p className="text-[10px] text-slate-400">Suportam a promoção com lucro saudável (&gt;18%)</p>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-red-950/30 border border-red-500/30 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-400 uppercase">Prejuízo no Hits (Proibidos)</span>
+                    <XCircle size={18} className="text-red-400" />
+                  </div>
+                  <h3 className="text-2xl font-mono font-black text-red-400">
+                    {ifoodViabilitySummary.prejuizosCount} itens
+                  </h3>
+                  <p className="text-[10px] text-red-300">Margem &lt; 5% ou prejuízo direto ao vender</p>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
+                  <span className="text-xs font-bold text-slate-400 uppercase">Lucro Médio Orgânico</span>
+                  <h3 className="text-2xl font-mono font-black text-white">
+                    R$ {ifoodViabilitySummary.avgNormalProfit.toFixed(2)}
+                  </h3>
+                  <p className="text-[10px] text-slate-500">Preço cheio sem cupom</p>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-slate-950 border border-slate-800 space-y-1">
+                  <span className="text-xs font-bold text-slate-400 uppercase">Lucro Médio com Cupom Hits</span>
+                  <h3 className={`text-2xl font-mono font-black ${ifoodViabilitySummary.avgHitsProfit >= 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                    R$ {ifoodViabilitySummary.avgHitsProfit.toFixed(2)}
+                  </h3>
+                  <p className="text-[10px] text-slate-500">Após desconto de R$ {hitsDiscountInput.toFixed(2)} + Ads</p>
+                </div>
+              </div>
+
+              {/* Destaque Comparativo EUA vs. México */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="p-5 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 space-y-2 text-xs">
+                  <div className="flex items-center gap-2 text-emerald-400 font-black uppercase text-sm">
+                    <span>🇺🇸 Caso de Sucesso: Hambúrgueres de CMV Baixo (Ex: EUA)</span>
+                  </div>
+                  <p className="text-slate-300 leading-relaxed">
+                    Por terem receitas enxutas e custos de insumos controlados, suportam pagar o Cupom Hits de R$ 10,00 e o iFood Ads, mantendo margem positiva. São perfeitos para colocar na vitrine promocional e alavancar o ranqueamento da hamburgueria no algoritmo do iFood.
+                  </p>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-red-950/20 border border-red-500/30 space-y-2 text-xs">
+                  <div className="flex items-center gap-2 text-red-400 font-black uppercase text-sm">
+                    <span>🇲🇽 Ponto de Atenção Crítico: Hambúrgueres Complexos (Ex: México)</span>
+                  </div>
+                  <p className="text-slate-300 leading-relaxed">
+                    Lanches duplos, artesanais ou com queijos nobres e bacon têm CMV alto. Se você colocar um lanche com CMV de R$ 18+ em promoção de cupom de R$ 10, a loja <strong>PAGA PARA TRABALHAR</strong>. Remova-os da campanha ou aumente o preço no iFood para compensar!
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Tabela Comparativa Detalhada Produto a Produto */}
+            <div className="glass-card rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
+              <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-900/50">
+                <div>
+                  <h3 className="text-lg font-black text-white flex items-center gap-2">
+                    Diagnóstico de Viabilidade por Produto ({ifoodViabilityItems.length} itens)
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Compare lado a lado o lucro da venda orgânica vs. o lucro quando o cliente usa o Cupom Hits.
+                  </p>
+                </div>
+                <Link
+                  href="/admin/precificacao"
+                  className="text-xs font-bold text-emerald-400 hover:underline flex items-center gap-1"
+                >
+                  <DollarSign size={14} /> Ajustar Preços no iFood
+                </Link>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-950/90 border-b border-slate-800 text-[11px] font-black uppercase text-slate-400 tracking-wider">
+                      <th className="p-4">Produto & CMV</th>
+                      <th className="p-4">Preço iFood Atual</th>
+                      <th className="p-4">Venda Normal (Orgânica)</th>
+                      <th className="p-4">Com Cupom Hits (-R$ {hitsDiscountInput.toFixed(0)})</th>
+                      <th className="p-4 text-center">Diagnóstico da Promoção</th>
+                      <th className="p-4 text-right">Preço Mínimo para Hits</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/60 text-xs">
+                    {ifoodViabilityItems.map(item => {
+                      const isPrejuizo = item.hitsStatus === 'prejuizo';
+                      const isAlerta = item.hitsStatus === 'alerta';
+
+                      return (
+                        <tr
+                          key={item.product.id}
+                          className={`hover:bg-slate-900/40 transition-colors ${
+                            isPrejuizo 
+                              ? 'bg-red-950/15' 
+                              : isAlerta 
+                                ? 'bg-amber-950/10' 
+                                : ''
+                          }`}
+                        >
+                          {/* Produto e CMV */}
+                          <td className="p-4">
+                            <div className="font-extrabold text-white text-sm">{item.product.name}</div>
+                            <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                              CMV: <strong className="text-amber-400">R$ {item.cmv.toFixed(2)}</strong> • Balcão: R$ {item.product.priceBalcao.toFixed(2)}
+                            </div>
+                          </td>
+
+                          {/* Preço iFood */}
+                          <td className="p-4 font-mono font-black text-white text-sm">
+                            R$ {item.normalPrice.toFixed(2)}
+                          </td>
+
+                          {/* Venda Orgânica */}
+                          <td className="p-4 font-mono">
+                            <div className="font-bold text-white">
+                              Lucro: <strong className="text-emerald-400 font-black">R$ {item.normalNetProfit.toFixed(2)}</strong>
+                            </div>
+                            <span className="text-[11px] text-slate-400">
+                              Margem: {item.normalMarginPct.toFixed(1)}%
+                            </span>
+                          </td>
+
+                          {/* Venda com Cupom Hits */}
+                          <td className="p-4 font-mono">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[11px] text-slate-400">Cliente paga:</span>
+                              <strong className="text-slate-200">R$ {item.hitsEffectivePrice.toFixed(2)}</strong>
+                            </div>
+                            <div className="font-bold mt-0.5">
+                              Lucro: <strong className={item.hitsNetProfit > 0 ? (item.hitsMarginPct >= 18 ? 'text-emerald-400 font-black' : 'text-amber-400') : 'text-red-400 font-black'}>
+                                {item.hitsNetProfit >= 0 ? '+' : ''} R$ {item.hitsNetProfit.toFixed(2)}
+                              </strong>
+                              <span className={`ml-1.5 text-[10px] font-black px-1.5 py-0.2 rounded ${
+                                item.hitsMarginPct >= 18
+                                  ? 'bg-emerald-500/20 text-emerald-400'
+                                  : item.hitsMarginPct >= 5
+                                    ? 'bg-amber-500/20 text-amber-400'
+                                    : 'bg-red-500/20 text-red-400'
+                              }`}>
+                                {item.hitsMarginPct.toFixed(1)}%
+                              </span>
+                            </div>
+                          </td>
+
+                          {/* Diagnóstico da Promoção */}
+                          <td className="p-4 text-center">
+                            {item.hitsStatus === 'viavel' && (
+                              <span className="inline-flex items-center gap-1 px-3 py-1 bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 rounded-full font-black text-[10px] uppercase">
+                                <CheckCircle2 size={12} /> Viável no Hits
+                              </span>
+                            )}
+                            {item.hitsStatus === 'alerta' && (
+                              <span className="inline-flex items-center gap-1 px-3 py-1 bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-full font-black text-[10px] uppercase">
+                                <AlertTriangle size={12} /> Margem Apertada
+                              </span>
+                            )}
+                            {item.hitsStatus === 'prejuizo' && (
+                              <span className="inline-flex items-center gap-1 px-3 py-1 bg-red-500/20 text-red-300 border border-red-500/40 rounded-full font-black text-[10px] uppercase animate-pulse">
+                                <XCircle size={12} /> 🚨 Prejuízo / Proibido
+                              </span>
+                            )}
+                          </td>
+
+                          {/* Preço Mínimo Recomendado */}
+                          <td className="p-4 text-right font-mono">
+                            {isPrejuizo ? (
+                              <div>
+                                <span className="font-extrabold text-red-400 text-sm">
+                                  R$ {item.suggestedMinPriceForHits.toFixed(2)}
+                                </span>
+                                <span className="block text-[10px] text-slate-400">para ter 18% de margem</span>
+                              </div>
+                            ) : (
+                              <span className="text-emerald-400 text-xs font-bold">
+                                ✅ Preço atual OK
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
           </div>
         )}
 

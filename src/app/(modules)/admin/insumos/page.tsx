@@ -9,6 +9,7 @@ export default function GestaoInsumosPage() {
   
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
 
   // Form State
   const [name, setName] = useState('');
@@ -54,9 +55,9 @@ export default function GestaoInsumosPage() {
     setIsAdding(true);
   };
 
-  // Agrupar itens por categoria (apenas ativos)
-  const activeItems = items.filter(i => i.isActive !== false);
-  const groupedItems = activeItems.reduce((acc, item) => {
+  // Agrupar itens por categoria (com suporte a ver inativos)
+  const displayedItems = items.filter(i => showInactive ? true : i.isActive !== false);
+  const groupedItems = displayedItems.reduce((acc, item) => {
     let rawCat = (item.category || 'Geral').trim().toLowerCase();
     const cat = rawCat.charAt(0).toUpperCase() + rawCat.slice(1);
     
@@ -82,12 +83,25 @@ export default function GestaoInsumosPage() {
               <h1 className="text-4xl font-extrabold text-white tracking-tight">Cadastro de Insumos</h1>
             </div>
           </div>
-          <button 
-            onClick={() => { resetForm(); setIsAdding(true); }}
-            className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)]"
-          >
-            <Plus size={20} /> Novo Insumo
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setShowInactive(!showInactive)}
+              className={`px-4 py-3 rounded-xl font-bold text-xs transition-all border cursor-pointer ${
+                showInactive 
+                  ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' 
+                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+              }`}
+            >
+              {showInactive ? '👁️ Ocultar Desativados' : '👁️ Ver Desativados'}
+            </button>
+            <button 
+              onClick={() => { resetForm(); setIsAdding(true); }}
+              className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-[0_0_20px_rgba(37,99,235,0.3)] cursor-pointer"
+            >
+              <Plus size={20} /> Novo Insumo
+            </button>
+          </div>
         </header>
 
         {isAdding && (
@@ -148,17 +162,39 @@ export default function GestaoInsumosPage() {
                 </thead>
                 <tbody className="divide-y divide-slate-800/50">
                   {catItems.map(item => (
-                    <tr key={item.id} className="hover:bg-slate-800/20 transition-colors">
-                      <td className="p-4 font-bold text-slate-200">{item.name}</td>
+                    <tr key={item.id} className={`hover:bg-slate-800/20 transition-colors ${item.isActive === false ? 'opacity-60 bg-red-950/15' : ''}`}>
+                      <td className="p-4 font-bold text-slate-200">
+                        <div className="flex items-center gap-2">
+                          <span>{item.name}</span>
+                          {item.isActive === false && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-red-500/20 text-red-400 border border-red-500/30">
+                              Desativado
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="p-4 font-mono text-emerald-400">R$ {item.costPerUnit.toFixed(2)} / {item.unit}</td>
                       <td className="p-4 font-mono text-blue-400">{item.currentStock} {item.unit}</td>
                       <td className="p-4 flex justify-end gap-2">
-                        <button onClick={() => startEdit(item)} className="p-2 text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all">
-                          <Edit2 size={18} />
-                        </button>
-                        <button onClick={() => removeInventoryItem(item.id)} className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all">
-                          <Trash2 size={18} />
-                        </button>
+                        {item.isActive === false ? (
+                          <button
+                            type="button"
+                            onClick={() => updateInventoryItem(item.id, { isActive: true })}
+                            className="px-3 py-1.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                            title="Reativar Insumo"
+                          >
+                            Reativar
+                          </button>
+                        ) : (
+                          <>
+                            <button onClick={() => startEdit(item)} className="p-2 text-slate-400 hover:text-blue-400 hover:bg-blue-500/10 rounded-lg transition-all cursor-pointer">
+                              <Edit2 size={18} />
+                            </button>
+                            <button onClick={() => removeInventoryItem(item.id)} className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all cursor-pointer" title="Desativar Insumo">
+                              <Trash2 size={18} />
+                            </button>
+                          </>
+                        )}
                       </td>
                     </tr>
                   ))}

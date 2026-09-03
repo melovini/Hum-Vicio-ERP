@@ -21,6 +21,7 @@ export default function EngenhariaCardapioPage() {
   // Form State Produto
   const [isAdding, setIsAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [showInactive, setShowInactive] = useState(false);
   const [name, setName] = useState('');
   const [category, setCategory] = useState<'lanche'|'bebida'|'porcao'|'combo'>('lanche');
   const [priceBalcao, setPriceBalcao] = useState('');
@@ -145,7 +146,7 @@ export default function EngenhariaCardapioPage() {
   };
 
   const filteredProducts = products.filter(p => {
-    if (p.isActive === false) return false;
+    if (!showInactive && p.isActive === false) return false;
     const matchesCategory = categoryFilter === 'todos' || p.category === categoryFilter;
     const matchesSearch = p.name.toLowerCase().includes(searchTerm.toLowerCase());
     return matchesCategory && matchesSearch;
@@ -359,6 +360,17 @@ export default function EngenhariaCardapioPage() {
                     {cat === 'todos' ? 'Todos os Produtos' : cat === 'lanche' ? 'Hambúrgueres' : cat === 'porcao' ? 'Porções & Adicionais' : cat}
                   </button>
                 ))}
+                <button
+                  type="button"
+                  onClick={() => setShowInactive(!showInactive)}
+                  className={`px-3 py-2 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                    showInactive
+                      ? 'bg-amber-500/20 text-amber-300 border-amber-500/40'
+                      : 'bg-slate-900 border border-slate-800 text-slate-400 hover:text-white'
+                  }`}
+                >
+                  {showInactive ? '👁️ Ocultar Desativados' : '👁️ Ver Desativados'}
+                </button>
               </div>
 
               <div className="relative w-full md:w-72">
@@ -380,19 +392,43 @@ export default function EngenhariaCardapioPage() {
                 const margemBalcao = p.priceBalcao > 0 ? ((p.priceBalcao - cmv) / p.priceBalcao) * 100 : 0;
                 
                 return (
-                  <div key={p.id} className="glass-card rounded-3xl p-6 border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between">
+                  <div key={p.id} className={`glass-card rounded-3xl p-6 border transition-all flex flex-col justify-between ${
+                    p.isActive === false 
+                      ? 'opacity-60 bg-red-950/10 border-red-500/30' 
+                      : 'border-slate-800 hover:border-slate-700'
+                  }`}>
                     <div>
                       <div className="flex justify-between items-start mb-2">
-                        <span className="px-2.5 py-0.5 bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[11px] font-bold rounded-lg uppercase">
-                          {p.category}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="px-2.5 py-0.5 bg-blue-500/10 text-blue-400 border border-blue-500/20 text-[11px] font-bold rounded-lg uppercase">
+                            {p.category}
+                          </span>
+                          {p.isActive === false && (
+                            <span className="px-2 py-0.5 bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] font-black rounded-lg uppercase">
+                              Desativado
+                            </span>
+                          )}
+                        </div>
                         <div className="flex items-center gap-1">
-                          <button onClick={() => startEdit(p)} className="p-1.5 text-slate-500 hover:text-blue-400 rounded-lg hover:bg-slate-800 cursor-pointer">
-                            <Edit2 size={16} />
-                          </button>
-                          <button onClick={() => { if (confirm(`Excluir ${p.name}?`)) removeProduct(p.id); }} className="p-1.5 text-slate-500 hover:text-red-400 rounded-lg hover:bg-slate-800 cursor-pointer">
-                            <Trash2 size={16} />
-                          </button>
+                          {p.isActive === false ? (
+                            <button
+                              type="button"
+                              onClick={() => updateProduct(p.id, { isActive: true })}
+                              className="px-2.5 py-1 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/30 rounded-lg text-xs font-bold transition-all cursor-pointer"
+                              title="Reativar Produto no Cardápio"
+                            >
+                              Reativar
+                            </button>
+                          ) : (
+                            <>
+                              <button onClick={() => startEdit(p)} className="p-1.5 text-slate-500 hover:text-blue-400 rounded-lg hover:bg-slate-800 cursor-pointer" title="Editar">
+                                <Edit2 size={16} />
+                              </button>
+                              <button onClick={() => { if (confirm(`Desativar ${p.name} do cardápio?`)) removeProduct(p.id); }} className="p-1.5 text-slate-500 hover:text-red-400 rounded-lg hover:bg-slate-800 cursor-pointer" title="Desativar">
+                                <Trash2 size={16} />
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
 
