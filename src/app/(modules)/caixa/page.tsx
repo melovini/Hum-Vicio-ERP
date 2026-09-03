@@ -260,7 +260,7 @@ export default function CaixaPage() {
 
     setCart([]);
     setCustomerName('');
-    setOrderProductionStatus('em_producao');
+    setOrderProductionStatus('em_espera');
   };
 
   const handleAddMovement = (e: React.FormEvent) => {
