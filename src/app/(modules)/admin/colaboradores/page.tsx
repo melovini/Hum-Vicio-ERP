@@ -10,9 +10,15 @@ import SlidingSheet from '@/components/ui/SlidingSheet';
 import StatusBadge, { StatusBadgeVariant } from '@/components/ui/StatusBadge';
 import { 
   Collaborator, CollaboratorRole, 
-  getStoredCollaborators, saveStoredCollaborator, 
-  toggleActiveStoredCollaborator, deleteStoredCollaborator 
+  getStoredCollaborators, setLocalCollaboratorsCache
 } from '@/lib/collaborators';
+import {
+  getCollaboratorsAction,
+  saveCollaboratorAction,
+  toggleActiveCollaboratorAction,
+  deleteCollaboratorAction,
+  checkCloudStatusAction
+} from './actions';
 
 export default function ColaboradoresPage() {
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
@@ -20,9 +26,16 @@ export default function ColaboradoresPage() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showPinId, setShowPinId] = useState<string | null>(null);
 
+  // Status de Sincronização
+  const [isCloudSynced, setIsCloudSynced] = useState<boolean>(false);
+  const [isLoadingServer, setIsLoadingServer] = useState<boolean>(true);
+  const [isSqlModalOpen, setIsSqlModalOpen] = useState<boolean>(false);
+  const [copiedSql, setCopiedSql] = useState<boolean>(false);
+
   // Drawer / SlidingSheet de Cadastro e Edição
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [editingCollab, setEditingCollab] = useState<Collaborator | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   // Formulário
   const [nameInput, setNameInput] = useState('');
@@ -34,13 +47,34 @@ export default function ColaboradoresPage() {
 
   const [feedback, setFeedback] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
+  // Carregamento Híbrido: Cache Local imediato + Sincronização do Servidor/Nuvem
   useEffect(() => {
-    setCollaborators(getStoredCollaborators());
+    // 1. Mostrar cache local instantâneo
+    const cached = getStoredCollaborators();
+    setCollaborators(cached);
+
+    // 2. Buscar versão oficial autoritativa do servidor
+    async function loadServerData() {
+      try {
+        setIsLoadingServer(true);
+        const res = await getCollaboratorsAction();
+        if (res.collaborators && res.collaborators.length > 0) {
+          setCollaborators(res.collaborators);
+          setLocalCollaboratorsCache(res.collaborators);
+        }
+        setIsCloudSynced(res.isCloudSynced);
+      } catch (err) {
+        console.warn('Erro ao carregar colaboradores do servidor:', err);
+      } finally {
+        setIsLoadingServer(false);
+      }
+    }
+    loadServerData();
   }, []);
 
   const showFeedback = (text: string, type: 'success' | 'error' = 'success') => {
     setFeedback({ text, type });
-    setTimeout(() => setFeedback(null), 3500);
+    setTimeout(() => setFeedback(null), 4000);
   };
 
   // Abrir Sheet para Novo Colaborador
@@ -67,8 +101,8 @@ export default function ColaboradoresPage() {
     setIsSheetOpen(true);
   };
 
-  // Salvar Colaborador
-  const handleSaveCollaborator = (e: React.FormEvent) => {
+  // Salvar Colaborador via Server Action
+  const handleSaveCollaborator = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!nameInput.trim()) {
       showFeedback('O nome do colaborador é obrigatório.', 'error');
@@ -101,30 +135,96 @@ export default function ColaboradoresPage() {
       updatedAt: new Date().toISOString()
     };
 
-    const updated = saveStoredCollaborator(itemToSave);
-    setCollaborators(updated);
-    setIsSheetOpen(false);
-    showFeedback(
-      editingCollab 
-        ? `Colaborador "${itemToSave.name}" atualizado!` 
-        : `Colaborador "${itemToSave.name}" cadastrado com sucesso!`
-    );
+    setIsSaving(true);
+    try {
+      const res = await saveCollaboratorAction(itemToSave);
+      if (res.success) {
+        setCollaborators(res.updatedList);
+        setLocalCollaboratorsCache(res.updatedList);
+        setIsCloudSynced(res.isCloudSynced);
+        setIsSheetOpen(false);
+
+        if (res.isCloudSynced) {
+          showFeedback(
+            editingCollab 
+              ? `Colaborador "${itemToSave.name}" atualizado e sincronizado na Nuvem!` 
+              : `Colaborador "${itemToSave.name}" cadastrado e sincronizado na Nuvem!`
+          );
+        } else {
+          showFeedback(
+            editingCollab 
+              ? `Senha e dados de "${itemToSave.name}" salvos no servidor local!` 
+              : `Colaborador "${itemToSave.name}" salvo no servidor local!`
+          );
+        }
+      } else {
+        showFeedback(res.error || 'Erro ao salvar colaborador.', 'error');
+      }
+    } catch (err: any) {
+      showFeedback(err.message || 'Falha na conexão com o servidor.', 'error');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   // Alternar Status Ativo/Inativo
-  const handleToggleActive = (id: string, name: string, currentlyActive: boolean) => {
-    const updated = toggleActiveStoredCollaborator(id);
-    setCollaborators(updated);
-    showFeedback(`Colaborador ${name} ${currentlyActive ? 'desativado' : 'reativado'}!`);
+  const handleToggleActive = async (id: string, name: string, currentlyActive: boolean) => {
+    try {
+      const res = await toggleActiveCollaboratorAction(id);
+      if (res.success) {
+        setCollaborators(res.updatedList);
+        setLocalCollaboratorsCache(res.updatedList);
+        setIsCloudSynced(res.isCloudSynced);
+        showFeedback(`Colaborador ${name} ${currentlyActive ? 'desativado' : 'reativado'}!`);
+      }
+    } catch {
+      showFeedback(`Falha ao alterar status de ${name}.`, 'error');
+    }
   };
 
   // Excluir Colaborador
-  const handleDelete = (id: string, name: string) => {
+  const handleDelete = async (id: string, name: string) => {
     if (confirm(`Tem certeza que deseja excluir permanentemente o cadastro de ${name}?`)) {
-      const updated = deleteStoredCollaborator(id);
-      setCollaborators(updated);
-      showFeedback(`Colaborador ${name} excluído com sucesso!`);
+      try {
+        const res = await deleteCollaboratorAction(id);
+        if (res.success) {
+          setCollaborators(res.updatedList);
+          setLocalCollaboratorsCache(res.updatedList);
+          setIsCloudSynced(res.isCloudSynced);
+          showFeedback(`Colaborador ${name} excluído com sucesso!`);
+        }
+      } catch {
+        showFeedback(`Falha ao excluir ${name}.`, 'error');
+      }
     }
+  };
+
+  const handleCopySql = () => {
+    const sql = `-- HUM VÍCIO ERP: TABELA DE COLABORADORES
+CREATE TABLE IF NOT EXISTS collaborators (
+    id VARCHAR(100) PRIMARY KEY,
+    name VARCHAR(150) NOT NULL,
+    role VARCHAR(30) NOT NULL CHECK (role IN ('admin', 'gerente', 'caixa', 'cozinha')),
+    pin VARCHAR(50) NOT NULL,
+    phone VARCHAR(30),
+    shift VARCHAR(30) DEFAULT 'integral' CHECK (shift IN ('manha', 'tarde', 'noite', 'integral')),
+    is_active BOOLEAN DEFAULT TRUE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    deleted_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_collaborators_pin ON collaborators(pin);
+CREATE INDEX IF NOT EXISTS idx_collaborators_role ON collaborators(role);
+CREATE INDEX IF NOT EXISTS idx_collaborators_active ON collaborators(id) WHERE is_active = TRUE AND deleted_at IS NULL;
+
+ALTER TABLE collaborators ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "collaborators_all" ON collaborators;
+CREATE POLICY "collaborators_all" ON collaborators FOR ALL USING (true);`;
+
+    navigator.clipboard.writeText(sql);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 3000);
   };
 
   // Filtragem e Busca
@@ -200,7 +300,26 @@ export default function ColaboradoresPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* Badge de Sincronização */}
+          {isCloudSynced ? (
+            <div className="py-1.5 px-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg text-xs font-semibold flex items-center gap-1.5" title="Sincronizado na nuvem Supabase em tempo real com todos os dispositivos">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              <span>Nuvem Ativa</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setIsSqlModalOpen(true)}
+              className="py-1.5 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+              title="Clique para ativar a sincronização na nuvem Supabase"
+            >
+              <span className="w-2 h-2 rounded-full bg-amber-400" />
+              <span>Servidor Local Ativo</span>
+              <span className="underline ml-1 font-bold text-[10px]">Ativar Nuvem</span>
+            </button>
+          )}
+
           <Link
             href="/admin/dashboard"
             className="py-2 px-3.5 bg-surface-card hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
@@ -563,6 +682,89 @@ export default function ColaboradoresPage() {
 
         </form>
       </SlidingSheet>
+
+      {/* MODAL DE ATIVAÇÃO NA NUVEM (SUPABASE SQL) */}
+      {isSqlModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
+          <div className="bg-surface-card border border-surface-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl space-y-4 p-6 text-slate-200">
+            
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Shield className="text-amber-400" size={20} />
+                  Ativar Sincronização na Nuvem (Supabase)
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Suas senhas e colaboradores já estão seguros e salvos no servidor local. Para sincronizar em tempo real com celulares, tablets da cozinha e múltiplos computadores, crie a tabela no Supabase.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsSqlModalOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-md"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Passo a Passo Rápido */}
+            <div className="bg-surface-ground p-3.5 rounded-xl border border-surface-border text-xs space-y-2 text-slate-300">
+              <p className="font-semibold text-white">Como ativar em 3 passos simples:</p>
+              <ol className="list-decimal list-inside space-y-1 text-slate-400">
+                <li>Abra o painel do seu projeto no <strong className="text-slate-200">Supabase</strong>.</li>
+                <li>Clique no menu <strong className="text-slate-200">SQL Editor</strong> no menu lateral esquerdo.</li>
+                <li>Cole o código SQL abaixo e clique em <strong className="text-emerald-400">Run</strong>.</li>
+              </ol>
+            </div>
+
+            {/* Bloco de Código SQL com Botão Copiar */}
+            <div className="relative">
+              <pre className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-[11px] font-mono text-emerald-300 max-h-48 overflow-y-auto leading-relaxed select-all">
+{`CREATE TABLE IF NOT EXISTS collaborators (
+    id VARCHAR(100) PRIMARY KEY,
+    name VARCHAR(150) NOT NULL,
+    role VARCHAR(30) NOT NULL CHECK (role IN ('admin', 'gerente', 'caixa', 'cozinha')),
+    pin VARCHAR(50) NOT NULL,
+    phone VARCHAR(30),
+    shift VARCHAR(30) DEFAULT 'integral' CHECK (shift IN ('manha', 'tarde', 'noite', 'integral')),
+    is_active BOOLEAN DEFAULT TRUE NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
+    deleted_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_collaborators_pin ON collaborators(pin);
+CREATE INDEX IF NOT EXISTS idx_collaborators_role ON collaborators(role);
+CREATE INDEX IF NOT EXISTS idx_collaborators_active ON collaborators(id) WHERE is_active = TRUE AND deleted_at IS NULL;
+
+ALTER TABLE collaborators ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "collaborators_all" ON collaborators;
+CREATE POLICY "collaborators_all" ON collaborators FOR ALL USING (true);`}
+              </pre>
+
+              <button
+                type="button"
+                onClick={handleCopySql}
+                className="absolute top-3 right-3 py-1.5 px-3 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+              >
+                {copiedSql ? <Check size={14} /> : <Sparkles size={14} />}
+                {copiedSql ? 'Copiado!' : 'Copiar Código SQL'}
+              </button>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-surface-border">
+              <button
+                type="button"
+                onClick={() => setIsSqlModalOpen(false)}
+                className="py-2 px-4 bg-surface-elevated hover:bg-surface-border text-slate-200 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Entendido / Fechar
+              </button>
+            </div>
+
+          </div>
+        </div>
+      )}
 
     </div>
   );

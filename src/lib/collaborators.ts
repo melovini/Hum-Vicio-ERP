@@ -191,13 +191,42 @@ export function findCollaboratorByPin(pin: string): Collaborator | null {
   return found || null;
 }
 
+// Atualizar cache local do navegador
+export function setLocalCollaboratorsCache(list: Collaborator[]): void {
+  if (typeof window !== 'undefined' && Array.isArray(list)) {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+    } catch {}
+  }
+}
+
 /**
  * Verifica se a senha/PIN fornecida bate com algum colaborador com role 'admin'
- * (lê o localStorage atualizado, não o padrão hardcoded)
+ * Regra: se o administrador alterou a senha padrão, a senha antiga 'admin' é BLOQUEADA.
  */
 export function validateMasterPassword(password: string): boolean {
   const clean = password.trim();
   if (!clean) return false;
+
   const list = getStoredCollaborators();
-  return list.some(c => c.isActive && c.role === 'admin' && c.pin.trim() === clean);
+  const activeAdmins = list.filter(c => c.isActive && c.role === 'admin');
+
+  // Verificar se bate com a senha de algum admin ativo
+  const matched = activeAdmins.find(c => c.pin.trim() === clean);
+  if (matched) {
+    return true;
+  }
+
+  // Se o usuário digitou a senha antiga 'admin', mas já existe um admin com senha diferente:
+  const hasCustomizedAdmin = activeAdmins.some(c => c.pin.trim() !== 'admin');
+  if (clean === 'admin' && hasCustomizedAdmin) {
+    return false;
+  }
+
+  // Se a lista estiver virgem (só admin padrão)
+  if (clean === 'admin' && !hasCustomizedAdmin) {
+    return true;
+  }
+
+  return false;
 }

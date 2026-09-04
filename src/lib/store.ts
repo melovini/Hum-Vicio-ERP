@@ -1603,7 +1603,20 @@ export function useInventory() {
 
   // Exclusão de Sessão de Caixa & Expurgar Vendas de Teste (Exclusivo Master Admin)
   const deleteCashSession = async (sessionId: string, masterPassword: string): Promise<{ success: boolean; error?: string; count?: number }> => {
-    if (!validateMasterPassword(masterPassword)) {
+    // Validação autoritativa da senha mestre via Servidor (com fallback no cache blindado)
+    let isPassValid = false;
+    try {
+      const { verifyMasterPasswordAction } = await import('@/app/(modules)/admin/colaboradores/actions');
+      const authRes = await verifyMasterPasswordAction(masterPassword);
+      isPassValid = authRes.valid;
+      if (!authRes.valid && authRes.error) {
+        return { success: false, error: authRes.error };
+      }
+    } catch {
+      isPassValid = validateMasterPassword(masterPassword);
+    }
+
+    if (!isPassValid) {
       return { success: false, error: 'Senha de Administrador Master incorreta.' };
     }
 
@@ -1723,7 +1736,20 @@ export function useInventory() {
 
   // Exclusão manual direta de vendas de teste selecionadas
   const deleteTestSales = async (saleIds: string[], masterPassword: string): Promise<{ success: boolean; error?: string }> => {
-    if (!validateMasterPassword(masterPassword)) {
+    // Validação autoritativa da senha mestre via Servidor (com fallback no cache blindado)
+    let isPassValid = false;
+    try {
+      const { verifyMasterPasswordAction } = await import('@/app/(modules)/admin/colaboradores/actions');
+      const authRes = await verifyMasterPasswordAction(masterPassword);
+      isPassValid = authRes.valid;
+      if (!authRes.valid && authRes.error) {
+        return { success: false, error: authRes.error };
+      }
+    } catch {
+      isPassValid = validateMasterPassword(masterPassword);
+    }
+
+    if (!isPassValid) {
       return { success: false, error: 'Senha de Administrador Master incorreta.' };
     }
 
