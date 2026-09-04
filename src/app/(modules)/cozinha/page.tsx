@@ -1,15 +1,16 @@
 'use client';
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useInventory, Sale, DelayReason, InventoryItem } from '@/lib/store';
+import { useInventory, Sale, DelayReason, InventoryItem, ChecklistTask } from '@/lib/store';
 import { 
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
   Eye, Check, ListChecks, MessageSquare, Utensils,
-  Volume2, BellRing, User
+  Volume2, BellRing, User, X
 } from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
 import { playKitchenChime, playCancellationWarning } from '@/lib/audio';
+import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
 
 export default function CozinhaKDSPage() {
   const { 
@@ -20,6 +21,14 @@ export default function CozinhaKDSPage() {
 
   const [activeTab, setActiveTab] = useState<'chapa' | 'previsao' | 'faltas' | 'checklist'>('chapa');
   const [now, setNow] = useState(Date.now());
+
+  // Atribuição de Colaboradores em Tarefas do Checklist
+  const [selectedTaskForAssignment, setSelectedTaskForAssignment] = useState<ChecklistTask | null>(null);
+  const [collaboratorsList, setCollaboratorsList] = useState<Collaborator[]>([]);
+
+  useEffect(() => {
+    setCollaboratorsList(getActiveCollaborators());
+  }, []);
 
   // Alerta Sonoro & Visual na Cozinha
   const [kitchenAlert, setKitchenAlert] = useState<{ type: 'new_order' | 'cancelled'; message: string } | null>(null);
@@ -491,6 +500,11 @@ export default function CozinhaKDSPage() {
                             }`}>
                               {order.orderType === 'delivery' ? '🛵 DELIVERY' : order.orderType === 'retirada' ? '🥡 BALCÃO' : '🍽️ MESA'}
                             </span>
+                            {(order.isModifiedInKitchen || order.orderDiff) && (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-red-600 text-white animate-pulse border border-red-400 shadow-md">
+                                ⚠️ MODIFICADO
+                              </span>
+                            )}
                           </div>
                           <p className="text-sm font-extrabold text-amber-300 mt-1 uppercase">
                             {order.customerName || 'Cliente'}
@@ -528,6 +542,36 @@ export default function CozinhaKDSPage() {
                           </p>
                         </div>
                       </div>
+
+                      {/* Callout de Pedido Modificado (Delta Diff) */}
+                      {order.orderDiff && (
+                        <div className="mb-3.5 p-3 rounded-2xl bg-amber-950/40 border-2 border-amber-500/60 space-y-1 text-xs">
+                          <span className="font-black text-amber-300 uppercase tracking-wider block text-[11px]">
+                            ⚠️ ALTERAÇÕES NO PEDIDO (DIFF):
+                          </span>
+                          {order.orderDiff.added.length > 0 && (
+                            <div className="text-emerald-300 font-bold">
+                              {order.orderDiff.added.map((item, i) => (
+                                <p key={i}>+ {item.quantity}x {item.productName} (ADICIONADO)</p>
+                              ))}
+                            </div>
+                          )}
+                          {order.orderDiff.removed.length > 0 && (
+                            <div className="text-red-400 font-bold line-through">
+                              {order.orderDiff.removed.map((item, i) => (
+                                <p key={i}>- {item.quantity}x {item.productName} (CANCELADO)</p>
+                              ))}
+                            </div>
+                          )}
+                          {order.orderDiff.modified.length > 0 && (
+                            <div className="text-amber-200 font-medium">
+                              {order.orderDiff.modified.map((m, i) => (
+                                <p key={i}>* {m.item.quantity}x {m.item.productName}: {m.newNotes || 'Sem obs'}</p>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Lista de Itens da Comanda */}
                       <div className="space-y-3 mb-4">
@@ -798,27 +842,44 @@ export default function CozinhaKDSPage() {
                 <div 
                   key={task.id} 
                   onClick={() => {
-                    const person = task.checked ? '' : (prompt('Seu nome para marcar a tarefa:') || 'Cozinha');
-                    if (person !== null) toggleChecklistTask(task.id, person);
+                    if (task.checked) {
+                      // Toggle bidirecional: desmarca imediatamente e reverte para PENDENTE
+                      toggleChecklistTask(task.id);
+                    } else {
+                      // Abre popover/modal rápido para atribuir o colaborador executor
+                      setSelectedTaskForAssignment(task);
+                    }
                   }}
                   className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between ${
                     task.checked 
-                      ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200' 
+                      ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200 hover:bg-emerald-950/30' 
                       : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center border ${
-                      task.checked ? 'bg-emerald-600 border-emerald-500 text-white' : 'border-slate-600'
+                    <div className={`w-6 h-6 rounded-lg flex items-center justify-center border transition-all ${
+                      task.checked ? 'bg-emerald-600 border-emerald-500 text-white' : 'border-slate-600 hover:border-emerald-400'
                     }`}>
                       {task.checked && <Check size={16} />}
                     </div>
-                    <span className="font-semibold text-sm">{task.label}</span>
+                    <div>
+                      <span className="font-semibold text-sm block">{task.label}</span>
+                      <span className="text-[10px] text-slate-500">
+                        {task.checked ? 'Clique para desmarcar (reverter p/ pendente)' : 'Clique para atribuir quem executou'}
+                      </span>
+                    </div>
                   </div>
-                  {task.checkedBy && (
-                    <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/60 px-2.5 py-1 rounded-lg">
-                      Feito por: {task.checkedBy}
-                    </span>
+                  {task.checked && (
+                    <div className="text-right flex flex-col items-end gap-0.5">
+                      <span className="text-[11px] font-mono text-emerald-400 bg-emerald-950/60 px-2.5 py-0.5 rounded-lg border border-emerald-500/20 font-bold">
+                        Executado por: {task.executedByName || task.checkedBy || 'Equipe'}
+                      </span>
+                      {task.completedAt && (
+                        <span className="text-[10px] text-slate-500 font-mono">
+                          {new Date(task.completedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      )}
+                    </div>
                   )}
                 </div>
               ))}
@@ -842,6 +903,81 @@ export default function CozinhaKDSPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* POPOVER / MODAL RÁPIDO DE ATRIBUIÇÃO DE COLABORADOR NA TAREFA */}
+      {/* ========================================================================= */}
+      {selectedTaskForAssignment && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="glass-card rounded-3xl p-6 md:p-8 max-w-md w-full border border-slate-800 shadow-2xl space-y-5 animate-scale-in">
+            <div className="flex justify-between items-start border-b border-slate-800 pb-3">
+              <div>
+                <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider block">
+                  Concluir Tarefa Operacional
+                </span>
+                <h3 className="text-lg font-bold text-white mt-0.5">
+                  {selectedTaskForAssignment.label}
+                </h3>
+              </div>
+              <button 
+                onClick={() => setSelectedTaskForAssignment(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-xl hover:bg-slate-800 cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              Selecione qual colaborador realizou o trabalho para registrar na auditoria:
+            </p>
+
+            {/* Lista Rápida de Colaboradores Cadastrados */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-[45vh] overflow-y-auto pr-1">
+              {collaboratorsList.map(colab => (
+                <button
+                  key={colab.id}
+                  type="button"
+                  onClick={() => {
+                    toggleChecklistTask(selectedTaskForAssignment.id, colab.name, colab.id, 'Operador');
+                    setSelectedTaskForAssignment(null);
+                  }}
+                  className="p-3 rounded-2xl bg-slate-900/80 hover:bg-emerald-600/20 border border-slate-800 hover:border-emerald-500/40 text-left transition-all cursor-pointer group"
+                >
+                  <p className="text-xs font-bold text-slate-200 group-hover:text-emerald-300">
+                    {colab.name}
+                  </p>
+                  <span className="text-[10px] text-slate-500 uppercase font-mono">
+                    {colab.role}
+                  </span>
+                </button>
+              ))}
+            </div>
+
+            <div className="pt-2 border-t border-slate-800 flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  const customName = prompt('Nome do colaborador:');
+                  if (customName && customName.trim()) {
+                    toggleChecklistTask(selectedTaskForAssignment.id, customName.trim(), undefined, 'Operador');
+                    setSelectedTaskForAssignment(null);
+                  }
+                }}
+                className="flex-1 py-3 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold border border-slate-800 cursor-pointer transition-all"
+              >
+                Outro Nome...
+              </button>
+              <button
+                type="button"
+                onClick={() => setSelectedTaskForAssignment(null)}
+                className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold cursor-pointer transition-all"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

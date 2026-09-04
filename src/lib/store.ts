@@ -81,6 +81,17 @@ export interface Sale {
   items: SaleItem[];
   date: string;
   status: 'completed' | 'cancelled';
+  // Reabertura e Alteração de Pedidos Fechados:
+  isReopened?: boolean;
+  reopenedAt?: string;
+  reopenedBy?: string;
+  originalItemsSnapshot?: SaleItem[];
+  orderDiff?: {
+    added: SaleItem[];
+    removed: SaleItem[];
+    modified: { item: SaleItem; oldNotes?: string; newNotes?: string }[];
+  };
+  isModifiedInKitchen?: boolean;
   // Auditoria de Brindes no Pedido:
   hasGifts?: boolean;
   giftsTotalValue?: number; // Total financeiro em R$ dos itens doados
@@ -137,7 +148,10 @@ export type AuditAction =
   | 'DESCONTO_CONCEDIDO'
   | 'CUPOM_HITS_IFOOD'
   | 'EXCLUSAO_CAIXA_TESTE'
-  | 'EXPURGO_VENDAS_TESTE';
+  | 'EXPURGO_VENDAS_TESTE'
+  | 'REABERTURA_PEDIDO'
+  | 'ALTERACAO_PEDIDO'
+  | 'CHECKLIST_TAREFA';
 
 export interface AuditLog {
   id: string;
@@ -168,7 +182,11 @@ export interface ChecklistTask {
   id: string;
   label: string;
   checked: boolean;
-  checkedBy?: string;
+  checkedBy?: string; // Nome legível de quem marcou ou registrou
+  registeredByUserId?: string; // Sessão/ID do usuário que interagiu
+  executedByCollaboratorId?: string; // ID do colaborador que executou o trabalho
+  executedByName?: string; // Nome do colaborador que executou o trabalho
+  completedAt?: string;
 }
 
 export interface DailyChecklist {
@@ -1695,6 +1713,134 @@ export function useInventory() {
     );
   };
 
+  // Reabertura de Pedido Fechado para Edição com Preservação de Identidade
+  const reopenOrderForEdit = async (saleId: string, authorizedBy: string): Promise<Sale | null> => {
+    const sale = sales.find(s => s.id === saleId);
+    if (!sale) return null;
+
+    const snapshot: SaleItem[] = JSON.parse(JSON.stringify(sale.items));
+    const updatedSale: Sale = {
+      ...sale,
+      isReopened: true,
+      reopenedAt: new Date().toISOString(),
+      reopenedBy: authorizedBy,
+      originalItemsSnapshot: snapshot
+    };
+
+    setSales(prev => {
+      const updated = prev.map(s => s.id === saleId ? updatedSale : s);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      }
+      return updated;
+    });
+
+    try {
+      await supabase.from('sales').update({
+        production_status: 'em_espera'
+      }).eq('id', saleId);
+    } catch (e) {
+      console.warn('Erro ao atualizar reabertura no banco:', e);
+    }
+
+    addAuditLog(
+      'REABERTURA_PEDIDO',
+      `Pedido #${saleId.slice(0, 6).toUpperCase()} (${sale.customerName || 'Cliente'}) reaberto para edição por ${authorizedBy}. Total antes da edição: R$ ${sale.total.toFixed(2)}.`,
+      authorizedBy,
+      `R$ ${sale.total.toFixed(2)}`,
+      'Em Edição'
+    );
+
+    return updatedSale;
+  };
+
+  // Atualizar Pedido Reaberto e Calcular Delta / Diff de Itens
+  const updateReopenedOrder = async (
+    saleId: string, 
+    updatedSaleData: Partial<Sale>
+  ): Promise<{ success: boolean; sale?: Sale; diff?: { added: SaleItem[]; removed: SaleItem[]; modified: { item: SaleItem; oldNotes?: string; newNotes?: string }[] } }> => {
+    const existingSale = sales.find(s => s.id === saleId);
+    if (!existingSale) return { success: false };
+
+    const oldItems: SaleItem[] = existingSale.originalItemsSnapshot || existingSale.items || [];
+    const newItems: SaleItem[] = updatedSaleData.items || [];
+
+    // 1. Calcular Adicionados
+    const added: SaleItem[] = [];
+    newItems.forEach(newItem => {
+      const matchingOld = oldItems.find(o => o.productId === newItem.productId && (o.notes || '') === (newItem.notes || ''));
+      if (!matchingOld) {
+        added.push(newItem);
+      } else if (newItem.quantity > matchingOld.quantity) {
+        added.push({ ...newItem, quantity: newItem.quantity - matchingOld.quantity });
+      }
+    });
+
+    // 2. Calcular Removidos
+    const removed: SaleItem[] = [];
+    oldItems.forEach(oldItem => {
+      const matchingNew = newItems.find(n => n.productId === oldItem.productId && (n.notes || '') === (oldItem.notes || ''));
+      if (!matchingNew) {
+        removed.push(oldItem);
+      } else if (matchingNew.quantity < oldItem.quantity) {
+        removed.push({ ...oldItem, quantity: oldItem.quantity - matchingNew.quantity });
+      }
+    });
+
+    // 3. Calcular Modificados (ex: observação alterada no mesmo lanche)
+    const modified: { item: SaleItem; oldNotes?: string; newNotes?: string }[] = [];
+    newItems.forEach(newItem => {
+      const sameProductOld = oldItems.find(o => o.productId === newItem.productId);
+      if (sameProductOld && (sameProductOld.notes || '') !== (newItem.notes || '')) {
+        modified.push({
+          item: newItem,
+          oldNotes: sameProductOld.notes,
+          newNotes: newItem.notes
+        });
+      }
+    });
+
+    const orderDiff = { added, removed, modified };
+
+    const finalizedSale: Sale = {
+      ...existingSale,
+      ...updatedSaleData,
+      orderDiff,
+      isModifiedInKitchen: true,
+      productionStatus: 'em_producao' // Reativa na chapa se alterado
+    };
+
+    setSales(prev => {
+      const updated = prev.map(s => s.id === saleId ? finalizedSale : s);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      }
+      return updated;
+    });
+
+    try {
+      await supabase.from('sales').update({
+        total: finalizedSale.total,
+        subtotal: finalizedSale.subtotal,
+        discount: finalizedSale.discount,
+        delivery_fee: finalizedSale.deliveryFee,
+        production_status: 'em_producao'
+      }).eq('id', saleId);
+    } catch (e) {
+      console.warn('Erro ao salvar alteração de venda no banco:', e);
+    }
+
+    addAuditLog(
+      'ALTERACAO_PEDIDO',
+      `Pedido #${saleId.slice(0, 6).toUpperCase()} editado e sincronizado. Delta: +${added.length} adicionados, -${removed.length} removidos, *${modified.length} modificados. Total ajustado: R$ ${finalizedSale.total.toFixed(2)}.`,
+      existingSale.reopenedBy || 'Supervisor',
+      `R$ ${existingSale.total.toFixed(2)}`,
+      `R$ ${finalizedSale.total.toFixed(2)}`
+    );
+
+    return { success: true, sale: finalizedSale, diff: orderDiff };
+  };
+
   const addMovement = async (mov: Omit<CashMovement, 'id' | 'date'>) => {
     try {
       const { data } = await supabase.from('cash_movements').insert({
@@ -1730,30 +1876,73 @@ export function useInventory() {
     );
   };
 
-  // --- CHECKLIST ACTIONS ---
-  const toggleChecklistTask = async (taskId: string, personName: string) => {
+  // --- CHECKLIST ACTIONS (COM ATRIBUIÇÃO FLEXÍVEL E TOGGLE BIDIRECIONAL) ---
+  const toggleChecklistTask = async (
+    taskId: string, 
+    executorName?: string, 
+    executorId?: string, 
+    registeredBy?: string
+  ) => {
     if (!checklist) return;
     
-    const updatedTasks = checklist.tasks.map(t => 
-      t.id === taskId 
-        ? { ...t, checked: !t.checked, checkedBy: !t.checked ? personName : undefined } 
-        : t
-    );
+    const targetTask = checklist.tasks.find(t => t.id === taskId);
+    const isCurrentlyChecked = !!targetTask?.checked;
+
+    const updatedTasks: ChecklistTask[] = checklist.tasks.map(t => {
+      if (t.id === taskId) {
+        if (isCurrentlyChecked) {
+          // Desmarcar por engano (reverte para PENDENTE e limpa campos de execução)
+          return {
+            ...t,
+            checked: false,
+            checkedBy: undefined,
+            registeredByUserId: undefined,
+            executedByCollaboratorId: undefined,
+            executedByName: undefined,
+            completedAt: undefined
+          };
+        } else {
+          // Marcar como concluída atribuindo o colaborador executor
+          return {
+            ...t,
+            checked: true,
+            checkedBy: executorName || registeredBy || 'Colaborador',
+            registeredByUserId: registeredBy,
+            executedByCollaboratorId: executorId,
+            executedByName: executorName || 'Colaborador',
+            completedAt: new Date().toISOString()
+          };
+        }
+      }
+      return t;
+    });
     
     const newChecklist = { ...checklist, tasks: updatedTasks };
     setChecklist(newChecklist);
 
-    if (checklist.id === '') {
-      const { data, error } = await supabase.from('kitchen_checklists').insert({
-        date: checklist.date,
-        tasks: updatedTasks
-      }).select().single();
-      
-      if (data) setChecklist({ ...newChecklist, id: data.id });
-      if (error) console.error(error);
-    } else {
-      await supabase.from('kitchen_checklists').update({ tasks: updatedTasks }).eq('id', checklist.id);
+    try {
+      if (checklist.id === '') {
+        const { data, error } = await supabase.from('kitchen_checklists').insert({
+          date: checklist.date,
+          tasks: updatedTasks
+        }).select().single();
+        
+        if (data) setChecklist({ ...newChecklist, id: data.id });
+        if (error) console.error(error);
+      } else {
+        await supabase.from('kitchen_checklists').update({ tasks: updatedTasks }).eq('id', checklist.id);
+      }
+    } catch (e) {
+      console.warn('Erro ao atualizar checklist:', e);
     }
+
+    addAuditLog(
+      'CHECKLIST_TAREFA',
+      isCurrentlyChecked
+        ? `Tarefa "${targetTask?.label}" revertida para PENDENTE por ${registeredBy || 'Operador'}.`
+        : `Tarefa "${targetTask?.label}" marcada como CONCLUÍDA. Executou: ${executorName || 'Equipe'}. Registrou: ${registeredBy || 'Operador'}.`,
+      registeredBy || 'Operador'
+    );
   };
 
   const signChecklist = async (personName: string) => {
@@ -1767,7 +1956,7 @@ export function useInventory() {
     items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
     products, addProduct, updateProduct, removeProduct, getProductCmv, getRealSalesCmv,
     isLoaded, isOpen, activeCashSession, allCashSessions, openCaixa, closeCaixa, toggleCaixa, deleteCashSession, deleteTestSales,
-    sales, addSale, cancelSale,
+    sales, addSale, cancelSale, reopenOrderForEdit, updateReopenedOrder,
     movements, addMovement,
     wasteRecords, registerWaste, getTotalWasteCost,
     checklist, toggleChecklistTask, signChecklist, allChecklists,

@@ -6,7 +6,8 @@ import {
   Send, XCircle, ShoppingCart as CartIcon, Plus, Minus, Trash2, 
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
-  Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid
+  Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid,
+  Edit3, GitCompare
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -23,6 +24,7 @@ export default function CaixaPage() {
   const { 
     products, items, isOpen, activeCashSession, 
     openCaixa, closeCaixa, sales, addSale, cancelSale, 
+    reopenOrderForEdit, updateReopenedOrder,
     movements, addMovement,
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus 
   } = useInventory();
@@ -40,6 +42,10 @@ export default function CaixaPage() {
   const [showOpenModal, setShowOpenModal] = useState(false);
   const [showCloseModal, setShowCloseModal] = useState(false);
   const [selectedSaleToPrint, setSelectedSaleToPrint] = useState<Sale | null>(null);
+
+  // Estados para Reabertura & Edição de Pedidos
+  const [editingReopenedSale, setEditingReopenedSale] = useState<Sale | null>(null);
+  const [diffToPrint, setDiffToPrint] = useState<any>(null);
 
   // Estados para Cancelamento Seguro de Vendas com Senha
   const [saleToCancel, setSaleToCancel] = useState<Sale | null>(null);
@@ -427,9 +433,70 @@ export default function CaixaPage() {
     return { totalBurgers, summaryList, count: selectedSales.length };
   }, [sales, selectedOrdersForBatch]);
 
+  const handleStartReopenSale = async (sale: Sale) => {
+    const pass = prompt('Autorização de Reabertura: Digite a senha do Administrador/Supervisor (admin):');
+    if (!pass) return;
+    if (pass.trim() !== 'admin') {
+      alert('Senha incorreta. Apenas o Administrador/Supervisor pode reabrir pedidos fechados.');
+      return;
+    }
+
+    const reopened = await reopenOrderForEdit(sale.id, 'Supervisor');
+    if (reopened) {
+      setEditingReopenedSale(reopened);
+      setCart(reopened.items.map(i => ({ ...i })));
+      setCustomerName(reopened.customerName || '');
+      setOrderType(reopened.orderType || 'mesa');
+      setSaleChannel(reopened.channel);
+      setDiscountInput(reopened.discount ? reopened.discount.toString() : '');
+      setDeliveryFeeInput(reopened.deliveryFee ? reopened.deliveryFee.toString() : '');
+      setSaleMethod(reopened.paymentMethod);
+      setActiveTab('pdv');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
   const handleCheckout = () => {
     if (cart.length === 0) return;
     
+    // Validação Mandatória de Caixa Ativo
+    if (!isOpen || !activeCashSession) {
+      alert('Operação bloqueada: Nenhuma sessão de caixa ativa. É obrigatório abrir o turno informando o fundo de troco.');
+      setShowOpenModal(true);
+      return;
+    }
+
+    // Fluxo de Atualização de Pedido Reaberto
+    if (editingReopenedSale) {
+      updateReopenedOrder(editingReopenedSale.id, {
+        customerName: customerName.trim() || (orderType === 'mesa' ? 'Mesa' : orderType === 'retirada' ? 'Retirada' : 'Delivery'),
+        orderType,
+        channel: saleChannel,
+        subtotal: cartSubtotal,
+        discount: discountAmount,
+        deliveryFee: deliveryFeeAmount,
+        storeCouponSubsidy: storeCouponSubsidyAmount,
+        total: cartTotal,
+        paymentMethod: saleMethod,
+        items: cart,
+        productionStatus: 'em_producao'
+      }).then(res => {
+        if (res.success && res.sale) {
+          setDiffToPrint(res.diff);
+          setSelectedSaleToPrint(res.sale);
+          setEditingReopenedSale(null);
+          setCart([]);
+          setCustomerName('');
+          setDiscountInput('');
+          setDeliveryFeeInput('');
+          setHasStoreCoupon(false);
+          setActiveTab('historico');
+          playOrderReadyChime();
+        }
+      });
+      return;
+    }
+
     addSale({
       customerName: customerName.trim() || (orderType === 'mesa' ? 'Mesa' : orderType === 'retirada' ? 'Retirada' : 'Delivery'),
       orderType,
@@ -686,18 +753,20 @@ export default function CaixaPage() {
                 </div>
 
                 <div className="flex gap-3 pt-4">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowOpenModal(false)}
-                    className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold transition-all cursor-pointer"
-                  >
-                    Cancelar
-                  </button>
+                  {isOpen && (
+                    <button 
+                      type="button" 
+                      onClick={() => setShowOpenModal(false)}
+                      className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold transition-all cursor-pointer"
+                    >
+                      Cancelar
+                    </button>
+                  )}
                   <button 
                     type="submit" 
-                    className="flex-1 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold shadow-lg shadow-emerald-600/30 transition-all cursor-pointer"
+                    className="flex-1 py-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold shadow-lg shadow-emerald-600/30 transition-all cursor-pointer text-sm"
                   >
-                    Confirmar Abertura
+                    Confirmar Abertura (R$ {Number(initialAmountInput || 0).toFixed(2)})
                   </button>
                 </div>
               </form>
@@ -1214,6 +1283,30 @@ export default function CaixaPage() {
                         </div>
                       </div>
 
+                      {/* Banner de Modo de Edição de Pedido Reaberto */}
+                      {editingReopenedSale && (
+                        <div className="p-3 bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded-2xl flex items-center justify-between mb-3 animate-fade-in">
+                          <div className="flex items-center gap-2 text-xs font-bold">
+                            <GitCompare size={16} className="text-amber-400 shrink-0" />
+                            <span>MODO EDIÇÃO: Pedido #{editingReopenedSale.id.slice(0, 6).toUpperCase()}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingReopenedSale(null);
+                              setCart([]);
+                              setCustomerName('');
+                              setDiscountInput('');
+                              setDeliveryFeeInput('');
+                              setHasStoreCoupon(false);
+                            }}
+                            className="text-[11px] text-slate-400 hover:text-white underline cursor-pointer shrink-0"
+                          >
+                            Cancelar Edição
+                          </button>
+                        </div>
+                      )}
+
                       {/* Itens do Carrinho */}
                       <div className="overflow-y-auto space-y-2.5 max-h-[38vh] pr-1">
                         {cart.length === 0 ? (
@@ -1520,9 +1613,14 @@ export default function CaixaPage() {
                         type="button"
                         onClick={handleCheckout}
                         disabled={cart.length === 0}
-                        className="w-full py-3.5 bg-brand-primary hover:bg-brand-primaryHover disabled:bg-surface-elevated disabled:text-slate-600 text-white rounded-xl font-semibold shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer text-sm"
+                        className={`w-full py-3.5 ${
+                          editingReopenedSale 
+                            ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-600/30 ring-2 ring-amber-400' 
+                            : 'bg-brand-primary hover:bg-brand-primaryHover shadow-xs'
+                        } disabled:bg-surface-elevated disabled:text-slate-600 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 cursor-pointer text-sm`}
                       >
-                        <Send size={16} /> Finalizar Pedido
+                        {editingReopenedSale ? <GitCompare size={16} /> : <Send size={16} />}
+                        <span>{editingReopenedSale ? 'Salvar Alterações & Emitir Delta (Diff)' : 'Finalizar Pedido'}</span>
                       </button>
                     </div>
                   </div>
@@ -1835,6 +1933,13 @@ export default function CaixaPage() {
                                     title="Imprimir Cupom Térmico (Cozinha / Cliente)"
                                   >
                                     <Printer size={18} />
+                                  </button>
+                                  <button 
+                                    onClick={() => handleStartReopenSale(sale)} 
+                                    className="text-slate-400 hover:text-amber-400 p-2 hover:bg-amber-500/10 rounded-xl transition-all cursor-pointer" 
+                                    title="Reabrir Pedido para Edição / Adições (Exige Senha de Supervisor)"
+                                  >
+                                    <Edit3 size={18} />
                                   </button>
                                   <button 
                                     onClick={() => {
@@ -2171,7 +2276,11 @@ export default function CaixaPage() {
         {/* Modal de Impressão Térmica */}
         <ReceiptModal 
           sale={selectedSaleToPrint} 
-          onClose={() => setSelectedSaleToPrint(null)} 
+          diff={diffToPrint}
+          onClose={() => {
+            setSelectedSaleToPrint(null);
+            setDiffToPrint(null);
+          }} 
         />
 
         {/* Modal de Confirmação de Retirada da Chapa */}

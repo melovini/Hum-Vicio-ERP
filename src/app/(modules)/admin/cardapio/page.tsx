@@ -1,9 +1,9 @@
 'use client';
-import { useState } from 'react';
-import { useInventory, Product, RecipeIngredient } from '@/lib/store';
+import { useState, useMemo } from 'react';
+import { useInventory, Product, RecipeIngredient, InventoryItem } from '@/lib/store';
 import { 
   ChefHat, ArrowLeft, Plus, Trash2, Edit2, Check, X, 
-  FlaskConical, Sparkles, Layers, DollarSign, Store, Smartphone, Search, ChevronRight 
+  FlaskConical, Sparkles, Layers, DollarSign, Store, Smartphone, Search, ChevronRight, Copy 
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -27,10 +27,59 @@ export default function EngenhariaCardapioPage() {
   const [priceBalcao, setPriceBalcao] = useState('');
   const [priceIfood, setPriceIfood] = useState('');
   
-  // Recipe State
+  // Recipe State & Typeahead
   const [recipe, setRecipe] = useState<RecipeIngredient[]>([]);
   const [selectedIngId, setSelectedIngId] = useState('');
   const [ingQuantity, setIngQuantity] = useState('');
+  const [ingSearch, setIngSearch] = useState('');
+  const [isIngDropdownOpen, setIsIngDropdownOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
+
+  // Ordenação Alfabética Rigorosa de Insumos (sem sensibilidade a maiúsculas/minúsculas e acentos)
+  const sortedItems = useMemo(() => {
+    return [...items].sort((a, b) => 
+      a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' })
+    );
+  }, [items]);
+
+  // Filtro de Typeahead para Insumos
+  const filteredTypeaheadItems = useMemo(() => {
+    if (!ingSearch.trim()) return sortedItems.slice(0, 30);
+    const q = ingSearch.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    return sortedItems.filter(i => {
+      const nameNorm = i.name.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const catNorm = i.category.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      return nameNorm.includes(q) || catNorm.includes(q);
+    });
+  }, [sortedItems, ingSearch]);
+
+  // Segmentação Visual da Ficha Técnica por Categoria com Subtotais de CMV
+  const recipeByCategory = useMemo(() => {
+    const groups: Record<string, {
+      category: string;
+      items: { r: RecipeIngredient; ing?: InventoryItem; cost: number; subtotal: number; originalIndex: number }[];
+      subtotalCost: number;
+    }> = {};
+
+    recipe.forEach((r, originalIndex) => {
+      const ing = items.find(i => i.id === r.ingredientId);
+      const cat = ing?.category || 'Outros';
+      const cost = getIngredientTrueCost(r.ingredientId);
+      const subtotal = cost * r.quantity;
+
+      if (!groups[cat]) {
+        groups[cat] = { category: cat, items: [], subtotalCost: 0 };
+      }
+      groups[cat].items.push({ r, ing, cost, subtotal, originalIndex });
+      groups[cat].subtotalCost += subtotal;
+    });
+
+    return Object.values(groups).sort((a, b) => b.subtotalCost - a.subtotalCost);
+  }, [recipe, items, getIngredientTrueCost]);
+
+  const totalRecipeCmv = useMemo(() => {
+    return recipe.reduce((acc, r) => acc + (getIngredientTrueCost(r.ingredientId) * r.quantity), 0);
+  }, [recipe, getIngredientTrueCost]);
 
   // Sub-Receita Form State
   const [selectedPrepId, setSelectedPrepId] = useState<string>('');
@@ -44,8 +93,8 @@ export default function EngenhariaCardapioPage() {
 
   const resetForm = () => {
     setName(''); setCategory('lanche'); setPriceBalcao(''); setPriceIfood('');
-    setRecipe([]); setSelectedIngId(''); setIngQuantity('');
-    setIsAdding(false); setEditingId(null);
+    setRecipe([]); setSelectedIngId(''); setIngQuantity(''); setIngSearch('');
+    setIsIngDropdownOpen(false); setIsAdding(false); setEditingId(null);
   };
 
   const handleSave = () => {
@@ -74,6 +123,18 @@ export default function EngenhariaCardapioPage() {
     setRecipe([...p.recipe]);
     setEditingId(p.id);
     setIsAdding(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const duplicateProduct = (p: Product) => {
+    setName(`[Cópia] ${p.name}`);
+    setCategory(p.category);
+    setPriceBalcao(p.priceBalcao.toString());
+    setPriceIfood(p.priceIfood.toString());
+    setRecipe(p.recipe.map(r => ({ ...r })));
+    setEditingId(null);
+    setIsAdding(true);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const addIngredientToRecipe = () => {
@@ -266,64 +327,189 @@ export default function EngenhariaCardapioPage() {
                   </div>
                 </div>
 
-                {/* Montagem da Ficha Técnica */}
+                {/* Montagem da Ficha Técnica com Typeahead e Agrupamento */}
                 <div className="bg-slate-950/60 border border-slate-800/80 rounded-2xl p-6 mb-6">
-                  <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider mb-4 flex items-center gap-2">
-                    <Layers size={16} className="text-blue-400" /> Composição / Ficha Técnica do Lanche
-                  </h3>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+                    <h3 className="text-sm font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                      <Layers size={16} className="text-blue-400" /> Composição / Ficha Técnica do Lanche
+                    </h3>
+                    <span className="text-xs text-slate-400 font-mono">
+                      Total Insumos: <strong className="text-white">{recipe.length}</strong>
+                    </span>
+                  </div>
                   
-                  <div className="flex flex-col sm:flex-row gap-3 mb-4">
-                    <select 
-                      value={selectedIngId} onChange={e => setSelectedIngId(e.target.value)}
-                      className="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200 outline-none focus:border-blue-500 text-sm"
-                    >
-                      <option value="" disabled>Selecione um insumo ou sub-receita...</option>
-                      {items.map(i => {
-                        const cost = getIngredientTrueCost(i.id);
-                        return (
-                          <option key={i.id} value={i.id}>
-                            {i.name} ({i.category}) - Custo: R$ {cost.toFixed(2)}/{i.unit}
-                          </option>
-                        );
-                      })}
-                    </select>
+                  {/* Barra de Inserção Rápida com Typeahead Combobox */}
+                  <div className="flex flex-col sm:flex-row gap-3 mb-6 relative">
+                    {/* Typeahead Combobox Autocomplete */}
+                    <div className="relative flex-1">
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Buscar insumo por nome ou categoria (Ex: Pão, Carne, Cheddar)..."
+                          value={ingSearch}
+                          onChange={e => {
+                            setIngSearch(e.target.value);
+                            setIsIngDropdownOpen(true);
+                            setHighlightedIndex(0);
+                          }}
+                          onFocus={() => setIsIngDropdownOpen(true)}
+                          onKeyDown={e => {
+                            if (!isIngDropdownOpen && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+                              setIsIngDropdownOpen(true);
+                              return;
+                            }
+                            if (e.key === 'ArrowDown') {
+                              e.preventDefault();
+                              setHighlightedIndex(prev => Math.min(prev + 1, filteredTypeaheadItems.length - 1));
+                            } else if (e.key === 'ArrowUp') {
+                              e.preventDefault();
+                              setHighlightedIndex(prev => Math.max(prev - 1, 0));
+                            } else if (e.key === 'Enter') {
+                              e.preventDefault();
+                              if (filteredTypeaheadItems[highlightedIndex]) {
+                                const picked = filteredTypeaheadItems[highlightedIndex];
+                                setSelectedIngId(picked.id);
+                                setIngSearch(picked.name);
+                                setIsIngDropdownOpen(false);
+                              }
+                            } else if (e.key === 'Escape') {
+                              setIsIngDropdownOpen(false);
+                            }
+                          }}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200 outline-none focus:border-blue-500 text-sm"
+                        />
+                        {selectedIngId && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedIngId('');
+                              setIngSearch('');
+                              setIsIngDropdownOpen(true);
+                            }}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white p-1"
+                            title="Limpar seleção"
+                          >
+                            <X size={15} />
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Dropdown de Resultados Typeahead */}
+                      {isIngDropdownOpen && (
+                        <div className="absolute z-40 left-0 right-0 top-full mt-1 bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl max-h-60 overflow-y-auto pr-1 animate-scale-in">
+                          {filteredTypeaheadItems.length === 0 ? (
+                            <div className="p-3 text-center text-xs text-slate-500">
+                              Nenhum insumo encontrado para "{ingSearch}".
+                            </div>
+                          ) : (
+                            filteredTypeaheadItems.map((item, idx) => {
+                              const cost = getIngredientTrueCost(item.id);
+                              const isSelected = item.id === selectedIngId;
+                              const isHighlighted = idx === highlightedIndex;
+
+                              return (
+                                <div
+                                  key={item.id}
+                                  onMouseEnter={() => setHighlightedIndex(idx)}
+                                  onClick={() => {
+                                    setSelectedIngId(item.id);
+                                    setIngSearch(item.name);
+                                    setIsIngDropdownOpen(false);
+                                  }}
+                                  className={`p-2.5 px-3.5 flex justify-between items-center cursor-pointer border-b border-slate-800/60 last:border-0 text-xs transition-colors ${
+                                    isHighlighted ? 'bg-blue-600/30 text-white' : isSelected ? 'bg-slate-800 text-blue-300' : 'text-slate-300 hover:bg-slate-800'
+                                  }`}
+                                >
+                                  <div>
+                                    <span className="font-bold">{item.name}</span>
+                                    <span className="text-[10px] text-slate-500 ml-2 uppercase font-semibold">({item.category})</span>
+                                  </div>
+                                  <div className="font-mono text-[11px] font-bold text-amber-400">
+                                    R$ {cost.toFixed(2)} / {item.unit}
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
+                    </div>
 
                     <input 
                       type="number" step="0.001" placeholder="Quantidade"
                       value={ingQuantity} onChange={e => setIngQuantity(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addIngredientToRecipe();
+                        }
+                      }}
                       className="w-36 bg-slate-900 border border-slate-700 rounded-xl p-3 text-white font-mono outline-none focus:border-blue-500 text-sm"
                     />
 
                     <button 
-                      type="button" onClick={addIngredientToRecipe}
-                      className="bg-blue-600 hover:bg-blue-500 text-white px-5 py-3 rounded-xl font-bold text-sm cursor-pointer"
+                      type="button" 
+                      onClick={addIngredientToRecipe}
+                      disabled={!selectedIngId || !ingQuantity}
+                      className="bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 disabled:text-slate-600 text-white px-5 py-3 rounded-xl font-bold text-sm cursor-pointer transition-all shrink-0"
                     >
                       + Inserir
                     </button>
                   </div>
 
-                  <div className="space-y-2">
-                    {recipe.map((r, idx) => {
-                      const ing = items.find(i => i.id === r.ingredientId);
-                      const cost = getIngredientTrueCost(r.ingredientId);
-                      const subtotal = cost * r.quantity;
+                  {/* Segmentação Visual por Categorias com Subtotal de CMV */}
+                  <div className="space-y-4">
+                    {recipeByCategory.map(group => {
+                      const groupPercent = totalRecipeCmv > 0 ? (group.subtotalCost / totalRecipeCmv) * 100 : 0;
+
                       return (
-                        <div key={idx} className="flex justify-between items-center bg-slate-900/40 border border-slate-800 p-3 rounded-xl text-xs">
-                          <div>
-                            <span className="font-bold text-slate-200">{ing?.name}</span>
-                            <span className="text-slate-500 ml-2">({r.quantity} {ing?.unit})</span>
+                        <div key={group.category} className="bg-slate-900/50 border border-slate-800/90 rounded-2xl p-4">
+                          <div className="flex justify-between items-center mb-2.5 pb-2 border-b border-slate-800">
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-black uppercase text-blue-400 tracking-wider">
+                                {group.category}
+                              </span>
+                              <span className="text-[10px] text-slate-500">
+                                ({group.items.length} {group.items.length === 1 ? 'item' : 'itens'})
+                              </span>
+                            </div>
+                            <div className="text-right flex items-center gap-2">
+                              <span className="font-mono text-xs font-black text-amber-400">
+                                R$ {group.subtotalCost.toFixed(2)}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono bg-slate-950 px-2 py-0.5 rounded-md border border-slate-800">
+                                {groupPercent.toFixed(1)}% do CMV
+                              </span>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-3">
-                            <span className="font-mono text-amber-400 font-bold">R$ {subtotal.toFixed(2)}</span>
-                            <button onClick={() => removeIngredientFromRecipe(idx)} className="text-slate-500 hover:text-red-400 cursor-pointer">
-                              <Trash2 size={15} />
-                            </button>
+
+                          <div className="space-y-1.5">
+                            {group.items.map(({ r, ing, subtotal, originalIndex }) => (
+                              <div key={originalIndex} className="flex justify-between items-center bg-slate-950/50 p-2.5 rounded-xl text-xs border border-slate-900">
+                                <div>
+                                  <span className="font-bold text-slate-200">{ing?.name}</span>
+                                  <span className="text-slate-500 ml-2 font-mono">({r.quantity} {ing?.unit})</span>
+                                </div>
+                                <div className="flex items-center gap-3">
+                                  <span className="font-mono text-amber-400 font-bold">R$ {subtotal.toFixed(2)}</span>
+                                  <button 
+                                    type="button"
+                                    onClick={() => removeIngredientFromRecipe(originalIndex)} 
+                                    className="text-slate-500 hover:text-red-400 cursor-pointer p-1 rounded-lg hover:bg-slate-900 transition-colors"
+                                    title="Remover da ficha técnica"
+                                  >
+                                    <Trash2 size={15} />
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       );
                     })}
+
                     {recipe.length === 0 && (
-                      <p className="text-xs text-slate-500 text-center py-4">Nenhum ingrediente adicionado à ficha técnica.</p>
+                      <p className="text-xs text-slate-500 text-center py-6">Nenhum ingrediente adicionado à ficha técnica.</p>
                     )}
                   </div>
 
@@ -421,6 +607,13 @@ export default function EngenhariaCardapioPage() {
                             </button>
                           ) : (
                             <>
+                              <button 
+                                onClick={() => duplicateProduct(p)} 
+                                className="p-1.5 text-slate-500 hover:text-amber-400 rounded-lg hover:bg-slate-800 cursor-pointer transition-colors" 
+                                title="Duplicar como Base (Clonar Ficha Técnica)"
+                              >
+                                <Copy size={16} />
+                              </button>
                               <button onClick={() => startEdit(p)} className="p-1.5 text-slate-500 hover:text-blue-400 rounded-lg hover:bg-slate-800 cursor-pointer" title="Editar">
                                 <Edit2 size={16} />
                               </button>
@@ -587,7 +780,7 @@ export default function EngenhariaCardapioPage() {
                         className="flex-1 bg-slate-900 border border-slate-700 rounded-xl p-3 text-slate-200 outline-none focus:border-purple-500 text-sm"
                       >
                         <option value="" disabled>Selecione um ingrediente (ex: Óleo de Girassol)...</option>
-                        {items.filter(i => i.id !== activePrep.id).map(i => (
+                        {sortedItems.filter(i => i.id !== activePrep.id).map(i => (
                           <option key={i.id} value={i.id}>
                             {i.name} ({i.category}) - R$ {i.costPerUnit.toFixed(2)}/{i.unit}
                           </option>

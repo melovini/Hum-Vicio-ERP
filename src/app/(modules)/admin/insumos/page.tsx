@@ -55,8 +55,11 @@ export default function GestaoInsumosPage() {
     setIsAdding(true);
   };
 
-  // Agrupar itens por categoria (com suporte a ver inativos)
-  const displayedItems = items.filter(i => showInactive ? true : i.isActive !== false);
+  // Agrupar itens por categoria com ordenação alfabética rigorosa
+  const displayedItems = [...items]
+    .filter(i => showInactive ? true : i.isActive !== false)
+    .sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }));
+
   const groupedItems = displayedItems.reduce((acc, item) => {
     let rawCat = (item.category || 'Geral').trim().toLowerCase();
     const cat = rawCat.charAt(0).toUpperCase() + rawCat.slice(1);

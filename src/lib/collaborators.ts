@@ -86,6 +86,11 @@ export function getStoredCollaborators(): Collaborator[] {
   return DEFAULT_COLLABORATORS;
 }
 
+// Obter apenas colaboradores ativos
+export function getActiveCollaborators(): Collaborator[] {
+  return getStoredCollaborators().filter(c => c.isActive !== false);
+}
+
 // Salvar ou Atualizar Colaborador
 export function saveStoredCollaborator(collab: Collaborator): Collaborator[] {
   const current = getStoredCollaborators();

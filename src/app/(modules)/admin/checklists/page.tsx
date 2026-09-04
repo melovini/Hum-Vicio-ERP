@@ -21,8 +21,8 @@ export default function ChecklistsReportPage() {
       
       // Contar tarefas individuais
       check.tasks.forEach(task => {
-        if (task.checked && task.checkedBy) {
-          const name = task.checkedBy.toUpperCase();
+        if (task.checked) {
+          const name = (task.executedByName || task.checkedBy || 'Equipe').toUpperCase();
           if (!counts[name]) counts[name] = { tasks: 0, signs: 0 };
           counts[name].tasks += 1;
         }
@@ -142,8 +142,8 @@ export default function ChecklistsReportPage() {
                               )}
                               <div>
                                 <p className={`text-sm ${task.checked ? 'text-slate-300' : 'text-slate-500'}`}>{task.label}</p>
-                                {task.checked && task.checkedBy && (
-                                  <p className="text-xs text-emerald-500/70">por {task.checkedBy}</p>
+                                {task.checked && (task.executedByName || task.checkedBy) && (
+                                  <p className="text-xs text-emerald-500/70">por {task.executedByName || task.checkedBy}</p>
                                 )}
                               </div>
                             </div>
