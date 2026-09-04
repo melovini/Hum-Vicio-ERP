@@ -5,6 +5,8 @@ const supabase = createClient();
 
 export type CollaboratorRole = 'admin' | 'gerente' | 'caixa' | 'cozinha';
 
+export type PayType = 'mensalista' | 'diarista';
+
 export interface Collaborator {
   id: string;
   name: string;
@@ -12,6 +14,9 @@ export interface Collaborator {
   pin: string; // PIN numérico ou senha individual
   phone?: string;
   shift?: 'manha' | 'tarde' | 'noite' | 'integral';
+  payType?: PayType;
+  dailyRate?: number; // Valor da diária em R$ (para diaristas)
+  weeklySchedule?: string[]; // Ex: ['qui', 'sex', 'sab', 'dom']
   isActive: boolean;
   createdAt: string;
   updatedAt: string;

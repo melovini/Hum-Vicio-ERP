@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useInventory, Sale, DelayReason, InventoryItem, ChecklistTask } from '@/lib/store';
+import { useInventory, Sale, SaleItem, DelayReason, InventoryItem, ChecklistTask } from '@/lib/store';
 import { 
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
@@ -172,19 +172,195 @@ export default function CozinhaKDSPage() {
       });
   }, [sales, activeCashSession, isOpen, sessionStartTime]);
 
-  // Resumo de Hambúrgueres na Chapa no Momento
-  const currentGrillBurgersSummary = useMemo(() => {
-    let total = 0;
-    const map: Record<string, number> = {};
-    productionOrders.forEach(o => {
-      o.items?.forEach(i => {
-        total += i.quantity;
-        map[i.productName] = (map[i.productName] || 0) + i.quantity;
+  // Classificação Inteligente de Itens por Estação (Chapa vs. Fritadeira & Pontos)
+  const getItemStationDetails = (item: SaleItem) => {
+    const name = item.productName || '';
+    const nameLower = name.toLowerCase();
+    const notes = (item.notes || '').toLowerCase();
+    const combo = (item.combo || '').toLowerCase();
+    const qty = Number(item.quantity) || 1;
+
+    let chapaPatties = 0;
+    let isDouble = false;
+    let meatPoint: string | undefined = undefined;
+
+    let fryerBatatasCombo = 0;
+    let fryerBatatasAvulsa = 0;
+    let fryerBatataName: string | undefined = undefined;
+
+    let fryerOnionsCombo = 0;
+    let fryerOnionsAvulsa = 0;
+
+    let fryerChicken = 0;
+    let fryerCheese = 0;
+
+    // 1. Identificar Empanados (Vão para a Fritadeira!)
+    const isChickenBreaded = nameLower.includes('frango empanado') || (nameLower.includes('argentina') && nameLower.includes('empanado'));
+    const isCheeseBreaded = nameLower.includes('israel') || nameLower.includes('queijo minas empanado') || nameLower.includes('queijo empanado');
+
+    // 2. Identificar Lanches
+    const isBurger = nameLower.includes('hamb') || nameLower.includes('burger') || 
+                     nameLower.includes('alemanha') || nameLower.includes('argentina') || 
+                     nameLower.includes('brasil') || nameLower.includes('estados unidos') || 
+                     nameLower.includes('eua') || nameLower.includes('méxico') || 
+                     nameLower.includes('mexico') || nameLower.includes('wakanda') || 
+                     nameLower.includes('kids') || nameLower.includes('smash');
+
+    if (isBurger) {
+      isDouble = nameLower.includes('duplo');
+      const multiplier = isDouble ? 2 : 1;
+
+      if (isChickenBreaded) {
+        fryerChicken += qty * multiplier;
+      } else if (isCheeseBreaded) {
+        fryerCheese += qty * multiplier;
+      } else {
+        chapaPatties += qty * multiplier;
+      }
+    }
+
+    // 3. Adicionais de Carne ou Empanados
+    if (Array.isArray(item.additionals)) {
+      item.additionals.forEach(add => {
+        const aLower = (add.name || '').toLowerCase();
+        if (aLower.includes('frango empanado')) {
+          fryerChicken += qty;
+        } else if (aLower.includes('queijo') && aLower.includes('empanado')) {
+          fryerCheese += qty;
+        } else if (aLower.includes('hamb') || aLower.includes('bovino') || aLower.includes('costela') || aLower.includes('linguiça') || aLower.includes('linguica') || aLower.includes('carne')) {
+          chapaPatties += qty;
+        }
+      });
+    }
+
+    // Adicionais embutidos no nome (ex: '+ [Hambúrguer Bovino 180g]')
+    if (nameLower.includes('[hambúrguer bovino') || nameLower.includes('[hambúrguer costela') || nameLower.includes('[hambúrguer linguiça') || nameLower.includes('[hamburguer')) {
+      chapaPatties += qty;
+    }
+    if (nameLower.includes('[hamb. frango empanado') || nameLower.includes('[frango empanado')) {
+      fryerChicken += qty;
+    }
+    if (nameLower.includes('[hamb. queijo minas empanado') || nameLower.includes('[queijo minas empanado')) {
+      fryerCheese += qty;
+    }
+
+    // 4. Batatas & Onions (Combos vs. Avulsas)
+    const isComboBatata = combo.includes('batata') || nameLower.includes('combo batata') || nameLower.includes('batata e bebida') || nameLower.includes('batata + bebida');
+    const isComboOnion = combo.includes('onion') || combo.includes('anel') || combo.includes('cebola') || nameLower.includes('combo onion') || nameLower.includes('combo anéis') || nameLower.includes('anéis de cebola + bebida');
+
+    if (isComboBatata) fryerBatatasCombo += qty;
+    if (isComboOnion) fryerOnionsCombo += qty;
+
+    if (!isBurger && (nameLower.includes('batata') || nameLower.includes('fritas'))) {
+      fryerBatatasAvulsa += qty;
+      fryerBatataName = name;
+    }
+    if (!isBurger && (nameLower.includes('anel') || nameLower.includes('anéis') || nameLower.includes('onion'))) {
+      fryerOnionsAvulsa += qty;
+    }
+
+    // 5. Ponto da Carne
+    const combinedNotes = (name + ' ' + notes).toLowerCase();
+    if (combinedNotes.includes('mal passado') || combinedNotes.includes('mal-passado') || combinedNotes.includes('malpassado')) {
+      meatPoint = 'Mal Passado';
+    } else if (combinedNotes.includes('ao ponto p/ bem') || combinedNotes.includes('ao ponto pra bem') || combinedNotes.includes('ponto mais') || combinedNotes.includes('p/ bem')) {
+      meatPoint = 'Ao Ponto +';
+    } else if (combinedNotes.includes('ao ponto p/ menos') || combinedNotes.includes('ao ponto pra menos') || combinedNotes.includes('ponto menos') || combinedNotes.includes('p/ menos')) {
+      meatPoint = 'Ao Ponto -';
+    } else if (combinedNotes.includes('ao ponto')) {
+      meatPoint = 'Ao Ponto';
+    } else if (combinedNotes.includes('bem passado') || combinedNotes.includes('bem-passado') || combinedNotes.includes('bempassado')) {
+      meatPoint = 'Bem Passado';
+    }
+
+    return {
+      chapaPatties,
+      isDouble,
+      meatPoint,
+      fryerBatatasCombo,
+      fryerBatatasAvulsa,
+      fryerBatataName,
+      fryerOnionsCombo,
+      fryerOnionsAvulsa,
+      fryerChicken,
+      fryerCheese
+    };
+  };
+
+  // Monitor Consolidado Duplo de Estações: Chapa & Fritadeira
+  const kitchenStationsSummary = useMemo(() => {
+    let totalChapaPatties = 0;
+    const burgerCounts: Record<string, number> = {};
+    const meatPointsMap: Record<string, number> = {};
+
+    let totalBatatas = 0;
+    let batatasComboCount = 0;
+    const batatasAvulsasMap: Record<string, number> = {};
+
+    let totalOnions = 0;
+    let onionsComboCount = 0;
+    let onionsAvulsasCount = 0;
+
+    let totalChickenBreaded = 0;
+    let totalCheeseBreaded = 0;
+
+    productionOrders.forEach(order => {
+      order.items?.forEach(item => {
+        const details = getItemStationDetails(item);
+
+        // Estação Chapa
+        totalChapaPatties += details.chapaPatties;
+        if (details.chapaPatties > 0) {
+          const cleanName = item.productName.replace(/\s*\(Combo.*?\)/i, '').replace(/\s*\+.*$/, '').trim();
+          burgerCounts[cleanName] = (burgerCounts[cleanName] || 0) + item.quantity;
+        }
+        if (details.meatPoint) {
+          meatPointsMap[details.meatPoint] = (meatPointsMap[details.meatPoint] || 0) + item.quantity;
+        }
+
+        // Estação Fritadeira - Batatas
+        if (details.fryerBatatasCombo > 0) {
+          totalBatatas += details.fryerBatatasCombo;
+          batatasComboCount += details.fryerBatatasCombo;
+        }
+        if (details.fryerBatatasAvulsa > 0) {
+          totalBatatas += details.fryerBatatasAvulsa;
+          const bName = details.fryerBatataName || 'Batata Avulsa';
+          batatasAvulsasMap[bName] = (batatasAvulsasMap[bName] || 0) + details.fryerBatatasAvulsa;
+        }
+
+        // Estação Fritadeira - Onions
+        if (details.fryerOnionsCombo > 0) {
+          totalOnions += details.fryerOnionsCombo;
+          onionsComboCount += details.fryerOnionsCombo;
+        }
+        if (details.fryerOnionsAvulsa > 0) {
+          totalOnions += details.fryerOnionsAvulsa;
+          onionsAvulsasCount += details.fryerOnionsAvulsa;
+        }
+
+        // Estação Fritadeira - Empanados
+        totalChickenBreaded += details.fryerChicken;
+        totalCheeseBreaded += details.fryerCheese;
       });
     });
+
     return {
-      total,
-      items: Object.entries(map).map(([name, qty]) => `${qty}x ${name}`).join(' • ')
+      chapa: {
+        totalPatties: totalChapaPatties,
+        burgerList: Object.entries(burgerCounts).map(([name, qty]) => `${qty}x ${name}`),
+        points: Object.entries(meatPointsMap).map(([pt, qty]) => `${qty}x ${pt}`)
+      },
+      fritadeira: {
+        totalBatatas,
+        batatasComboCount,
+        batatasAvulsas: Object.entries(batatasAvulsasMap).map(([name, qty]) => `${qty}x ${name}`),
+        totalOnions,
+        onionsComboCount,
+        onionsAvulsasCount,
+        totalChickenBreaded,
+        totalCheeseBreaded
+      }
     };
   }, [productionOrders]);
 
@@ -579,28 +755,136 @@ export default function CozinhaKDSPage() {
             </div>
           ) : (
             <div className="space-y-6">
-              {/* Resumo Consolidado de Carnes para a Chapa */}
-              <div className="p-4 md:p-5 rounded-3xl bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-red-500/20 border-2 border-amber-500/40 shadow-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
-                <div className="flex items-center gap-3.5">
-                  <div className="p-3 bg-amber-500 text-slate-950 rounded-2xl font-black shrink-0 shadow-lg shadow-amber-500/30">
-                    <Flame size={26} />
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-black text-white text-base md:text-xl uppercase tracking-wide">
-                        Total na Chapa: {currentGrillBurgersSummary.total} Hambúrgueres
-                      </span>
-                      <span className="px-2.5 py-0.5 bg-amber-500 text-slate-950 font-black text-xs rounded-full">
-                        {productionOrders.length} comanda(s)
+              {/* PAINEL DUPLO DE ESTAÇÕES: CHAPA & FRITADEIRA EM TEMPO REAL */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {/* ESTAÇÃO 1: CHAPA / GRELHA */}
+                <div className="p-4 md:p-5 rounded-3xl bg-gradient-to-br from-amber-500/20 via-orange-950/30 to-slate-900/90 border-2 border-amber-500/50 shadow-2xl flex flex-col justify-between gap-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3.5">
+                      <div className="p-3 bg-amber-500 text-slate-950 rounded-2xl font-black shrink-0 shadow-lg shadow-amber-500/30">
+                        <Flame size={28} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-black uppercase tracking-widest text-amber-400">
+                            Estação Chapa & Grelha
+                          </span>
+                          <span className="px-2 py-0.5 bg-amber-500 text-slate-950 font-black text-[10px] rounded-full">
+                            {productionOrders.length} comanda(s)
+                          </span>
+                        </div>
+                        <div className="text-2xl md:text-3xl font-black text-white flex items-baseline gap-2 mt-0.5">
+                          <span>{kitchenStationsSummary.chapa.totalPatties}</span>
+                          <span className="text-sm md:text-base font-bold text-amber-300 uppercase tracking-normal">
+                            Carnes no Fogo
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                        Duplos contam 2x
                       </span>
                     </div>
-                    <p className="text-xs md:text-sm text-amber-200 mt-1 font-semibold">
-                      {currentGrillBurgersSummary.items || 'Nenhum lanche'}
-                    </p>
+                  </div>
+
+                  {/* Pontos de Carne ativos */}
+                  {kitchenStationsSummary.chapa.points.length > 0 && (
+                    <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-amber-500/20">
+                      <span className="text-[11px] font-black uppercase tracking-wider text-amber-300 mr-1">
+                        Pontos:
+                      </span>
+                      {kitchenStationsSummary.chapa.points.map((pt, idx) => (
+                        <span key={idx} className="px-2.5 py-0.5 bg-red-600/30 border border-red-500/50 text-red-200 font-black text-xs rounded-lg">
+                          🥩 {pt}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Lista de Lanches na Chapa */}
+                  <div className="text-xs text-amber-100/90 font-medium bg-slate-950/70 p-2.5 rounded-2xl border border-amber-500/20">
+                    <span className="text-slate-400 font-bold mr-1">Lanches:</span>
+                    {kitchenStationsSummary.chapa.burgerList.length > 0
+                      ? kitchenStationsSummary.chapa.burgerList.join(' • ')
+                      : 'Nenhum hambúrguer bovino ativo'}
                   </div>
                 </div>
-                <div className="text-xs text-slate-300 font-bold bg-slate-950/70 px-4 py-2.5 rounded-2xl border border-slate-800 shrink-0 text-center">
-                  🍔 Jogue as carnes na chapa conforme o total acima!
+
+                {/* ESTAÇÃO 2: FRITADEIRA (BATATAS, ONIONS & EMPANADOS) */}
+                <div className="p-4 md:p-5 rounded-3xl bg-gradient-to-br from-yellow-500/15 via-amber-950/20 to-slate-900/90 border-2 border-yellow-500/40 shadow-2xl flex flex-col justify-between gap-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3.5">
+                      <div className="p-3 bg-yellow-400 text-slate-950 rounded-2xl font-black shrink-0 shadow-lg shadow-yellow-400/30">
+                        <Utensils size={28} />
+                      </div>
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[11px] font-black uppercase tracking-widest text-yellow-400">
+                            Estação Fritadeira
+                          </span>
+                          <span className="px-2 py-0.5 bg-yellow-400 text-slate-950 font-black text-[10px] rounded-full">
+                            Frituras & Empanados
+                          </span>
+                        </div>
+                        <div className="text-2xl md:text-3xl font-black text-white flex items-baseline gap-2 mt-0.5">
+                          <span>{kitchenStationsSummary.fritadeira.totalBatatas + kitchenStationsSummary.fritadeira.totalOnions}</span>
+                          <span className="text-sm md:text-base font-bold text-yellow-300 uppercase tracking-normal">
+                            Porções p/ Fritar
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="text-[10px] font-bold text-slate-400 block uppercase">
+                        Combos + Avulsas
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Linha de Totais de Batatas e Anéis */}
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-yellow-500/20">
+                      <div className="font-extrabold text-white flex items-center justify-between">
+                        <span>🍟 Batatas:</span>
+                        <span className="text-yellow-400 text-sm font-black">{kitchenStationsSummary.fritadeira.totalBatatas}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {kitchenStationsSummary.fritadeira.batatasComboCount}x combo • {kitchenStationsSummary.fritadeira.totalBatatas - kitchenStationsSummary.fritadeira.batatasComboCount}x avulsas
+                      </p>
+                    </div>
+
+                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-yellow-500/20">
+                      <div className="font-extrabold text-white flex items-center justify-between">
+                        <span>🧅 Onions:</span>
+                        <span className="text-yellow-400 text-sm font-black">{kitchenStationsSummary.fritadeira.totalOnions}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {kitchenStationsSummary.fritadeira.onionsComboCount}x combo • {kitchenStationsSummary.fritadeira.onionsAvulsasCount}x avulsas
+                      </p>
+                    </div>
+                  </div>
+
+                  {/* Empanados de Frango e Queijo em Destaque */}
+                  {(kitchenStationsSummary.fritadeira.totalChickenBreaded > 0 || kitchenStationsSummary.fritadeira.totalCheeseBreaded > 0) ? (
+                    <div className="flex items-center gap-2 flex-wrap bg-amber-500/15 border border-amber-500/40 p-2 rounded-xl text-xs font-black text-amber-200">
+                      <span className="text-amber-400 uppercase tracking-wider">🍗 Fritar Empanados:</span>
+                      {kitchenStationsSummary.fritadeira.totalChickenBreaded > 0 && (
+                        <span className="px-2 py-0.5 bg-orange-600 text-white rounded-lg font-black">
+                          {kitchenStationsSummary.fritadeira.totalChickenBreaded}x Frango Empanado
+                        </span>
+                      )}
+                      {kitchenStationsSummary.fritadeira.totalCheeseBreaded > 0 && (
+                        <span className="px-2 py-0.5 bg-amber-600 text-white rounded-lg font-black">
+                          {kitchenStationsSummary.fritadeira.totalCheeseBreaded}x Queijo Empanado
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-[11px] text-slate-500 italic bg-slate-950/40 p-1.5 rounded-xl text-center">
+                      Nenhum empanado de frango ou queijo pendente na fritadeira
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -741,36 +1025,83 @@ export default function CozinhaKDSPage() {
                         </div>
                       )}
 
-                      {/* Lista de Itens da Comanda */}
+                      {/* Lista de Itens da Comanda com Badges de Estação */}
                       <div className="space-y-3 mb-4">
-                        {order.items?.map((item, idx) => (
-                          <div key={idx} className="bg-slate-950/70 p-3 rounded-2xl border border-slate-800/80 space-y-1">
-                            <div className="flex justify-between items-start">
-                              <span className="font-extrabold text-base text-white">
-                                [{item.quantity}x] {item.productName}
-                              </span>
-                            </div>
-
-                            {item.combo && (
-                              <p className="text-xs font-bold text-amber-400 pl-2">
-                                + COMBO: {item.combo.toUpperCase()}
-                              </p>
-                            )}
-
-                            {item.additionals && item.additionals.length > 0 && (
-                              <p className="text-xs font-semibold text-emerald-300 pl-2">
-                                + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
-                              </p>
-                            )}
-
-                            {item.notes && (
-                              <div className="mt-1 p-1.5 bg-amber-500/20 border border-amber-500/40 rounded-xl text-xs font-black text-amber-200 flex items-center gap-1.5 uppercase">
-                                <AlertOctagon size={14} className="text-amber-400 shrink-0" />
-                                <span>OBS: {item.notes}</span>
+                        {order.items?.map((item, idx) => {
+                          const details = getItemStationDetails(item);
+                          return (
+                            <div key={idx} className="bg-slate-950/70 p-3.5 rounded-2xl border border-slate-800/80 space-y-1.5">
+                              <div className="flex justify-between items-start">
+                                <span className="font-extrabold text-base text-white leading-snug">
+                                  [{item.quantity}x] {item.productName}
+                                </span>
                               </div>
-                            )}
-                          </div>
-                        ))}
+
+                              {/* Badges de Estação Direta no Item (Chapa / Fritadeira / Pontos) */}
+                              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                                {details.chapaPatties > 0 && (
+                                  <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] font-black rounded-lg flex items-center gap-1">
+                                    🔥 CHAPA: {details.chapaPatties}x {details.isDouble ? 'Carnes (Duplo)' : 'Carne'}
+                                  </span>
+                                )}
+                                {details.meatPoint && (
+                                  <span className="px-2 py-0.5 bg-red-600/30 text-red-200 border border-red-500/50 text-[11px] font-black rounded-lg">
+                                    🥩 {details.meatPoint}
+                                  </span>
+                                )}
+                                {details.fryerChicken > 0 && (
+                                  <span className="px-2 py-0.5 bg-orange-500/20 text-orange-300 border border-orange-500/40 text-[11px] font-black rounded-lg">
+                                    🍗 FRITADEIRA: {details.fryerChicken}x Frango Empanado
+                                  </span>
+                                )}
+                                {details.fryerCheese > 0 && (
+                                  <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
+                                    🧀 FRITADEIRA: {details.fryerCheese}x Queijo Empanado
+                                  </span>
+                                )}
+                                {details.fryerBatatasCombo > 0 && (
+                                  <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
+                                    🍟 FRITADEIRA: {details.fryerBatatasCombo}x Batata (Combo)
+                                  </span>
+                                )}
+                                {details.fryerBatatasAvulsa > 0 && (
+                                  <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
+                                    🍟 FRITADEIRA: {details.fryerBatatasAvulsa}x Porção Batata
+                                  </span>
+                                )}
+                                {details.fryerOnionsCombo > 0 && (
+                                  <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
+                                    🧅 FRITADEIRA: {details.fryerOnionsCombo}x Onion (Combo)
+                                  </span>
+                                )}
+                                {details.fryerOnionsAvulsa > 0 && (
+                                  <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
+                                    🧅 FRITADEIRA: {details.fryerOnionsAvulsa}x Porção Onion
+                                  </span>
+                                )}
+                              </div>
+
+                              {item.combo && (
+                                <p className="text-xs font-bold text-amber-400 pl-1">
+                                  + COMBO: {item.combo.toUpperCase()}
+                                </p>
+                              )}
+
+                              {item.additionals && item.additionals.length > 0 && (
+                                <p className="text-xs font-semibold text-emerald-300 pl-1">
+                                  + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
+                                </p>
+                              )}
+
+                              {item.notes && (
+                                <div className="mt-1 p-1.5 bg-amber-500/20 border border-amber-500/40 rounded-xl text-xs font-black text-amber-200 flex items-center gap-1.5 uppercase">
+                                  <AlertOctagon size={14} className="text-amber-400 shrink-0" />
+                                  <span>OBS: {item.notes}</span>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     </div>
 

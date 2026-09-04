@@ -4,6 +4,8 @@ import path from 'path';
 
 export type CollaboratorRole = 'admin' | 'gerente' | 'caixa' | 'cozinha';
 
+export type PayType = 'mensalista' | 'diarista';
+
 export interface Collaborator {
   id: string;
   name: string;
@@ -11,6 +13,9 @@ export interface Collaborator {
   pin: string;
   phone?: string;
   shift?: 'manha' | 'tarde' | 'noite' | 'integral';
+  payType?: PayType;
+  dailyRate?: number;
+  weeklySchedule?: string[];
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
@@ -130,6 +135,11 @@ function mapFromDb(d: any): Collaborator {
     pin: d.pin,
     phone: d.phone || undefined,
     shift: d.shift || 'integral',
+    payType: d.pay_type || 'mensalista',
+    dailyRate: d.daily_rate != null ? Number(d.daily_rate) : undefined,
+    weeklySchedule: Array.isArray(d.weekly_schedule) 
+      ? d.weekly_schedule 
+      : (typeof d.weekly_schedule === 'string' ? JSON.parse(d.weekly_schedule) : undefined),
     isActive: d.is_active !== false,
     createdAt: d.created_at || new Date().toISOString(),
     updatedAt: d.updated_at || d.created_at || new Date().toISOString()
@@ -210,22 +220,45 @@ export async function saveServerCollaborator(collab: Collaborator): Promise<{
     let isCloud = false;
     try {
       const supabase = getSupabaseServerClient();
-      const { error } = await supabase.from('collaborators').upsert({
+      
+      const payloadWithWage: any = {
         id: itemToSave.id,
         name: itemToSave.name,
         role: itemToSave.role,
         pin: itemToSave.pin,
         phone: itemToSave.phone || null,
         shift: itemToSave.shift || 'integral',
+        pay_type: itemToSave.payType || 'mensalista',
+        daily_rate: itemToSave.dailyRate != null ? itemToSave.dailyRate : null,
+        weekly_schedule: itemToSave.weeklySchedule ? JSON.stringify(itemToSave.weeklySchedule) : null,
         is_active: itemToSave.isActive,
         created_at: itemToSave.createdAt,
         updated_at: itemToSave.updatedAt
-      });
+      };
 
-      if (!error) {
+      const { error: fullError } = await supabase.from('collaborators').upsert(payloadWithWage);
+
+      if (!fullError) {
         isCloud = true;
       } else {
-        console.warn('[server-collaborators] Erro ao salvar no Supabase:', error.message);
+        // Se falhar (ex: colunas pay_type ainda não adicionadas no Supabase), salva o payload básico
+        const basicPayload = {
+          id: itemToSave.id,
+          name: itemToSave.name,
+          role: itemToSave.role,
+          pin: itemToSave.pin,
+          phone: itemToSave.phone || null,
+          shift: itemToSave.shift || 'integral',
+          is_active: itemToSave.isActive,
+          created_at: itemToSave.createdAt,
+          updated_at: itemToSave.updatedAt
+        };
+        const { error: basicError } = await supabase.from('collaborators').upsert(basicPayload);
+        if (!basicError) {
+          isCloud = true;
+        } else {
+          console.warn('[server-collaborators] Erro ao salvar no Supabase:', basicError.message);
+        }
       }
     } catch (err) {
       console.warn('[server-collaborators] Falha de conexão com Supabase:', err);
