@@ -1,7 +1,7 @@
 /**
  * Utilitário de Impressão Térmica ESC/POS de Alta Compatibilidade
- * Resolve o erro 'A visualização de impressão falhou' do Google Chrome
- * isolando o conteúdo em um iframe limpo e livre de conflitos de CSS.
+ * Utiliza uma janela popup dedicada (top-level browsing context) para contornar
+ * o crash de subframe/PrintCompositor sandbox que o Google Chrome sofre em iframes.
  */
 
 export function printThermalElement(elementIdOrHtml: string, title = 'Comprovante Hum Vício') {
@@ -21,45 +21,25 @@ export function printThermalElement(elementIdOrHtml: string, title = 'Comprovant
     return;
   }
 
-  // 2. Localizar ou criar iframe invisível dedicado para impressão
-  let iframe = document.getElementById('thermal-print-iframe') as HTMLIFrameElement | null;
-  if (iframe) {
-    try {
-      iframe.remove();
-    } catch {}
-  }
+  // 2. Abrir janela popup dedicada para impressão
+  // Janelas popup têm contexto independente e evitam travamentos do motor PDF do Chrome
+  const popup = window.open(
+    '', 
+    '_blank', 
+    'width=420,height=700,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes'
+  );
 
-  iframe = document.createElement('iframe');
-  iframe.id = 'thermal-print-iframe';
-  iframe.style.position = 'fixed';
-  iframe.style.left = '-9999px';
-  iframe.style.top = '-9999px';
-  iframe.style.width = '72mm';
-  iframe.style.height = '100px';
-  iframe.style.border = '0';
-  iframe.style.opacity = '0';
-  iframe.style.pointerEvents = 'none';
-  document.body.appendChild(iframe);
-
-  const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-  if (!iframeDoc) {
-    window.print();
-    return;
-  }
-
-  // 3. Montar documento HTML isolado, com CSS térmico estrito para bobinas de 80mm (área útil 72mm)
-  iframeDoc.open();
-  iframeDoc.write(`
+  const receiptDocumentHtml = `
     <!DOCTYPE html>
     <html lang="pt-BR">
       <head>
         <meta charset="utf-8">
         <title>${title}</title>
         <style>
-          /* Reset e regras estritas para bobinas térmicas (Tanca, Bematech, Epson, Elgin) */
+          /* Reset estrito para bobinas térmicas de 80mm (Tanca, Bematech, Elgin, Epson) */
           @page {
+            margin: 0;
             size: auto;
-            margin: 0mm;
           }
           *, *::before, *::after {
             box-sizing: border-box !important;
@@ -81,7 +61,58 @@ export function printThermalElement(elementIdOrHtml: string, title = 'Comprovant
             padding: 2mm 1mm 12mm 1mm !important;
           }
 
-          /* Utilitários tipográficos e de grid para bobina */
+          /* Barra superior de suporte (visível apenas na tela da popup, oculta na impressão) */
+          .print-toolbar {
+            position: sticky;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: #0f172a;
+            color: #ffffff;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 9999;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-size: 11px;
+            border-bottom: 2px solid #1e293b;
+          }
+          .print-actions {
+            display: flex;
+            gap: 6px;
+          }
+          .print-toolbar button {
+            flex: 1;
+            padding: 8px 10px;
+            border-radius: 8px;
+            border: none;
+            font-weight: 800;
+            cursor: pointer;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+          }
+          .btn-print {
+            background: #10b981;
+            color: white;
+          }
+          .btn-close {
+            background: #334155;
+            color: white;
+          }
+          .print-tip {
+            font-size: 10px;
+            line-height: 1.3;
+            color: #fbbf24;
+            background: rgba(251, 191, 36, 0.15);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            padding: 6px 8px;
+            border-radius: 6px;
+            text-align: center;
+          }
+
+          /* Utilitários tipográficos e de layout para comprovantes térmicos */
           .text-center { text-align: center !important; }
           .text-right { text-align: right !important; }
           .text-left { text-align: left !important; }
@@ -92,9 +123,9 @@ export function printThermalElement(elementIdOrHtml: string, title = 'Comprovant
           .italic { font-style: italic !important; }
           .line-through { text-decoration: line-through !important; }
           
-          .text-\\[9px\\] { font-size: 9px !important; }
-          .text-\\[10px\\] { font-size: 10px !important; }
-          .text-\\[11px\\] { font-size: 11px !important; }
+          .text-[9px] { font-size: 9px !important; }
+          .text-[10px] { font-size: 10px !important; }
+          .text-[11px] { font-size: 11px !important; }
           .text-xs { font-size: 11px !important; }
           .text-sm { font-size: 13px !important; }
           .text-base { font-size: 14px !important; }
@@ -119,7 +150,7 @@ export function printThermalElement(elementIdOrHtml: string, title = 'Comprovant
           .block { display: block !important; }
           
           .space-y-1 > * + * { margin-top: 3px !important; }
-          .space-y-1\\.5 > * + * { margin-top: 5px !important; }
+          .space-y-1.5 > * + * { margin-top: 5px !important; }
           .space-y-2 > * + * { margin-top: 6px !important; }
           .space-y-3 > * + * { margin-top: 8px !important; }
           .space-y-4 > * + * { margin-top: 12px !important; }
@@ -127,12 +158,12 @@ export function printThermalElement(elementIdOrHtml: string, title = 'Comprovant
           .p-1 { padding: 2px 4px !important; }
           .p-2 { padding: 4px 6px !important; }
           .p-5 { padding: 0 !important; }
-          .py-0\\.5 { padding-top: 1px !important; padding-bottom: 1px !important; }
+          .py-0.5 { padding-top: 1px !important; padding-bottom: 1px !important; }
           .py-1 { padding-top: 3px !important; padding-bottom: 3px !important; }
-          .py-1\\.5 { padding-top: 4px !important; padding-bottom: 4px !important; }
+          .py-1.5 { padding-top: 4px !important; padding-bottom: 4px !important; }
           .py-2 { padding-top: 6px !important; padding-bottom: 6px !important; }
           .px-1 { padding-left: 3px !important; padding-right: 3px !important; }
-          .px-1\\.5 { padding-left: 4px !important; padding-right: 4px !important; }
+          .px-1.5 { padding-left: 4px !important; padding-right: 4px !important; }
           .px-2 { padding-left: 5px !important; padding-right: 5px !important; }
           
           .pt-1 { padding-top: 3px !important; }
@@ -146,11 +177,11 @@ export function printThermalElement(elementIdOrHtml: string, title = 'Comprovant
           .pl-3 { padding-left: 8px !important; }
           .pr-2 { padding-right: 5px !important; }
           
-          .mt-0\\.5 { margin-top: 2px !important; }
+          .mt-0.5 { margin-top: 2px !important; }
           .mt-1 { margin-top: 3px !important; }
           .mt-2 { margin-top: 5px !important; }
           .my-1 { margin-top: 3px !important; margin-bottom: 3px !important; }
-          .my-1\\.5 { margin-top: 4px !important; margin-bottom: 4px !important; }
+          .my-1.5 { margin-top: 4px !important; margin-bottom: 4px !important; }
           .mb-1 { margin-bottom: 2px !important; }
           .mb-2 { margin-bottom: 5px !important; }
           
@@ -176,44 +207,45 @@ export function printThermalElement(elementIdOrHtml: string, title = 'Comprovant
           .w-48 { width: 180px !important; }
           .mx-auto { margin-left: auto !important; margin-right: auto !important; }
           
-          .no-print { display: none !important; }
+          @media print {
+            .no-print, .print-toolbar { display: none !important; }
+          }
         </style>
       </head>
       <body>
-        ${contentHtml}
+        <div class="print-toolbar no-print">
+          <div class="print-actions">
+            <button class="btn-print" onclick="window.print()">🖨️ Imprimir Cupom</button>
+            <button class="btn-close" onclick="window.close()">✕ Fechar</button>
+          </div>
+          <div class="print-tip">
+            ⚡ Se o preview do Chrome falhar, pressione <b>Ctrl + Shift + P</b> para imprimir direto pelo Windows!
+          </div>
+        </div>
+        <div style="padding: 10px 4px;">
+          ${contentHtml}
+        </div>
       </body>
     </html>
-  `);
-  iframeDoc.close();
+  `;
 
-  // 4. Disparar a impressão com foco no iframe após renderização
-  const triggerPrint = () => {
-    try {
-      const win = iframe.contentWindow;
-      if (!win) {
-        window.print();
-        return;
+  if (popup) {
+    popup.document.open();
+    popup.document.write(receiptDocumentHtml);
+    popup.document.close();
+
+    // Aguarda renderização para chamar print com foco na popup
+    setTimeout(() => {
+      try {
+        popup.focus();
+        popup.print();
+      } catch (err) {
+        console.warn('Erro ao disparar impressão na janela popup:', err);
       }
-      win.focus();
-      win.print();
-    } catch (err) {
-      console.error('Falha ao imprimir via iframe, usando fallback direto:', err);
-      window.print();
-    }
-  };
-
-  try {
-    const doc = iframe.contentDocument || iframe.contentWindow?.document;
-    if (doc?.fonts?.ready) {
-      doc.fonts.ready.then(() => {
-        setTimeout(triggerPrint, 100);
-      }).catch(() => {
-        setTimeout(triggerPrint, 150);
-      });
-    } else {
-      setTimeout(triggerPrint, 200);
-    }
-  } catch {
-    setTimeout(triggerPrint, 200);
+    }, 300);
+    return;
   }
+
+  // Fallback se o navegador bloqueou popups
+  window.print();
 }

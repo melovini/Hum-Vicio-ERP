@@ -426,8 +426,13 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
           </div>
         </div>
 
+        {/* Dica de contingência do Chrome */}
+        <div className="mt-2 text-[10px] text-amber-300/80 bg-amber-950/30 border border-amber-500/20 px-3 py-1.5 rounded-xl text-center no-print">
+          💡 <b>Dica PDV:</b> Se a visualização do Chrome falhar, aperte <b>Ctrl + Shift + P</b> para imprimir direto pelo Windows!
+        </div>
+
         {/* Botões de Ação */}
-        <div className="mt-4 pt-3 border-t border-slate-800 flex gap-2 no-print">
+        <div className="mt-3 pt-3 border-t border-slate-800 flex gap-2 no-print">
           <button 
             type="button" 
             onClick={onClose}
