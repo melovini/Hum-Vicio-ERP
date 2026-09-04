@@ -100,6 +100,8 @@ export default function CaixaPage() {
   const unassignedDeliverySales = useMemo(() => {
     return sales.filter(s => 
       s.status !== 'cancelled' && 
+      s.orderType !== 'mesa' && 
+      s.orderType !== 'retirada' && 
       (s.orderType === 'delivery' || s.channel === 'ifood') && 
       (sessionStartTime === 0 || new Date(s.date).getTime() >= sessionStartTime) &&
       !allRoutedSaleIds.has(s.id)
@@ -285,6 +287,7 @@ export default function CaixaPage() {
   // PDV State
   const [customerName, setCustomerName] = useState('');
   const [orderType, setOrderType] = useState<'mesa' | 'retirada' | 'delivery'>('mesa');
+  const [selectedTable, setSelectedTable] = useState<{ id: string; numero: string; clienteNome?: string } | null>(null);
   const [posCategory, setPosCategory] = useState<'mais_pedidos' | 'hamburgueres' | 'duplos' | 'bebidas' | 'porcoes'>('mais_pedidos');
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [saleChannel, setSaleChannel] = useState<'balcao' | 'ifood'>('balcao');
@@ -747,17 +750,45 @@ export default function CaixaPage() {
       finalCustomerName = `[Fiado VIP] ${finalCreditCustomer || finalCustomerName}`;
     }
 
-    if (!finalCustomerName) {
-      finalCustomerName = (orderType === 'mesa' ? 'Mesa' : orderType === 'retirada' ? 'Retirada' : 'Delivery');
+    // Se o pedido for de mesa, vincular mesa e formatar identificador
+    let targetMesa = selectedTable
+      ? floorSession.mesas.find(m => m.id === selectedTable.id)
+      : null;
+
+    if (!targetMesa && orderType === 'mesa' && finalCustomerName) {
+      targetMesa = floorSession.mesas.find(
+        m => m.numeroIdentificador.toLowerCase() === finalCustomerName.toLowerCase() ||
+             finalCustomerName.toLowerCase().startsWith(m.numeroIdentificador.toLowerCase())
+      ) || null;
+    }
+
+    if (orderType === 'mesa') {
+      if (targetMesa) {
+        let rawClient = finalCustomerName;
+        const prefixRegex = new RegExp(`^${targetMesa.numeroIdentificador}\\s*[-–—:]?\\s*`, 'i');
+        rawClient = rawClient.replace(prefixRegex, '').trim();
+
+        if (rawClient && rawClient.toLowerCase() !== targetMesa.numeroIdentificador.toLowerCase()) {
+          finalCustomerName = `${targetMesa.numeroIdentificador} - ${rawClient}`;
+        } else {
+          finalCustomerName = targetMesa.numeroIdentificador;
+        }
+      } else {
+        if (!finalCustomerName) finalCustomerName = 'Mesa';
+      }
+    } else if (orderType === 'retirada') {
+      if (!finalCustomerName) finalCustomerName = 'Retirada';
+    } else {
+      if (!finalCustomerName) finalCustomerName = 'Delivery';
     }
 
     addSale({
       customerName: finalCustomerName,
       orderType,
-      channel: saleChannel,
+      channel: orderType === 'mesa' ? 'balcao' : saleChannel,
       subtotal: cartSubtotal,
       discount: discountAmount,
-      deliveryFee: deliveryFeeAmount,
+      deliveryFee: orderType === 'mesa' ? 0 : deliveryFeeAmount,
       storeCouponSubsidy: storeCouponSubsidyAmount,
       total: cartTotal,
       paymentMethod: saleMethod,
@@ -772,18 +803,23 @@ export default function CaixaPage() {
       creditStatus: (saleMethod === 'consumo_funcionario' || saleMethod === 'fiado_vip') ? 'pendente' : undefined
     });
 
-    // Se o pedido for de mesa, lança o consumo automaticamente na instância da mesa
-    if (orderType === 'mesa' && finalCustomerName) {
-      const mesaAlvo = floorSession.mesas.find(
-        m => m.numeroIdentificador.toLowerCase() === finalCustomerName.toLowerCase() ||
-             m.id === finalCustomerName
+    // Se o pedido for de mesa, lança o consumo e vincula o cliente na instância da mesa
+    if (orderType === 'mesa' && targetMesa) {
+      const clientNameForTable = finalCustomerName.includes(' - ')
+        ? finalCustomerName.split(' - ').slice(1).join(' - ').trim()
+        : finalCustomerName !== targetMesa.numeroIdentificador ? finalCustomerName : targetMesa.clienteNome || null;
+
+      const updatedFloor = lancarConsumoNaMesa(
+        floorSession, 
+        targetMesa.id, 
+        cartTotal, 
+        clientNameForTable || undefined, 
+        activeCashSession?.openedBy || 'Operador'
       );
-      if (mesaAlvo) {
-        const updatedFloor = lancarConsumoNaMesa(floorSession, mesaAlvo.id, cartTotal, finalCustomerName, 'Operador');
-        setFloorSession(updatedFloor);
-      }
+      setFloorSession(updatedFloor);
     }
 
+    setSelectedTable(null);
     setCart([]);
     setCustomerName('');
     setDiscountInput('');
@@ -1476,9 +1512,9 @@ export default function CaixaPage() {
                 <div className="flex items-center gap-2.5">
                   <Truck size={16} className="text-cyan-400" /> Rotas & Entregadores
                 </div>
-                {currentSessionSales.filter(s => s.orderType === 'delivery' || s.channel === 'ifood').length > 0 && (
+                {currentSessionSales.filter(s => s.orderType !== 'mesa' && s.orderType !== 'retirada' && (s.orderType === 'delivery' || s.channel === 'ifood')).length > 0 && (
                   <span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-300 text-[10px] font-mono tabular-nums font-bold rounded-full">
-                    {currentSessionSales.filter(s => s.orderType === 'delivery' || s.channel === 'ifood').length}
+                    {currentSessionSales.filter(s => s.orderType !== 'mesa' && s.orderType !== 'retirada' && (s.orderType === 'delivery' || s.channel === 'ifood')).length}
                   </span>
                 )}
               </button>
@@ -1784,7 +1820,11 @@ export default function CaixaPage() {
                         <div className="grid grid-cols-3 gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setOrderType('mesa')}
+                            onClick={() => {
+                              setOrderType('mesa');
+                              setSaleChannel('balcao');
+                              setDeliveryFeeInput('');
+                            }}
                             className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                               orderType === 'mesa'
                                 ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md'
@@ -1795,7 +1835,12 @@ export default function CaixaPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setOrderType('retirada')}
+                            onClick={() => {
+                              setOrderType('retirada');
+                              setSaleChannel('balcao');
+                              setDeliveryFeeInput('');
+                              setSelectedTable(null);
+                            }}
                             className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                               orderType === 'retirada'
                                 ? 'bg-blue-600 text-white font-extrabold shadow-md'
@@ -1806,7 +1851,10 @@ export default function CaixaPage() {
                           </button>
                           <button
                             type="button"
-                            onClick={() => setOrderType('delivery')}
+                            onClick={() => {
+                              setOrderType('delivery');
+                              setSelectedTable(null);
+                            }}
                             className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
                               orderType === 'delivery'
                                 ? 'bg-emerald-600 text-white font-extrabold shadow-md'
@@ -1818,17 +1866,85 @@ export default function CaixaPage() {
                         </div>
                       </div>
 
+                      {/* Vínculo de Mesa do Salão */}
+                      {orderType === 'mesa' && (
+                        <div className="mb-3 p-3 rounded-2xl bg-amber-500/10 border border-amber-500/30 space-y-2">
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <span className="p-1.5 rounded-lg bg-amber-500 text-slate-950 font-black text-xs">
+                                🍽️
+                              </span>
+                              <div>
+                                <span className="text-xs font-black text-white">
+                                  {selectedTable ? selectedTable.numero : 'Mesa não selecionada'}
+                                </span>
+                                <span className="text-[10px] text-amber-300 block font-medium">
+                                  {selectedTable 
+                                    ? selectedTable.clienteNome ? `Cliente atual: ${selectedTable.clienteNome}` : 'Mesa vinculada ao Salão' 
+                                    : 'Selecione abaixo ou abra pelo Mapa de Mesas'}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setActiveTab('mesas')}
+                                className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-amber-300 text-xs font-bold rounded-xl border border-amber-500/30 transition-all cursor-pointer"
+                              >
+                                {selectedTable ? 'Trocar no Mapa' : 'Abrir Mapa'}
+                              </button>
+                              {selectedTable && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedTable(null);
+                                    setCustomerName('');
+                                  }}
+                                  className="p-1 text-slate-400 hover:text-rose-400 rounded-lg cursor-pointer transition-colors"
+                                  title="Desvincular mesa"
+                                >
+                                  <X size={14} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Seletor rápido dropdown caso o operador não tenha clicado pelo mapa */}
+                          <select
+                            value={selectedTable?.id || ''}
+                            onChange={e => {
+                              const found = floorSession.mesas.find(m => m.id === e.target.value);
+                              if (found) {
+                                setSelectedTable({ id: found.id, numero: found.numeroIdentificador, clienteNome: found.clienteNome || '' });
+                                if (found.clienteNome) setCustomerName(found.clienteNome);
+                              } else {
+                                setSelectedTable(null);
+                              }
+                            }}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs font-bold outline-none focus:border-amber-500 cursor-pointer"
+                          >
+                            <option value="">-- {selectedTable ? 'Alterar Mesa do Salão' : 'Escolha a Mesa no Salão'} --</option>
+                            {floorSession.mesas.filter(m => m.statusVisual !== 'GUARDADA').map(m => (
+                              <option key={m.id} value={m.id}>
+                                {m.numeroIdentificador} {m.clienteNome ? `(${m.clienteNome})` : ''} - {m.statusConsumo === 'LIVRE' ? '🟢 Livre' : '🟡 Ocupada'}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+
                       {/* Nome do Cliente Solicitado */}
                       <div className="mb-4">
                         <label className="block text-xs font-bold text-slate-300 mb-1 flex items-center gap-1.5">
                           <User size={14} className="text-emerald-400" /> 
-                          {orderType === 'mesa' ? 'Número da Mesa / Identificação' : orderType === 'retirada' ? 'Nome para Retirada' : 'Nome e Endereço do Cliente'}
+                          {orderType === 'mesa' ? 'Nome do Cliente na Mesa (Opcional):' : orderType === 'retirada' ? 'Nome para Retirada:' : 'Nome e Endereço do Cliente:'}
                         </label>
                         <input 
                           type="text" 
                           value={customerName}
                           onChange={e => setCustomerName(e.target.value)}
-                          placeholder={orderType === 'mesa' ? 'Ex: Mesa 04' : orderType === 'retirada' ? 'Ex: Lucas' : 'Ex: Carlos - Rua das Flores, 123'}
+                          placeholder={orderType === 'mesa' ? (selectedTable ? `Ex: Carlos Silva (será vinculado à ${selectedTable.numero})` : 'Ex: Carlos Silva') : orderType === 'retirada' ? 'Ex: Lucas' : 'Ex: Carlos - Rua das Flores, 123'}
                           className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-white text-sm outline-none focus:border-emerald-500 font-medium placeholder:text-slate-600"
                         />
                       </div>
@@ -2310,8 +2426,15 @@ export default function CaixaPage() {
                     floorSession={floorSession}
                     onUpdateSession={setFloorSession}
                     onSelectTableForOrder={(mesa) => {
+                      setSelectedTable({
+                        id: mesa.id,
+                        numero: mesa.numeroIdentificador,
+                        clienteNome: mesa.clienteNome || ''
+                      });
                       setOrderType('mesa');
-                      setCustomerName(mesa.numeroIdentificador);
+                      setSaleChannel('balcao');
+                      setDeliveryFeeInput('');
+                      setCustomerName(mesa.clienteNome || '');
                       setActiveTab('pdv');
                     }}
                     operatorName="Operador"
@@ -2360,7 +2483,7 @@ export default function CaixaPage() {
                         className="px-3.5 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
                         title="Ir para o Painel de Separação de Rotas por Entregador"
                       >
-                        <Truck size={14} /> 🛵 Rotas ({currentSessionSales.filter(s => s.orderType === 'delivery' || s.channel === 'ifood').length})
+                        <Truck size={14} /> 🛵 Rotas ({currentSessionSales.filter(s => s.orderType !== 'mesa' && s.orderType !== 'retirada' && (s.orderType === 'delivery' || s.channel === 'ifood')).length})
                       </button>
                     </div>
                   </div>

@@ -460,11 +460,18 @@ export default function MapaMesasCanvas({
             >
               {/* Topo do Card */}
               <div>
-                <div className="flex justify-between items-center gap-1">
-                  <span className="font-bold text-slate-100 text-xs tracking-tight truncate">
-                    {mesa.numeroIdentificador}
-                  </span>
-                  <span className="text-[10px] font-mono tabular-nums text-slate-400 flex items-center gap-0.5">
+                <div className="flex justify-between items-start gap-1">
+                  <div className="min-w-0 flex-1">
+                    <span className="font-extrabold text-slate-100 text-xs tracking-tight truncate block">
+                      {mesa.numeroIdentificador}
+                    </span>
+                    {mesa.clienteNome && mesa.statusConsumo !== 'LIVRE' && (
+                      <span className="text-[10px] font-black text-amber-400 truncate block mt-0.5" title={`Cliente: ${mesa.clienteNome}`}>
+                        👤 {mesa.clienteNome}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] font-mono tabular-nums text-slate-400 flex items-center gap-0.5 shrink-0 mt-0.5">
                     <Users size={10} /> {mesa.capacidade}
                   </span>
                 </div>
@@ -630,7 +637,10 @@ export default function MapaMesasCanvas({
         title={
           <div className="flex items-center gap-2">
             <DollarSign className="text-status-free" size={18} />
-            <span>Pagamento: {mesaParaPagamento?.numeroIdentificador}</span>
+            <span>
+              Pagamento: {mesaParaPagamento?.numeroIdentificador}
+              {mesaParaPagamento?.clienteNome ? ` (${mesaParaPagamento.clienteNome})` : ''}
+            </span>
           </div>
         }
         description="Amortização parcial ou quitação total da conta da mesa."
