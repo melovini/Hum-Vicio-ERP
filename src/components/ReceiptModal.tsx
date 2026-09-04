@@ -19,13 +19,19 @@ interface ReceiptModalProps {
 export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps) {
   const [type, setType] = useState<'cozinha' | 'cliente' | 'diferencial'>(diff || sale?.orderDiff ? 'diferencial' : 'cozinha');
   const [copiedRaw, setCopiedRaw] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
 
   if (!sale) return null;
 
   const activeDiff = diff || sale.orderDiff;
 
   const handlePrint = () => {
+    if (isPrinting) return;
+    setIsPrinting(true);
     printThermalElement('thermal-receipt-printable', `Comprovante #${sale.id.slice(0, 6).toUpperCase()} - Hum Vicio`);
+    setTimeout(() => {
+      setIsPrinting(false);
+    }, 2500);
   };
 
   const formattedDate = new Date(sale.date).toLocaleDateString('pt-BR');
@@ -139,13 +145,15 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
             max-width: 72mm !important;
             background: #ffffff !important;
             color: #000000 !important;
-            font-family: 'Courier New', Courier, monospace !important;
+            font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
+            font-weight: 800 !important;
           }
           body * {
             visibility: hidden !important;
           }
           #thermal-receipt-printable, #thermal-receipt-printable * {
             visibility: visible !important;
+            color: #000000 !important;
           }
           #thermal-receipt-printable {
             position: absolute !important;
@@ -154,10 +162,11 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
             width: 72mm !important;
             max-width: 72mm !important;
             margin: 0 !important;
-            padding: 2mm !important;
+            padding: 2mm 1mm 4mm 1mm !important;
             color: #000000 !important;
             background: #ffffff !important;
-            font-family: 'Courier New', Courier, monospace !important;
+            font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
+            font-weight: 800 !important;
             box-sizing: border-box !important;
           }
           .no-print {
@@ -220,7 +229,7 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
         </div>
 
         {/* Pré-visualização da Bobina Térmica (80mm) */}
-        <div className="flex-1 overflow-y-auto bg-white text-black p-5 rounded-2xl font-mono text-xs shadow-inner select-none border-2 border-slate-300">
+        <div className="flex-1 overflow-y-auto bg-white text-black p-5 rounded-2xl font-sans font-bold text-xs shadow-inner select-none border-2 border-slate-300">
           <div id="thermal-receipt-printable">
             {type === 'diferencial' && activeDiff ? (
               /* --- VIA DIFERENCIAL (ALTERAÇÕES / ADIÇÕES) --- */
@@ -318,9 +327,9 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                   <p className="font-bold mb-2 uppercase text-xs">ITENS DO PEDIDO:</p>
                   <div className="space-y-3 text-sm">
                     {sale.items.map((item, idx) => (
-                      <div key={idx} className="border-b border-dashed border-black/50 pb-2 last:border-0">
+                      <div key={idx} className="border-b border-dashed border-black pb-2 last:border-0">
                         <div className="flex justify-between items-start font-bold">
-                          <span className="text-sm">[{item.quantity}x] {item.productName}</span>
+                          <span className="text-base font-black text-black">[{item.quantity}x] {item.productName}</span>
                         </div>
                         {item.combo && (
                           <p className="text-xs font-bold pl-3">
@@ -356,7 +365,7 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                   {sale.customerName && (
                     <p className="text-xs font-bold mt-0.5">CLIENTE: {sale.customerName}</p>
                   )}
-                  <p className="text-[10px] text-slate-600 mt-0.5">{formattedDate} - {formattedTime}</p>
+                  <p className="text-[10px] text-black font-bold mt-0.5">{formattedDate} - {formattedTime}</p>
                 </div>
 
                 <div className="py-2 border-b-2 border-dashed border-black">
@@ -369,7 +378,7 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                       <div key={idx} className="flex justify-between items-start text-xs">
                         <div className="pr-2">
                           <p className="font-bold">{item.productName}</p>
-                          {item.combo && <p className="text-[10px] font-bold text-slate-700 pl-2 uppercase">+ {item.combo.toUpperCase()}</p>}
+                          {item.combo && <p className="text-[10px] font-bold text-black font-bold pl-2 uppercase">+ {item.combo.toUpperCase()}</p>}
                           {item.notes && <p className="text-[10px] font-black text-black pl-2 uppercase">*** OBS: {item.notes.toUpperCase()} ***</p>}
                         </div>
                         <span className="font-bold shrink-0">
@@ -382,19 +391,19 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
 
                 <div className="py-2 border-b-2 border-dashed border-black space-y-1 font-bold text-xs">
                   {sale.subtotal !== undefined && (
-                    <div className="flex justify-between text-slate-700">
+                    <div className="flex justify-between text-black font-bold">
                       <span>Subtotal Itens:</span>
                       <span>R$ {sale.subtotal.toFixed(2)}</span>
                     </div>
                   )}
                   {sale.discount !== undefined && sale.discount > 0 && (
-                    <div className="flex justify-between text-slate-700">
+                    <div className="flex justify-between text-black font-bold">
                       <span>Desconto:</span>
                       <span>- R$ {sale.discount.toFixed(2)}</span>
                     </div>
                   )}
                   {sale.deliveryFee !== undefined && sale.deliveryFee > 0 && (
-                    <div className="flex justify-between text-slate-700">
+                    <div className="flex justify-between text-black font-bold">
                       <span>Taxa de Entrega:</span>
                       <span>+ R$ {sale.deliveryFee.toFixed(2)}</span>
                     </div>
@@ -403,7 +412,7 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                     <span>TOTAL:</span>
                     <span>R$ {sale.total.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-[11px] pt-1 text-slate-800">
+                  <div className="flex justify-between text-[11px] pt-1 text-black font-extrabold">
                     <span>FORMA DE PAGAMENTO:</span>
                     <span className="uppercase font-bold">
                       {sale.paymentMethod === 'ifood_online' 
@@ -452,9 +461,11 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
           <button 
             type="button" 
             onClick={handlePrint}
-            className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+            disabled={isPrinting}
+            className={`flex-1 py-3 ${isPrinting ? 'bg-emerald-800 opacity-70 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-500 cursor-pointer'} text-white rounded-2xl font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2`}
           >
-            <Printer size={16} /> Imprimir Cupom
+            <Printer size={16} className={isPrinting ? 'animate-pulse' : ''} /> 
+            {isPrinting ? 'Enviando p/ Impressora...' : 'Imprimir Cupom'}
           </button>
         </div>
       </div>

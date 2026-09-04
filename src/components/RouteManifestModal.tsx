@@ -14,6 +14,7 @@ interface RouteManifestModalProps {
 export default function RouteManifestModal({ route, sales, onClose }: RouteManifestModalProps) {
   const [copiedRaw, setCopiedRaw] = useState(false);
   const [copiedWhatsApp, setCopiedWhatsApp] = useState(false);
+  const [isPrinting, setIsPrinting] = useState(false);
 
   if (!route) return null;
 
@@ -28,7 +29,12 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
   const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   const handlePrint = () => {
+    if (isPrinting) return;
+    setIsPrinting(true);
     printThermalElement('thermal-route-manifest-printable', `Manifesto de Rota #${route.id ? route.id.slice(0, 6).toUpperCase() : ''} - Hum Vicio`);
+    setTimeout(() => {
+      setIsPrinting(false);
+    }, 2500);
   };
 
   // Gerador de Texto RAW ESC/POS (40 colunas contínuas)
@@ -146,13 +152,15 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
             max-width: 72mm !important;
             background: #ffffff !important;
             color: #000000 !important;
-            font-family: 'Courier New', Courier, monospace !important;
+            font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
+            font-weight: 800 !important;
           }
           body * {
             visibility: hidden !important;
           }
           #thermal-route-manifest-printable, #thermal-route-manifest-printable * {
             visibility: visible !important;
+            color: #000000 !important;
           }
           #thermal-route-manifest-printable {
             position: absolute !important;
@@ -161,10 +169,11 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
             width: 72mm !important;
             max-width: 72mm !important;
             margin: 0 !important;
-            padding: 2mm !important;
+            padding: 2mm 1mm 4mm 1mm !important;
             color: #000000 !important;
             background: #ffffff !important;
-            font-family: 'Courier New', Courier, monospace !important;
+            font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
+            font-weight: 800 !important;
             box-sizing: border-box !important;
           }
           .no-print {
@@ -199,11 +208,11 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
         </div>
 
         {/* Pré-visualização da Bobina Térmica (80mm) */}
-        <div className="flex-1 overflow-y-auto bg-white text-black p-5 my-4 rounded-2xl font-mono text-xs shadow-inner select-none border-2 border-slate-300">
+        <div className="flex-1 overflow-y-auto bg-white text-black p-5 my-4 rounded-2xl font-sans font-bold text-xs shadow-inner select-none border-2 border-slate-300">
           <div id="thermal-route-manifest-printable">
             <div className="text-center border-b-2 border-dashed border-black pb-3">
               <h3 className="font-extrabold text-base uppercase tracking-wider">HUM VÍCIO HAMBURGUERIA</h3>
-              <p className="text-[10px] text-zinc-600">CNPJ: 32.588.610/0001-44</p>
+              <p className="text-[10px] text-black font-bold">CNPJ: 32.588.610/0001-44</p>
               <div className="bg-black text-white px-2 py-1 my-1.5 font-black text-sm uppercase">
                 *** MANIFESTO DE ROTA ***
               </div>
@@ -229,7 +238,7 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
                   <div className="font-bold text-xs uppercase bg-gray-100 p-1 rounded">
                     {sale.customerName || 'Cliente sem identificação'}
                   </div>
-                  <div className="text-[11px] font-semibold text-zinc-800">
+                  <div className="text-[11px] font-semibold text-black font-extrabold">
                     {sale.items.map((i, itemIdx) => (
                       <div key={itemIdx} className="pl-1">
                         • {i.quantity}x {i.productName}
@@ -261,7 +270,7 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
                 <span>A COBRAR (DINHEIRO):</span>
                 <span>R$ {cashToCollect.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between text-[11px] text-zinc-700">
+              <div className="flex justify-between text-[11px] text-black font-bold">
                 <span>JÁ PAGO (PIX/CARTÃO/ONLINE):</span>
                 <span>R$ {prepaidAmount.toFixed(2)}</span>
               </div>
@@ -271,13 +280,13 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
             <div className="text-center text-[10px] pt-4 mt-2 space-y-4">
               <div>
                 <p className="border-t border-black w-48 mx-auto pt-1 font-bold">{route.courierName}</p>
-                <p className="text-[9px] text-zinc-600">Assinatura do Entregador</p>
+                <p className="text-[9px] text-black font-bold">Assinatura do Entregador</p>
               </div>
               <div>
                 <p className="border-t border-black w-48 mx-auto pt-1 font-bold">Operador de Caixa</p>
-                <p className="text-[9px] text-zinc-600">Conferência e Despacho</p>
+                <p className="text-[9px] text-black font-bold">Conferência e Despacho</p>
               </div>
-              <p className="text-[9px] italic text-zinc-500 pt-1">Hum Vício ERP • Operação de Delivery</p>
+              <p className="text-[9px] italic text-black font-bold pt-1">Hum Vício ERP • Operação de Delivery</p>
             </div>
           </div>
         </div>
@@ -317,9 +326,11 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
           <button 
             type="button" 
             onClick={handlePrint}
-            className="flex-1 min-w-[140px] py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2 cursor-pointer"
+            disabled={isPrinting}
+            className={`flex-1 min-w-[140px] py-3 ${isPrinting ? 'bg-blue-800 opacity-70 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-500 cursor-pointer'} text-white rounded-2xl font-bold text-xs shadow-md transition-all flex items-center justify-center gap-2`}
           >
-            <Printer size={16} /> Imprimir Romaneio
+            <Printer size={16} className={isPrinting ? 'animate-pulse' : ''} /> 
+            {isPrinting ? 'Enviando p/ Impressora...' : 'Imprimir Romaneio'}
           </button>
         </div>
       </div>
