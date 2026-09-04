@@ -623,7 +623,11 @@ export default function CozinhaKDSPage() {
                                   ? 'bg-amber-600 text-white' 
                                   : 'bg-emerald-600 text-white'
                             }`}>
-                              {order.orderType === 'delivery' ? '🛵 DELIVERY' : order.orderType === 'retirada' ? '🥡 BALCÃO' : '🍽️ MESA'}
+                              {order.orderType === 'delivery' 
+                                ? (order.channel === 'ifood' ? '🛵 IFOOD ENTREGA' : '🛵 DELIVERY') 
+                                : order.orderType === 'retirada' 
+                                  ? (order.channel === 'ifood' ? '🥡 IFOOD RETIRADA' : '🥡 RETIRADA') 
+                                  : '🍽️ MESA'}
                             </span>
                             {order.isModifiedInKitchen ? (
                               <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-red-600 text-white animate-pulse border border-red-400 shadow-md">

@@ -100,9 +100,7 @@ export default function CaixaPage() {
   const unassignedDeliverySales = useMemo(() => {
     return sales.filter(s => 
       s.status !== 'cancelled' && 
-      s.orderType !== 'mesa' && 
-      s.orderType !== 'retirada' && 
-      (s.orderType === 'delivery' || s.channel === 'ifood') && 
+      s.orderType === 'delivery' && 
       (sessionStartTime === 0 || new Date(s.date).getTime() >= sessionStartTime) &&
       !allRoutedSaleIds.has(s.id)
     );
@@ -611,10 +609,10 @@ export default function CaixaPage() {
   }, [cart]);
 
   const deliveryFeeAmount = useMemo(() => {
-    if (orderType !== 'delivery' && saleChannel !== 'ifood') return 0;
+    if (orderType !== 'delivery') return 0;
     const fee = parseFloat(deliveryFeeInput);
     return isNaN(fee) || fee < 0 ? 0 : fee;
-  }, [deliveryFeeInput, orderType, saleChannel]);
+  }, [deliveryFeeInput, orderType]);
 
   const discountAmount = useMemo(() => {
     if (!discountInput.trim()) return 0;
@@ -706,7 +704,7 @@ export default function CaixaPage() {
         channel: saleChannel,
         subtotal: cartSubtotal,
         discount: discountAmount,
-        deliveryFee: deliveryFeeAmount,
+        deliveryFee: orderType === 'delivery' ? deliveryFeeAmount : 0,
         storeCouponSubsidy: storeCouponSubsidyAmount,
         total: cartTotal,
         paymentMethod: saleMethod,
@@ -788,7 +786,7 @@ export default function CaixaPage() {
       channel: orderType === 'mesa' ? 'balcao' : saleChannel,
       subtotal: cartSubtotal,
       discount: discountAmount,
-      deliveryFee: orderType === 'mesa' ? 0 : deliveryFeeAmount,
+      deliveryFee: orderType === 'delivery' ? deliveryFeeAmount : 0,
       storeCouponSubsidy: storeCouponSubsidyAmount,
       total: cartTotal,
       paymentMethod: saleMethod,
@@ -1512,9 +1510,9 @@ export default function CaixaPage() {
                 <div className="flex items-center gap-2.5">
                   <Truck size={16} className="text-cyan-400" /> Rotas & Entregadores
                 </div>
-                {currentSessionSales.filter(s => s.orderType !== 'mesa' && s.orderType !== 'retirada' && (s.orderType === 'delivery' || s.channel === 'ifood')).length > 0 && (
+                {currentSessionSales.filter(s => s.orderType === 'delivery').length > 0 && (
                   <span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-300 text-[10px] font-mono tabular-nums font-bold rounded-full">
-                    {currentSessionSales.filter(s => s.orderType !== 'mesa' && s.orderType !== 'retirada' && (s.orderType === 'delivery' || s.channel === 'ifood')).length}
+                    {currentSessionSales.filter(s => s.orderType === 'delivery').length}
                   </span>
                 )}
               </button>
@@ -1800,7 +1798,10 @@ export default function CaixaPage() {
                             setSaleChannel(ch);
                             if (ch === 'ifood') {
                               setSaleMethod('ifood_online');
-                              setOrderType('delivery');
+                              if (orderType === 'mesa') {
+                                setOrderType('delivery');
+                                setSelectedTable(null);
+                              }
                             } else {
                               setSaleMethod('credito');
                             }
@@ -1814,30 +1815,43 @@ export default function CaixaPage() {
 
                       {/* Modalidade de Consumo Solicitada */}
                       <div className="mb-3">
-                        <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                          Modalidade do Atendimento:
+                        <label className="block text-xs font-bold text-slate-300 mb-1.5 flex items-center justify-between">
+                          <span>Modalidade do Atendimento:</span>
+                          {saleChannel === 'ifood' && (
+                            <span className="text-[10px] text-red-400 font-medium">
+                              iFood: Pra Retirar ou Entrega
+                            </span>
+                          )}
                         </label>
                         <div className="grid grid-cols-3 gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setOrderType('mesa');
-                              setSaleChannel('balcao');
-                              setDeliveryFeeInput('');
-                            }}
-                            className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
-                              orderType === 'mesa'
-                                ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md'
-                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
-                            }`}
-                          >
-                            🍽️ Mesa
-                          </button>
+                          {saleChannel === 'ifood' ? (
+                            <div
+                              className="py-2 rounded-xl text-[11px] font-semibold bg-slate-950/40 border border-slate-800/40 text-slate-600 flex items-center justify-center text-center cursor-not-allowed select-none"
+                              title="Mesas são exclusivas do salão presencial (Balcão)"
+                            >
+                              🍽️ Mesa
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOrderType('mesa');
+                                setSaleChannel('balcao');
+                                setDeliveryFeeInput('');
+                              }}
+                              className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                                orderType === 'mesa'
+                                  ? 'bg-amber-500 text-slate-950 font-extrabold shadow-md'
+                                  : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                              }`}
+                            >
+                              🍽️ Mesa
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
                               setOrderType('retirada');
-                              setSaleChannel('balcao');
                               setDeliveryFeeInput('');
                               setSelectedTable(null);
                             }}
@@ -1847,7 +1861,7 @@ export default function CaixaPage() {
                                 : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
                             }`}
                           >
-                            🥡 Retirada
+                            🥡 Retirada {saleChannel === 'ifood' ? '(Pra Retirar)' : ''}
                           </button>
                           <button
                             type="button"
@@ -2131,12 +2145,12 @@ export default function CaixaPage() {
                       {/* Controles Financeiros: Taxa de Entrega, Desconto e Cupom Loja */}
                       <div className="space-y-2">
                         
-                        {/* Taxa de Entrega (se Delivery ou iFood) */}
-                        {(orderType === 'delivery' || saleChannel === 'ifood') && (
+                        {/* Taxa de Entrega (se Delivery) */}
+                        {orderType === 'delivery' && (
                           <div className="bg-slate-950/60 p-2.5 rounded-2xl border border-slate-800/80 space-y-1">
                             <div className="flex justify-between items-center text-xs">
                               <span className="font-bold text-slate-300 flex items-center gap-1.5">
-                                <Truck size={13} className="text-blue-400" /> Taxa de Entrega:
+                                <Truck size={13} className="text-blue-400" /> Taxa de Entrega {saleChannel === 'ifood' ? '(iFood)' : ''}:
                               </span>
                               <div className="flex items-center gap-1">
                                 <span className="text-slate-500 font-mono text-xs">R$</span>
@@ -2161,6 +2175,17 @@ export default function CaixaPage() {
                                   {val === 0 ? 'Grátis' : `R$ ${val}`}
                                 </button>
                               ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Aviso explicativo para iFood Retirada */}
+                        {saleChannel === 'ifood' && orderType === 'retirada' && (
+                          <div className="bg-blue-950/30 p-2.5 rounded-2xl border border-blue-500/30 flex items-center gap-2.5 text-xs text-blue-300">
+                            <span className="text-lg leading-none">🥡</span>
+                            <div>
+                              <p className="font-bold">iFood Pra Retirar (Takeout)</p>
+                              <p className="text-[10px] text-blue-200/70">Retirada pelo cliente: sem taxa de entrega e não entra na lista de rotas de motoboy.</p>
                             </div>
                           </div>
                         )}
@@ -2300,7 +2325,10 @@ export default function CaixaPage() {
                                 setSaleMethod(method.id);
                                 if (method.isIfood && saleChannel !== 'ifood') {
                                   setSaleChannel('ifood');
-                                  setOrderType('delivery');
+                                  if (orderType === 'mesa') {
+                                    setOrderType('delivery');
+                                    setSelectedTable(null);
+                                  }
                                 }
                               }}
                               className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border ${
@@ -2483,7 +2511,7 @@ export default function CaixaPage() {
                         className="px-3.5 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
                         title="Ir para o Painel de Separação de Rotas por Entregador"
                       >
-                        <Truck size={14} /> 🛵 Rotas ({currentSessionSales.filter(s => s.orderType !== 'mesa' && s.orderType !== 'retirada' && (s.orderType === 'delivery' || s.channel === 'ifood')).length})
+                        <Truck size={14} /> 🛵 Rotas ({currentSessionSales.filter(s => s.orderType === 'delivery').length})
                       </button>
                     </div>
                   </div>
@@ -2605,7 +2633,7 @@ export default function CaixaPage() {
                                       {sale.customerName || 'Cliente'}
                                     </p>
                                     <span className="text-[10px] text-slate-400">
-                                      Modalidade: {sale.orderType?.toUpperCase() || 'BALCÃO'} • {new Date(sale.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                                      Modalidade: {sale.channel === 'ifood' ? (sale.orderType === 'retirada' ? 'IFOOD RETIRADA' : 'IFOOD DELIVERY') : (sale.orderType?.toUpperCase() || 'BALCÃO')} • {new Date(sale.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
                                     </span>
                                   </div>
                                 </div>
