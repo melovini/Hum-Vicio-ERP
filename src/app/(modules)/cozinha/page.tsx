@@ -201,6 +201,12 @@ export default function CozinhaKDSPage() {
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
   }, [sales, activeCashSession, isOpen, sessionStartTime]);
 
+  // 2b. Pedidos que PODEM ser puxados para a chapa automaticamente:
+  //     Apenas mesa e retirada. Delivery fica em espera aguardando rota do entregador.
+  const pullableQueueOrders = useMemo(() => {
+    return queueOrders.filter(s => s.orderType === 'mesa' || s.orderType === 'retirada');
+  }, [queueOrders]);
+
   // 3. Previsão Agregada de Insumos/Molhos dos Próximos Pedidos
   const upcomingPrepSummary = useMemo(() => {
     const productCounts: Record<string, number> = {};
@@ -255,11 +261,12 @@ export default function CozinhaKDSPage() {
       const target = e.target as HTMLElement;
       if (target && ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) return;
 
-      // [Espaço]: Puxa o pedido mais antigo da fila para a chapa
+      // [Espaço]: Puxa o pedido mais antigo da fila (Mesa/Retirada) para a chapa
+      // Delivery fica bloqueado pois aguarda rota do entregador
       if (e.code === 'Space') {
         e.preventDefault();
-        if (queueOrders.length > 0) {
-          const nextOrder = queueOrders[0];
+        if (pullableQueueOrders.length > 0) {
+          const nextOrder = pullableQueueOrders[0];
           updateOrderProductionStatus(nextOrder.id, 'em_producao');
           playKitchenChime();
         }
@@ -492,42 +499,59 @@ export default function CozinhaKDSPage() {
                   <Clock size={24} />
                 </div>
                 <div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-black text-white text-base md:text-lg">
                       {queueOrders.length} pedido(s) aguardando na fila
                     </span>
-                    <span className="px-2 py-0.5 bg-amber-500 text-slate-950 font-black text-xs rounded-full animate-pulse">
-                      Próximo: #{queueOrders[0].id.slice(0, 5).toUpperCase()}
-                    </span>
+                    {pullableQueueOrders.length > 0 && (
+                      <span className="px-2 py-0.5 bg-emerald-500 text-slate-950 font-black text-xs rounded-full animate-pulse">
+                        {pullableQueueOrders.length} p/ chapa
+                      </span>
+                    )}
+                    {queueOrders.filter(o => o.orderType === 'delivery').length > 0 && (
+                      <span className="px-2 py-0.5 bg-blue-500/20 text-blue-300 font-bold text-xs rounded-full border border-blue-500/40">
+                        🛵 {queueOrders.filter(o => o.orderType === 'delivery').length} aguardando rota
+                      </span>
+                    )}
                   </div>
-                  <p className="text-xs text-amber-200 mt-1 font-semibold">
-                    {queueOrders[0].customerName || 'Balcão'} • {queueOrders[0].items?.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
-                  </p>
+                  {pullableQueueOrders.length > 0 && (
+                    <p className="text-xs text-amber-200 mt-1 font-semibold">
+                      Próximo: #{pullableQueueOrders[0].id.slice(0, 5).toUpperCase()} — {pullableQueueOrders[0].customerName || 'Cliente'} • {pullableQueueOrders[0].items?.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
+                    </p>
+                  )}
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    updateOrderProductionStatus(queueOrders[0].id, 'em_producao');
-                    playKitchenChime();
-                  }}
-                  className="flex-1 md:flex-initial py-3 px-5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 cursor-pointer active:scale-95 transition-all"
-                >
-                  <Flame size={18} /> Puxar Próximo p/ Chapa
-                </button>
-                {queueOrders.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      updateBatchProductionStatus(queueOrders.map(o => o.id), 'em_producao');
-                      playKitchenChime();
-                    }}
-                    className="flex-1 md:flex-initial py-3 px-4 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/40 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
-                  >
-                    <Play size={16} /> Puxar Todos ({queueOrders.length})
-                  </button>
+                {pullableQueueOrders.length > 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateOrderProductionStatus(pullableQueueOrders[0].id, 'em_producao');
+                        playKitchenChime();
+                      }}
+                      className="flex-1 md:flex-initial py-3 px-5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 cursor-pointer active:scale-95 transition-all"
+                    >
+                      <Flame size={18} /> Puxar Próximo p/ Chapa
+                    </button>
+                    {pullableQueueOrders.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          updateBatchProductionStatus(pullableQueueOrders.map(o => o.id), 'em_producao');
+                          playKitchenChime();
+                        }}
+                        className="flex-1 md:flex-initial py-3 px-4 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/40 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                      >
+                        <Play size={16} /> Puxar Mesa/Retirada ({pullableQueueOrders.length})
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <div className="px-4 py-2.5 bg-blue-950/50 border border-blue-500/30 text-blue-300 rounded-2xl text-xs font-bold flex items-center gap-2">
+                    🛵 Todos os pedidos na fila são delivery — aguardam rota
+                  </div>
                 )}
               </div>
             </div>
@@ -793,19 +817,23 @@ export default function CozinhaKDSPage() {
                   <span className="text-xs text-blue-300 font-bold block uppercase">Na Fila Futura</span>
                   <strong className="text-2xl font-mono text-white">{queueOrders.length} pedidos</strong>
                 </div>
-                {queueOrders.length > 0 && (
+                {pullableQueueOrders.length > 0 ? (
                   <button
                     type="button"
                     onClick={() => {
-                      updateBatchProductionStatus(queueOrders.map(o => o.id), 'em_producao');
+                      updateBatchProductionStatus(pullableQueueOrders.map(o => o.id), 'em_producao');
                       playKitchenChime();
                       setActiveTab('chapa');
                     }}
                     className="py-3 px-5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-orange-500/30 cursor-pointer active:scale-95 transition-all"
                   >
-                    <Flame size={18} /> Puxar Todos p/ Chapa ({queueOrders.length})
+                    <Flame size={18} /> Puxar Mesa+Retirada p/ Chapa ({pullableQueueOrders.length})
                   </button>
-                )}
+                ) : queueOrders.length > 0 ? (
+                  <div className="px-4 py-2.5 bg-blue-950/50 border border-blue-500/30 text-blue-300 rounded-2xl text-xs font-bold flex items-center gap-2">
+                    🛵 Todos aguardam rota de entregador
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -869,58 +897,80 @@ export default function CozinhaKDSPage() {
 
               {/* Cards dos Pedidos em Espera */}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-                {queueOrders.map(order => (
-                  <div key={order.id} className="rounded-3xl p-5 border border-slate-800 bg-slate-900/60 flex flex-col justify-between">
-                    <div>
-                      <div className="flex justify-between items-start pb-3 mb-3 border-b border-slate-800">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-black text-lg text-slate-300">
-                              #{order.id.slice(0, 5).toUpperCase()}
-                            </span>
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                              order.productionStatus === 'agendado' ? 'bg-purple-600 text-white' : 'bg-amber-600 text-white'
-                            }`}>
-                              {order.productionStatus === 'agendado' ? '📅 AGENDADO' : '⏳ EM ESPERA'}
-                            </span>
+                {queueOrders.map(order => {
+                  const isDelivery = order.orderType === 'delivery';
+                  return (
+                    <div key={order.id} className={`rounded-3xl p-5 border flex flex-col justify-between ${
+                      isDelivery
+                        ? 'border-blue-500/30 bg-blue-950/20'
+                        : 'border-slate-800 bg-slate-900/60'
+                    }`}>
+                      <div>
+                        <div className="flex justify-between items-start pb-3 mb-3 border-b border-slate-800">
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono font-black text-lg text-slate-300">
+                                #{order.id.slice(0, 5).toUpperCase()}
+                              </span>
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                                order.productionStatus === 'agendado' ? 'bg-purple-600 text-white' : 'bg-amber-600 text-white'
+                              }`}>
+                                {order.productionStatus === 'agendado' ? '📅 AGENDADO' : '⏳ EM ESPERA'}
+                              </span>
+                              {isDelivery && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-blue-600 text-white">
+                                  🛵 DELIVERY
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-sm font-bold text-white mt-1 uppercase">
+                              {order.customerName || 'Cliente'}
+                            </p>
                           </div>
-                          <p className="text-sm font-bold text-white mt-1 uppercase">
-                            {order.customerName || 'Cliente'}
-                          </p>
+
+                          <span className={`text-[11px] font-mono px-2 py-1 rounded-lg ${
+                            isDelivery
+                              ? 'text-blue-300 bg-blue-950 border border-blue-500/30'
+                              : 'text-slate-400 bg-slate-800'
+                          }`}>
+                            {order.channel === 'ifood' ? 'iFood' : (order.orderType === 'mesa' ? 'Mesa' : 'Balcão')}
+                          </span>
                         </div>
 
-                        <span className="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-1 rounded-lg">
-                          Balcão
-                        </span>
+                        <div className="space-y-2 mb-3">
+                          {order.items?.map((item, idx) => (
+                            <div key={idx} className="text-xs text-slate-300 bg-slate-950/60 p-2 rounded-xl">
+                              <span className="font-bold text-white">[{item.quantity}x] {item.productName}</span>
+                              {item.combo && <p className="text-[10px] text-amber-400">+ Combo: {item.combo}</p>}
+                              {item.additionals && item.additionals.length > 0 && (
+                                <p className="text-[10px] text-emerald-300">+ Adicionais: {item.additionals.map(a => a.name).join(', ')}</p>
+                              )}
+                              {item.notes && <p className="text-[10px] text-amber-200 italic">Obs: {item.notes}</p>}
+                            </div>
+                          ))}
+                        </div>
                       </div>
 
-                      <div className="space-y-2 mb-3">
-                        {order.items?.map((item, idx) => (
-                          <div key={idx} className="text-xs text-slate-300 bg-slate-950/60 p-2 rounded-xl">
-                            <span className="font-bold text-white">[{item.quantity}x] {item.productName}</span>
-                            {item.combo && <p className="text-[10px] text-amber-400">+ Combo: {item.combo}</p>}
-                            {item.additionals && item.additionals.length > 0 && (
-                              <p className="text-[10px] text-emerald-300">+ Adicionais: {item.additionals.map(a => a.name).join(', ')}</p>
-                            )}
-                            {item.notes && <p className="text-[10px] text-amber-200 italic">Obs: {item.notes}</p>}
-                          </div>
-                        ))}
-                      </div>
+                      {isDelivery ? (
+                        <div className="w-full py-3 px-4 bg-blue-950/60 border border-blue-500/30 text-blue-300 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 select-none">
+                          🛵 Aguardando Rota — não pode ir para a chapa ainda
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            updateOrderProductionStatus(order.id, 'em_producao');
+                            playKitchenChime();
+                            setActiveTab('chapa');
+                          }}
+                          className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-orange-500/25 cursor-pointer active:scale-95 transition-all"
+                        >
+                          <Flame size={16} /> 🔥 Puxar para a Chapa Agora
+                        </button>
+                      )}
                     </div>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        updateOrderProductionStatus(order.id, 'em_producao');
-                        playKitchenChime();
-                        setActiveTab('chapa');
-                      }}
-                      className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-orange-500/25 cursor-pointer active:scale-95 transition-all"
-                    >
-                      <Flame size={16} /> 🔥 Puxar para a Chapa Agora
-                    </button>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
