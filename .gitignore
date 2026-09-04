@@ -42,3 +42,8 @@ next-env.d.ts
 
 # local persistent data
 /data
+
+# private operational manuals and sensitive audit docs
+/docs
+*MANUAL*
+
