@@ -507,7 +507,7 @@ export function useInventory() {
       // 3. Fetch Sales (com suporte a fallback local resiliente)
       try {
         const { data: salesData } = await supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(80);
-        const { data: saleItemsData } = await supabase.from('sale_items').select('*');
+        const { data: saleItemsData } = await supabase.from('sale_items').select('*').not('sale_id', 'is', null);
         
         if (salesData && salesData.length > 0) {
           const overrides = getSavedProductionOverrides();
@@ -888,7 +888,7 @@ export function useInventory() {
     const syncInterval = setInterval(async () => {
       try {
         const { data: latestSales } = await supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(60);
-        const { data: latestItems } = await supabase.from('sale_items').select('*');
+        const { data: latestItems } = await supabase.from('sale_items').select('*').not('sale_id', 'is', null);
         if (latestSales && latestSales.length > 0) {
           const overrides = getSavedProductionOverrides();
           let overridesCleaned = false;
@@ -1560,10 +1560,10 @@ export function useInventory() {
 
     try {
       if (saleIdsToDelete.length > 0) {
-        await supabase.from('sale_items').delete().in('sale_id', saleIdsToDelete);
-        await supabase.from('sales').delete().in('id', saleIdsToDelete);
+        await supabase.from('sale_items').update({ sale_id: null }).in('sale_id', saleIdsToDelete);
+        await supabase.from('sales').update({ deleted_at: new Date().toISOString(), status: 'cancelled' }).in('id', saleIdsToDelete);
       }
-      await supabase.from('cash_sessions').delete().eq('id', sessionId);
+      await supabase.from('cash_sessions').update({ deleted_at: new Date().toISOString() }).eq('id', sessionId);
     } catch (err) {
       console.warn('Erro ao deletar sessão do banco:', err);
     }
@@ -1603,8 +1603,8 @@ export function useInventory() {
     if (!saleIds || saleIds.length === 0) return { success: true };
 
     try {
-      await supabase.from('sale_items').delete().in('sale_id', saleIds);
-      await supabase.from('sales').delete().in('id', saleIds);
+      await supabase.from('sale_items').update({ sale_id: null }).in('sale_id', saleIds);
+      await supabase.from('sales').update({ deleted_at: new Date().toISOString(), status: 'cancelled' }).in('id', saleIds);
     } catch (err) {
       console.warn('Erro ao deletar vendas de teste no banco:', err);
     }
@@ -2216,6 +2216,7 @@ export function useInventory() {
       ...existingSale,
       ...updatedSaleData,
       orderDiff,
+      originalItemsSnapshot: newItems.map(i => ({ ...i })),
       isModifiedInKitchen: isCurrentlyCooking && hasDiff,
       productionStatus: finalizedStatus
     };
@@ -2243,9 +2244,8 @@ export function useInventory() {
       }
       await supabase.from('sales').update(updatePayload).eq('id', saleId);
 
-      // Re-sincronizar itens na tabela sale_items
+      // Re-sincronizar itens na tabela sale_items com estratégia in-place antifraude (sem DELETE físico)
       if (newItems.length > 0) {
-        await supabase.from('sale_items').delete().eq('sale_id', saleId);
         const saleItemsPayload = newItems.map(i => {
           let displayName = i.productName;
           if (i.combo) displayName += ` (${i.combo})`;
@@ -2261,7 +2261,43 @@ export function useInventory() {
             unit_price: i.unitPrice
           };
         });
-        await supabase.from('sale_items').insert(saleItemsPayload);
+
+        // 1. Buscar linhas já existentes deste pedido no Supabase
+        const { data: existingRows } = await supabase
+          .from('sale_items')
+          .select('id')
+          .eq('sale_id', saleId)
+          .order('created_at', { ascending: true });
+
+        if (existingRows && existingRows.length > 0) {
+          const reusableCount = Math.min(existingRows.length, saleItemsPayload.length);
+
+          // 2. Atualizar in-place as linhas já existentes no banco (evita duplicações e atende à regra antifraude)
+          for (let i = 0; i < reusableCount; i++) {
+            await supabase
+              .from('sale_items')
+              .update(saleItemsPayload[i])
+              .eq('id', existingRows[i].id);
+          }
+
+          // 3. Se houver novos itens adicionados a mais do que as linhas anteriores, inserir somente os novos
+          if (saleItemsPayload.length > existingRows.length) {
+            const extraPayloads = saleItemsPayload.slice(existingRows.length);
+            await supabase.from('sale_items').insert(extraPayloads);
+          }
+
+          // 4. Se itens foram removidos e sobraram linhas excedentes, desvincular do pedido (sale_id = null)
+          if (existingRows.length > saleItemsPayload.length) {
+            const unneededIds = existingRows.slice(saleItemsPayload.length).map(r => r.id);
+            await supabase
+              .from('sale_items')
+              .update({ sale_id: null })
+              .in('id', unneededIds);
+          }
+        } else {
+          // Nenhuma linha prévia encontrada, insere os novos itens
+          await supabase.from('sale_items').insert(saleItemsPayload);
+        }
       }
     } catch (e) {
       console.warn('Erro ao salvar alteração de venda no banco:', e);

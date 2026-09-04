@@ -640,6 +640,7 @@ export default function CaixaPage() {
           setDiscountInput('');
           setDeliveryFeeInput('');
           setHasStoreCoupon(false);
+          setOrderProductionStatus('em_espera');
           setActiveTab('historico');
           playOrderReadyChime();
         }
@@ -1649,6 +1650,7 @@ export default function CaixaPage() {
                               setDiscountInput('');
                               setDeliveryFeeInput('');
                               setHasStoreCoupon(false);
+                              setOrderProductionStatus('em_espera');
                             }}
                             className="text-[11px] text-slate-400 hover:text-white underline cursor-pointer shrink-0"
                           >
