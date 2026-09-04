@@ -3,14 +3,14 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { 
-  validateServerCredentials, 
+  validateServerCredentialsAsync, 
   signSessionToken, 
   SESSION_COOKIE_NAME 
 } from '@/lib/auth';
 
 export async function loginAction(pinOrPassword: string): Promise<{ success: boolean; error?: string; redirectUrl?: string }> {
   try {
-    const { valid, role, userName, collaboratorId } = validateServerCredentials(pinOrPassword);
+    const { valid, role, userName, collaboratorId } = await validateServerCredentialsAsync(pinOrPassword);
 
     if (!valid || !role) {
       return { 

@@ -1,6 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
+import { validateMasterPassword } from '@/lib/collaborators';
 
 // === INSUMOS (Inventário) ===
 export type StockStatus = 'ok' | 'acabando' | 'zerado';
@@ -1602,8 +1603,7 @@ export function useInventory() {
 
   // Exclusão de Sessão de Caixa & Expurgar Vendas de Teste (Exclusivo Master Admin)
   const deleteCashSession = async (sessionId: string, masterPassword: string): Promise<{ success: boolean; error?: string; count?: number }> => {
-    const cleanPass = masterPassword.trim();
-    if (cleanPass !== 'admin') {
+    if (!validateMasterPassword(masterPassword)) {
       return { success: false, error: 'Senha de Administrador Master incorreta.' };
     }
 
@@ -1723,8 +1723,7 @@ export function useInventory() {
 
   // Exclusão manual direta de vendas de teste selecionadas
   const deleteTestSales = async (saleIds: string[], masterPassword: string): Promise<{ success: boolean; error?: string }> => {
-    const cleanPass = masterPassword.trim();
-    if (cleanPass !== 'admin') {
+    if (!validateMasterPassword(masterPassword)) {
       return { success: false, error: 'Senha de Administrador Master incorreta.' };
     }
 

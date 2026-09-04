@@ -190,3 +190,14 @@ export function findCollaboratorByPin(pin: string): Collaborator | null {
   const found = list.find(c => c.isActive && c.pin.trim() === cleanPin);
   return found || null;
 }
+
+/**
+ * Verifica se a senha/PIN fornecida bate com algum colaborador com role 'admin'
+ * (lê o localStorage atualizado, não o padrão hardcoded)
+ */
+export function validateMasterPassword(password: string): boolean {
+  const clean = password.trim();
+  if (!clean) return false;
+  const list = getStoredCollaborators();
+  return list.some(c => c.isActive && c.role === 'admin' && c.pin.trim() === clean);
+}

@@ -152,19 +152,45 @@ export async function verifySessionToken(token: string | undefined | null): Prom
 }
 
 /**
- * Validação segura de credenciais exclusivamente dentro do servidor
+ * Validação segura de credenciais exclusivamente dentro do servidor.
+ * O servidor não tem acesso ao localStorage, então para colaboradores com PIN
+ * personalizado, a busca é feita diretamente no Supabase.
  */
-export function validateServerCredentials(pinOrPassword: string): { 
-  valid: boolean; 
+export async function validateServerCredentialsAsync(pinOrPassword: string): Promise<{
+  valid: boolean;
   role?: UserRole;
   userName?: string;
   collaboratorId?: string;
-} {
+}> {
   if (!pinOrPassword) return { valid: false };
 
   const clean = pinOrPassword.trim();
 
-  // 1. Checar credenciais mestres de contingência (.env)
+  // 1. Verificar via Supabase (fonte de verdade para PINs atualizados)
+  try {
+    const { createClient } = await import('./supabase');
+    const supabase = createClient();
+    const { data: collabs } = await supabase
+      .from('collaborators')
+      .select('id, name, role, pin, is_active')
+      .eq('is_active', true);
+
+    if (collabs && collabs.length > 0) {
+      const found = collabs.find((c: any) => c.pin?.trim() === clean);
+      if (found) {
+        return {
+          valid: true,
+          role: found.role as UserRole,
+          userName: found.name,
+          collaboratorId: found.id
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('[auth] Falha ao consultar Supabase, usando fallback .env:', e);
+  }
+
+  // 2. Fallback: credenciais de contingência (.env)
   const cozinhaPin = process.env.COZINHA_PIN || '1234';
   const caixaPin = process.env.CAIXA_PIN || '5678';
   const adminPassword = process.env.ADMIN_PASSWORD || 'admin';
@@ -182,7 +208,39 @@ export function validateServerCredentials(pinOrPassword: string): {
     return { valid: true, role: 'cozinha', userName: 'Chapeiro Cozinha' };
   }
 
-  // 2. Checar colaboradores cadastrados
+  return { valid: false };
+}
+
+/**
+ * @deprecated Use validateServerCredentialsAsync. Mantido para compatibilidade.
+ */
+export function validateServerCredentials(pinOrPassword: string): {
+  valid: boolean;
+  role?: UserRole;
+  userName?: string;
+  collaboratorId?: string;
+} {
+  if (!pinOrPassword) return { valid: false };
+
+  const clean = pinOrPassword.trim();
+
+  const cozinhaPin = process.env.COZINHA_PIN || '1234';
+  const caixaPin = process.env.CAIXA_PIN || '5678';
+  const adminPassword = process.env.ADMIN_PASSWORD || 'admin';
+
+  if (clean === adminPassword) {
+    return { valid: true, role: 'admin', userName: 'Administrador Master' };
+  }
+  if (clean === '0000') {
+    return { valid: true, role: 'gerente', userName: 'Gerente Geral' };
+  }
+  if (clean === caixaPin) {
+    return { valid: true, role: 'caixa', userName: 'Operador de Caixa' };
+  }
+  if (clean === cozinhaPin) {
+    return { valid: true, role: 'cozinha', userName: 'Chapeiro Cozinha' };
+  }
+
   try {
     const collab = findCollaboratorByPin(clean);
     if (collab && collab.isActive) {
