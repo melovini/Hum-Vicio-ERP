@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
+import RouteManifestModal from '@/components/RouteManifestModal';
 import { playOrderReadyChime } from '@/lib/audio';
 import MapaMesasCanvas from '@/components/MapaMesasCanvas';
 import { 
@@ -20,6 +21,16 @@ import {
 } from '@/lib/mesas';
 import { sendOwnerSecurityAlert } from '@/lib/notifications';
 import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
+
+export interface DeliveryRouteBlock {
+  id: string;
+  courierName: string;
+  courierPhone?: string;
+  createdAt: string;
+  dispatchedAt?: string;
+  status: 'montando' | 'em_rota' | 'entregue';
+  saleIds: string[];
+}
 
 export default function CaixaPage() {
   const { 
@@ -31,9 +42,34 @@ export default function CaixaPage() {
     settleCreditSale 
   } = useInventory();
 
-  const [activeTab, setActiveTab] = useState<'pdv' | 'mesas' | 'producao' | 'historico' | 'sangria' | 'contas_receber'>('pdv');
+  const [activeTab, setActiveTab] = useState<'pdv' | 'mesas' | 'producao' | 'rotas' | 'historico' | 'sangria' | 'contas_receber'>('pdv');
   const [productionFilter, setProductionFilter] = useState<'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido'>('todos');
   const [selectedOrdersForBatch, setSelectedOrdersForBatch] = useState<string[]>([]);
+
+  // Gestão de Rotas & Entregadores
+  const [deliveryRoutes, setDeliveryRoutes] = useState<DeliveryRouteBlock[]>([]);
+  const [newCourierInput, setNewCourierInput] = useState('');
+  const [selectedOrdersForRoute, setSelectedOrdersForRoute] = useState<string[]>([]);
+  const [routeSearchQuery, setRouteSearchQuery] = useState('');
+  const [selectedRouteToPrint, setSelectedRouteToPrint] = useState<DeliveryRouteBlock | null>(null);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('hum_vicio_delivery_routes');
+        if (saved) setDeliveryRoutes(JSON.parse(saved));
+      } catch {}
+    }
+  }, []);
+
+  const saveDeliveryRoutes = (routes: DeliveryRouteBlock[]) => {
+    setDeliveryRoutes(routes);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('hum_vicio_delivery_routes', JSON.stringify(routes));
+      } catch {}
+    }
+  };
 
   // Lista de Colaboradores Ativos para Consumo da Equipe
   const [collaboratorsList, setCollaboratorsList] = useState<Collaborator[]>([]);
@@ -183,7 +219,7 @@ export default function CaixaPage() {
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [saleChannel, setSaleChannel] = useState<'balcao' | 'ifood'>('balcao');
   const [saleMethod, setSaleMethod] = useState('credito');
-  const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_producao');
+  const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_espera');
   const [pendingRemovalFromGrill, setPendingRemovalFromGrill] = useState<{ sale: Sale; action: 'pause' | 'cancel' } | null>(null);
 
   // Estados de Brindes / Cortesias
@@ -544,11 +580,14 @@ export default function CaixaPage() {
   }, [sales, selectedOrdersForBatch]);
 
   const handleStartReopenSale = async (sale: Sale) => {
-    const pass = prompt('Autorização de Reabertura: Digite a senha do Administrador/Supervisor (admin):');
-    if (!pass) return;
-    if (pass.trim() !== 'admin') {
-      alert('Senha incorreta. Apenas o Administrador/Supervisor pode reabrir pedidos fechados.');
-      return;
+    // Pedidos em espera podem ser editados imediatamente pelo operador sem trava de senha
+    if (sale.productionStatus !== 'em_espera') {
+      const pass = prompt('Autorização de Alteração de Pedido em Andamento / Concluído: Digite a senha do Administrador/Supervisor (admin):');
+      if (!pass) return;
+      if (pass.trim() !== 'admin') {
+        alert('Senha incorreta. Apenas o Administrador/Supervisor pode reabrir pedidos em andamento.');
+        return;
+      }
     }
 
     const reopened = await reopenOrderForEdit(sale.id, 'Supervisor');
@@ -558,6 +597,7 @@ export default function CaixaPage() {
       setCustomerName(reopened.customerName || '');
       setOrderType(reopened.orderType || 'mesa');
       setSaleChannel(reopened.channel);
+      setOrderProductionStatus(reopened.productionStatus || 'em_espera');
       setDiscountInput(reopened.discount ? reopened.discount.toString() : '');
       setDeliveryFeeInput(reopened.deliveryFee ? reopened.deliveryFee.toString() : '');
       setSaleMethod(reopened.paymentMethod);
@@ -589,7 +629,7 @@ export default function CaixaPage() {
         total: cartTotal,
         paymentMethod: saleMethod,
         items: cart,
-        productionStatus: 'em_producao'
+        productionStatus: orderProductionStatus || editingReopenedSale.productionStatus || 'em_espera'
       }).then(res => {
         if (res.success && res.sale) {
           setDiffToPrint(res.diff);
@@ -669,7 +709,7 @@ export default function CaixaPage() {
     setDiscountInput('');
     setDeliveryFeeInput('');
     setHasStoreCoupon(false);
-    setOrderProductionStatus('em_producao');
+    setOrderProductionStatus('em_espera');
     setSelectedCollaboratorId('');
     setCreditCustomerInput('');
     setCreditDueDateInput('');
@@ -1184,6 +1224,24 @@ export default function CaixaPage() {
               </button>
 
               <button 
+                onClick={() => setActiveTab('rotas')} 
+                className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
+                  activeTab === 'rotas' 
+                    ? 'bg-surface-elevated text-slate-100 border-surface-borderHover shadow-xs' 
+                    : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Truck size={16} className="text-cyan-400" /> Rotas & Entregadores
+                </div>
+                {sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood')).length > 0 && (
+                  <span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-300 text-[10px] font-mono tabular-nums font-bold rounded-full">
+                    {sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood')).length}
+                  </span>
+                )}
+              </button>
+
+              <button 
                 onClick={() => setActiveTab('historico')} 
                 className={`w-full flex items-center gap-2.5 p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
                   activeTab === 'historico' 
@@ -1541,17 +1599,6 @@ export default function CaixaPage() {
                         <div className="grid grid-cols-3 gap-1.5">
                           <button
                             type="button"
-                            onClick={() => setOrderProductionStatus('em_producao')}
-                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
-                              orderProductionStatus === 'em_producao'
-                                ? 'bg-emerald-600 text-white font-black shadow-md ring-2 ring-emerald-400'
-                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
-                            }`}
-                          >
-                            🟢 Chapa (Padrão)
-                          </button>
-                          <button
-                            type="button"
                             onClick={() => setOrderProductionStatus('em_espera')}
                             className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
                               orderProductionStatus === 'em_espera'
@@ -1559,7 +1606,18 @@ export default function CaixaPage() {
                                 : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
                             }`}
                           >
-                            ⏳ Em Espera
+                            ⏳ Em Espera (Padrão)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOrderProductionStatus('em_producao')}
+                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
+                              orderProductionStatus === 'em_producao'
+                                ? 'bg-emerald-600 text-white font-black shadow-md ring-2 ring-emerald-400'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            🔥 Na Chapa
                           </button>
                           <button
                             type="button"
@@ -2053,6 +2111,14 @@ export default function CaixaPage() {
                           {tab.label}
                         </button>
                       ))}
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('rotas')}
+                        className="px-3.5 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
+                        title="Ir para o Painel de Separação de Rotas por Entregador"
+                      >
+                        <Truck size={14} /> 🛵 Rotas ({sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood')).length})
+                      </button>
                     </div>
                   </div>
 
@@ -2217,25 +2283,45 @@ export default function CaixaPage() {
                               </div>
 
                               {/* Ações do Balcão */}
-                              <div className="pt-2 border-t border-slate-800/80 flex gap-2">
+                              <div className="pt-2 border-t border-slate-800/80 flex flex-col sm:flex-row gap-2">
                                 {isWaiting && (
-                                  <button
-                                    type="button"
-                                    onClick={() => updateOrderProductionStatus(sale.id, 'em_producao')}
-                                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-md transition-all"
-                                  >
-                                    <Play size={15} /> Liberar para Produção na Chapa
-                                  </button>
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => updateOrderProductionStatus(sale.id, 'em_producao')}
+                                      className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-extrabold text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-md transition-all"
+                                    >
+                                      <Play size={15} /> Liberar p/ Chapa
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleStartReopenSale(sale)}
+                                      className="py-3 px-3.5 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/40 rounded-xl font-extrabold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0"
+                                      title="Editar itens ou observações deste pedido em espera"
+                                    >
+                                      <Edit3 size={15} /> Editar
+                                    </button>
+                                  </>
                                 )}
 
                                 {isCooking && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setPendingRemovalFromGrill({ sale, action: 'pause' })}
-                                    className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
-                                  >
-                                    <Pause size={14} /> Pausar / Voltar para Espera
-                                  </button>
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => setPendingRemovalFromGrill({ sale, action: 'pause' })}
+                                      className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                                    >
+                                      <Pause size={14} /> Pausar p/ Espera
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleStartReopenSale(sale)}
+                                      className="py-2.5 px-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all shrink-0"
+                                      title="Modificar pedido em andamento na chapa (alerta a cozinha)"
+                                    >
+                                      <Edit3 size={14} /> Alterar
+                                    </button>
+                                  </>
                                 )}
 
                                 {isDone && (
@@ -2249,6 +2335,521 @@ export default function CaixaPage() {
                         })}
                     </div>
                   )}
+                </div>
+              )}
+
+              {/* ========================================================================= */}
+              {/* ABA GESTÃO DE ROTAS & EXPEDIÇÃO DE ENTREGADORES */}
+              {/* ========================================================================= */}
+              {activeTab === 'rotas' && (
+                <div className="glass-card rounded-3xl p-6 md:p-8 border-t-4 border-cyan-500 space-y-6 animate-fade-in">
+                  {/* Topo / Header da Gestão de Rotas */}
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-6 border-b border-slate-800">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="p-2 rounded-xl bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                          <Truck size={22} />
+                        </span>
+                        <h2 className="text-xl lg:text-2xl font-black text-white">
+                          Gestão de Rotas & Entregadores
+                        </h2>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Separe os pedidos de delivery em blocos organizados por entregador, confira os nomes das entregas e envie remessas conjuntas para a chapa.
+                      </p>
+                    </div>
+
+                    {/* Métricas Rápidas de Delivery */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div className="px-3.5 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 uppercase font-black block">Sem Rota</span>
+                        <span className="text-lg font-mono font-black text-amber-400">
+                          {sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood') && !deliveryRoutes.filter(r => r.status !== 'entregue').flatMap(r => r.saleIds).includes(s.id)).length}
+                        </span>
+                      </div>
+
+                      <div className="px-3.5 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 uppercase font-black block">Rotas Ativas</span>
+                        <span className="text-lg font-mono font-black text-cyan-400">
+                          {deliveryRoutes.filter(r => r.status !== 'entregue').length}
+                        </span>
+                      </div>
+
+                      <div className="px-3.5 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 uppercase font-black block">Em Trânsito</span>
+                        <span className="text-lg font-mono font-black text-emerald-400">
+                          {deliveryRoutes.filter(r => r.status === 'em_rota').length}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* FORMULÁRIO DE CRIAÇÃO RÁPIDA DE NOVO BLOCO DE ROTA */}
+                  <div className="p-4 md:p-5 rounded-2xl bg-slate-950/80 border border-cyan-500/30 flex flex-col md:flex-row items-center justify-between gap-4 shadow-lg">
+                    <div className="flex-1 w-full flex flex-col sm:flex-row items-center gap-3">
+                      <div className="w-full sm:w-1/3">
+                        <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                          Selecionar Colaborador / Entregador:
+                        </label>
+                        <select
+                          value={newCourierInput}
+                          onChange={e => setNewCourierInput(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs outline-none focus:border-cyan-500"
+                        >
+                          <option value="">-- Escolha da Equipe ou Digite ao lado --</option>
+                          {collaboratorsList.map(c => (
+                            <option key={c.id} value={c.name}>
+                              {c.name} ({c.role})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      <div className="w-full sm:w-2/3">
+                        <label className="block text-[11px] font-bold text-slate-300 mb-1">
+                          Ou Digite o Nome do Motoboy / Entregador:
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Ex: Carlos (Moto 02) ou Matheus iFood"
+                          value={newCourierInput}
+                          onChange={e => setNewCourierInput(e.target.value)}
+                          className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-white text-xs outline-none focus:border-cyan-500"
+                        />
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const name = newCourierInput.trim();
+                        if (!name) {
+                          alert('Informe ou selecione o nome do entregador para criar a rota.');
+                          return;
+                        }
+                        const newBlock: DeliveryRouteBlock = {
+                          id: `rota_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+                          courierName: name,
+                          createdAt: new Date().toISOString(),
+                          status: 'montando',
+                          saleIds: selectedOrdersForRoute
+                        };
+                        saveDeliveryRoutes([newBlock, ...deliveryRoutes]);
+                        setSelectedOrdersForRoute([]);
+                        setNewCourierInput('');
+                      }}
+                      className="w-full md:w-auto py-3 px-6 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer shadow-lg shadow-cyan-600/25 transition-all shrink-0"
+                    >
+                      <Plus size={16} /> Criar Bloco de Rota {selectedOrdersForRoute.length > 0 && `(${selectedOrdersForRoute.length} pedidos selecionados)`}
+                    </button>
+                  </div>
+
+                  {/* GRID PRINCIPAL: 2 COLUNAS (DISPONÍVEIS vs BLOCOS DE ENTREGADORES) */}
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+                    
+                    {/* COLUNA ESQUERDA: PEDIDOS DE DELIVERY DISPONÍVEIS (SEM ROTA) */}
+                    <div className="lg:col-span-5 space-y-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="font-extrabold text-white text-sm uppercase tracking-wide flex items-center gap-2">
+                          <CartIcon size={16} className="text-amber-400" />
+                          Delivery sem Rota ({sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood') && !deliveryRoutes.filter(r => r.status !== 'entregue').flatMap(r => r.saleIds).includes(s.id)).length})
+                        </h3>
+
+                        {/* Ação em lote se houver rotas abertas */}
+                        {selectedOrdersForRoute.length > 0 && deliveryRoutes.filter(r => r.status !== 'entregue').length > 0 && (
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              onChange={e => {
+                                const targetRouteId = e.target.value;
+                                if (!targetRouteId) return;
+                                const updated = deliveryRoutes.map(r => {
+                                  if (r.id === targetRouteId) {
+                                    const combined = Array.from(new Set([...r.saleIds, ...selectedOrdersForRoute]));
+                                    return { ...r, saleIds: combined };
+                                  }
+                                  return r;
+                                });
+                                saveDeliveryRoutes(updated);
+                                setSelectedOrdersForRoute([]);
+                                e.target.value = '';
+                              }}
+                              className="bg-cyan-950 border border-cyan-500 text-cyan-200 text-xs rounded-xl px-2 py-1 outline-none"
+                            >
+                              <option value="">Atribuir {selectedOrdersForRoute.length} à...</option>
+                              {deliveryRoutes.filter(r => r.status !== 'entregue').map(r => (
+                                <option key={r.id} value={r.id}>
+                                  Rota: {r.courierName} ({r.saleIds.length} pedidos)
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Lista de Pedidos Disponíveis */}
+                      {(() => {
+                        const inActiveIds = new Set(deliveryRoutes.filter(r => r.status !== 'entregue').flatMap(r => r.saleIds));
+                        const unassigned = sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood') && !inActiveIds.has(s.id));
+
+                        if (unassigned.length === 0) {
+                          return (
+                            <div className="p-8 text-center bg-slate-950/60 rounded-2xl border border-slate-800 text-slate-500 text-xs">
+                              Nenhum pedido de delivery aguardando rota no momento. Todos foram atribuídos ou não há entregas ativas.
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="space-y-3 max-h-[700px] overflow-y-auto pr-1">
+                            {unassigned.map(sale => {
+                              const isSelected = selectedOrdersForRoute.includes(sale.id);
+                              return (
+                                <div
+                                  key={sale.id}
+                                  className={`p-4 rounded-2xl border transition-all ${
+                                    isSelected
+                                      ? 'bg-cyan-950/40 border-cyan-500 shadow-md ring-1 ring-cyan-500'
+                                      : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                                  }`}
+                                >
+                                  <div className="flex items-start justify-between gap-2 pb-2 mb-2 border-b border-slate-800/80">
+                                    <label className="flex items-center gap-2 cursor-pointer select-none">
+                                      <input
+                                        type="checkbox"
+                                        checked={isSelected}
+                                        onChange={e => {
+                                          if (e.target.checked) {
+                                            setSelectedOrdersForRoute(prev => [...prev, sale.id]);
+                                          } else {
+                                            setSelectedOrdersForRoute(prev => prev.filter(id => id !== sale.id));
+                                          }
+                                        }}
+                                        className="w-4 h-4 rounded text-cyan-500 focus:ring-cyan-400 bg-slate-900 border-slate-700 cursor-pointer"
+                                      />
+                                      <div>
+                                        <span className="font-mono font-black text-xs text-white">
+                                          #{sale.id.slice(0, 5).toUpperCase()}
+                                        </span>
+                                        <p className="font-bold text-xs text-slate-200 uppercase mt-0.5">
+                                          {sale.customerName || 'Cliente Delivery'}
+                                        </p>
+                                      </div>
+                                    </label>
+
+                                    <div className="text-right">
+                                      <span className="font-mono font-black text-xs text-emerald-400 block">
+                                        R$ {sale.total.toFixed(2)}
+                                      </span>
+                                      <span className={`px-2 py-0.5 rounded text-[9px] font-black uppercase inline-block mt-0.5 ${
+                                        sale.productionStatus === 'concluido'
+                                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                          : sale.productionStatus === 'em_producao'
+                                            ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                                            : 'bg-slate-800 text-slate-300'
+                                      }`}>
+                                        {sale.productionStatus === 'concluido' ? '🛎️ Pronto' : sale.productionStatus === 'em_producao' ? '🔥 Na Chapa' : '⏳ Em Espera'}
+                                      </span>
+                                    </div>
+                                  </div>
+
+                                  {/* Resumo de Itens e Endereço */}
+                                  <div className="text-[11px] text-slate-400 space-y-1">
+                                    <p className="text-slate-300 line-clamp-2">
+                                      {sale.items?.map(i => `${i.quantity}x ${i.productName}`).join(' • ')}
+                                    </p>
+                                    <p className="text-[10px] text-slate-400 italic">
+                                      Pagamento: {sale.paymentMethod.toUpperCase()} {sale.deliveryFee ? `• Taxa Entrega: R$ ${sale.deliveryFee.toFixed(2)}` : ''}
+                                    </p>
+                                  </div>
+
+                                  {/* Ação Rápida de Atribuição Individual */}
+                                  {deliveryRoutes.filter(r => r.status !== 'entregue').length > 0 && (
+                                    <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                                      <span className="text-[10px] text-slate-400 font-bold">Enviar para Rota:</span>
+                                      <div className="flex flex-wrap gap-1">
+                                        {deliveryRoutes.filter(r => r.status !== 'entregue').map(r => (
+                                          <button
+                                            key={r.id}
+                                            type="button"
+                                            onClick={() => {
+                                              const updated = deliveryRoutes.map(item => {
+                                                if (item.id === r.id && !item.saleIds.includes(sale.id)) {
+                                                  return { ...item, saleIds: [...item.saleIds, sale.id] };
+                                                }
+                                                return item;
+                                              });
+                                              saveDeliveryRoutes(updated);
+                                              setSelectedOrdersForRoute(prev => prev.filter(id => id !== sale.id));
+                                            }}
+                                            className="px-2 py-1 bg-cyan-950 hover:bg-cyan-900 border border-cyan-500/40 text-cyan-300 rounded-lg text-[10px] font-bold cursor-pointer transition-all"
+                                          >
+                                            + {r.courierName.split(' ')[0]}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        );
+                      })()}
+                    </div>
+
+                    {/* COLUNA DIREITA: BLOCOS DE ROTAS POR ENTREGADOR */}
+                    <div className="lg:col-span-7 space-y-4">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="font-extrabold text-white text-sm uppercase tracking-wide flex items-center gap-2">
+                          <Truck size={16} className="text-cyan-400" />
+                          Blocos de Entregadores ({deliveryRoutes.filter(r => r.status !== 'entregue').length})
+                        </h3>
+
+                        {deliveryRoutes.some(r => r.status === 'entregue') && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (confirm('Limpar histórico de rotas já entregues e finalizadas?')) {
+                                saveDeliveryRoutes(deliveryRoutes.filter(r => r.status !== 'entregue'));
+                              }
+                            }}
+                            className="text-[10px] text-slate-500 hover:text-slate-300 cursor-pointer underline"
+                          >
+                            Limpar {deliveryRoutes.filter(r => r.status === 'entregue').length} rota(s) entregues
+                          </button>
+                        )}
+                      </div>
+
+                      {deliveryRoutes.filter(r => r.status !== 'entregue').length === 0 ? (
+                        <div className="glass-card p-12 text-center rounded-2xl border border-slate-800 text-slate-400">
+                          <Truck size={36} className="mx-auto text-slate-600 mb-3" />
+                          <h4 className="text-base font-extrabold text-white mb-1">Nenhum Bloco de Rota Ativo</h4>
+                          <p className="text-xs max-w-md mx-auto">
+                            Crie um bloco de rota informando o nome do entregador acima para organizar os pedidos e saber com quem enviar cada entrega.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="space-y-4">
+                          {deliveryRoutes.filter(r => r.status !== 'entregue').map(route => {
+                            const routeSales = route.saleIds.map(id => sales.find(s => s.id === id)).filter(Boolean) as Sale[];
+                            const routeTotal = routeSales.reduce((sum, s) => sum + s.total, 0);
+                            const waitingInRoute = routeSales.filter(s => s.productionStatus === 'em_espera');
+                            const cookingInRoute = routeSales.filter(s => s.productionStatus === 'em_producao');
+                            const readyInRoute = routeSales.filter(s => s.productionStatus === 'concluido');
+
+                            return (
+                              <div
+                                key={route.id}
+                                className={`rounded-3xl border-2 p-5 transition-all shadow-xl ${
+                                  route.status === 'em_rota'
+                                    ? 'bg-slate-900/90 border-cyan-500/80 ring-1 ring-cyan-500/30'
+                                    : 'bg-slate-950/90 border-slate-800'
+                                }`}
+                              >
+                                {/* Cabeçalho do Bloco do Entregador */}
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-3 border-b border-slate-800">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className={`p-2.5 rounded-2xl font-black ${
+                                      route.status === 'em_rota' ? 'bg-cyan-500 text-slate-950' : 'bg-slate-800 text-cyan-300'
+                                    }`}>
+                                      <Truck size={20} />
+                                    </div>
+                                    <div>
+                                      <div className="flex items-center gap-2">
+                                        <h4 className="font-extrabold text-base text-white uppercase">
+                                          Entregador: {route.courierName}
+                                        </h4>
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                                          route.status === 'em_rota' ? 'bg-cyan-600 text-white animate-pulse' : 'bg-slate-800 text-slate-300'
+                                        }`}>
+                                          {route.status === 'em_rota' ? '🛵 Em Trânsito' : 'Montando Rota'}
+                                        </span>
+                                      </div>
+                                      <p className="text-xs text-slate-400 mt-0.5">
+                                        Criada às {new Date(route.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        {route.dispatchedAt && ` • Saiu às ${new Date(route.dispatchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="text-right flex sm:flex-col items-center sm:items-end justify-between gap-1">
+                                    <span className="font-mono font-black text-sm text-emerald-400">
+                                      Total: R$ {routeTotal.toFixed(2)}
+                                    </span>
+                                    <span className="text-[11px] text-slate-400 font-bold">
+                                      {routeSales.length} entrega(s)
+                                    </span>
+                                  </div>
+                                </div>
+
+                                {/* Status de Produção dos Pedidos desta Rota */}
+                                <div className="flex flex-wrap items-center gap-2 mb-3 text-[11px] font-mono">
+                                  {waitingInRoute.length > 0 && (
+                                    <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                      ⏳ {waitingInRoute.length} em espera
+                                    </span>
+                                  )}
+                                  {cookingInRoute.length > 0 && (
+                                    <span className="px-2 py-0.5 rounded-lg bg-orange-500/20 text-orange-300 border border-orange-500/30">
+                                      🔥 {cookingInRoute.length} na chapa
+                                    </span>
+                                  )}
+                                  {readyInRoute.length > 0 && (
+                                    <span className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                      🛎️ {readyInRoute.length} pronto p/ entrega
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Lista de Comandas Atribuídas ao Bloco */}
+                                {routeSales.length === 0 ? (
+                                  <div className="p-4 rounded-xl bg-slate-900 border border-dashed border-slate-800 text-center text-xs text-slate-500 my-3">
+                                    Nenhum pedido atribuído ainda. Selecione pedidos na coluna esquerda para adicionar a este bloco.
+                                  </div>
+                                ) : (
+                                  <div className="space-y-2 mb-4">
+                                    {routeSales.map((sale, sIdx) => (
+                                      <div
+                                        key={sale.id}
+                                        className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between gap-3 text-xs"
+                                      >
+                                        <div className="min-w-0 flex-1">
+                                          <div className="flex items-center gap-2">
+                                            <span className="font-mono font-black text-cyan-400">
+                                              #{sIdx + 1}
+                                            </span>
+                                            <span className="font-mono font-bold text-slate-300">
+                                              #{sale.id.slice(0, 5).toUpperCase()}
+                                            </span>
+                                            <strong className="text-white uppercase truncate">
+                                              {sale.customerName || 'Cliente'}
+                                            </strong>
+                                            <span className={`px-1.5 py-0.2 rounded text-[9px] font-black uppercase ${
+                                              sale.productionStatus === 'concluido' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'
+                                            }`}>
+                                              {sale.productionStatus === 'concluido' ? 'Pronto' : sale.productionStatus === 'em_producao' ? 'Chapa' : 'Espera'}
+                                            </span>
+                                          </div>
+                                          <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                                            {sale.items?.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
+                                          </p>
+                                        </div>
+
+                                        <div className="flex items-center gap-2 shrink-0">
+                                          <span className="font-mono font-black text-slate-200">
+                                            R$ {sale.total.toFixed(2)}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const updated = deliveryRoutes.map(item => {
+                                                if (item.id === route.id) {
+                                                  return { ...item, saleIds: item.saleIds.filter(id => id !== sale.id) };
+                                                }
+                                                return item;
+                                              });
+                                              saveDeliveryRoutes(updated);
+                                            }}
+                                            className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
+                                            title="Remover deste bloco de entrega"
+                                          >
+                                            <X size={14} />
+                                          </button>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+
+                                {/* BARRA DE AÇÕES DO BLOCO DE ENTREGA */}
+                                <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    {/* Botão de Enviar Todos em Espera para a Chapa Conjuntamente */}
+                                    {waitingInRoute.length > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const waitingIds = waitingInRoute.map(s => s.id);
+                                          updateBatchProductionStatus(waitingIds, 'em_producao');
+                                        }}
+                                        className="py-2 px-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95"
+                                      >
+                                        <Flame size={14} /> Liberar Rota p/ Chapa ({waitingInRoute.length})
+                                      </button>
+                                    )}
+
+                                    {/* Botão de Despachar Rota */}
+                                    {route.status === 'montando' && routeSales.length > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updated = deliveryRoutes.map(item => {
+                                            if (item.id === route.id) {
+                                              return { ...item, status: 'em_rota' as const, dispatchedAt: new Date().toISOString() };
+                                            }
+                                            return item;
+                                          });
+                                          saveDeliveryRoutes(updated);
+                                        }}
+                                        className="py-2 px-3 bg-cyan-600 hover:bg-cyan-500 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
+                                      >
+                                        <Truck size={14} /> Despachar c/ Entregador
+                                      </button>
+                                    )}
+
+                                    {/* Botão de Imprimir Romaneio da Rota */}
+                                    {routeSales.length > 0 && (
+                                      <button
+                                        type="button"
+                                        onClick={() => setSelectedRouteToPrint(route)}
+                                        className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+                                      >
+                                        <Printer size={14} /> Romaneio
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  <div className="flex items-center gap-2">
+                                    {route.status === 'em_rota' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updated = deliveryRoutes.map(item => {
+                                            if (item.id === route.id) {
+                                              return { ...item, status: 'entregue' as const };
+                                            }
+                                            return item;
+                                          });
+                                          saveDeliveryRoutes(updated);
+                                        }}
+                                        className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all"
+                                      >
+                                        <Check size={14} /> Concluir Rota
+                                      </button>
+                                    )}
+
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        if (confirm(`Desfazer bloco do entregador "${route.courierName}"? Os pedidos retornarão para a fila de disponíveis.`)) {
+                                          saveDeliveryRoutes(deliveryRoutes.filter(item => item.id !== route.id));
+                                        }
+                                      }}
+                                      className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer"
+                                      title="Desfazer este bloco"
+                                    >
+                                      <Trash2 size={15} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                  </div>
                 </div>
               )}
 
@@ -2913,6 +3514,13 @@ export default function CaixaPage() {
             setSelectedSaleToPrint(null);
             setDiffToPrint(null);
           }} 
+        />
+
+        {/* Modal de Romaneio Térmico da Rota */}
+        <RouteManifestModal
+          route={selectedRouteToPrint}
+          sales={sales}
+          onClose={() => setSelectedRouteToPrint(null)}
         />
 
         {/* Modal de Confirmação de Retirada da Chapa */}

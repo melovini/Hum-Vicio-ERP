@@ -16,7 +16,8 @@ export default function CozinhaKDSPage() {
   const { 
     sales, items, updateStatus, isLoaded, 
     checklist, toggleChecklistTask, signChecklist,
-    targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus, updateBatchProductionStatus
+    targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus, updateBatchProductionStatus,
+    acknowledgeOrderModification
   } = useInventory();
 
   const [activeTab, setActiveTab] = useState<'chapa' | 'previsao' | 'faltas' | 'checklist'>('chapa');
@@ -33,6 +34,7 @@ export default function CozinhaKDSPage() {
   // Alerta Sonoro & Visual na Cozinha
   const [kitchenAlert, setKitchenAlert] = useState<{ type: 'new_order' | 'cancelled'; message: string } | null>(null);
   const prevProductionIdsRef = useRef<Set<string>>(new Set());
+  const prevModifiedOrdersRef = useRef<Set<string>>(new Set());
   const isInitialMount = useRef(true);
 
   // Modal de Justificativa de Atraso
@@ -47,7 +49,7 @@ export default function CozinhaKDSPage() {
     return () => clearInterval(timer);
   }, []);
 
-  // Monitorar novas remessas liberadas para a chapa e cancelamentos da chapa
+  // Monitorar novas remessas liberadas para a chapa, cancelamentos e alterações em pedidos no fogo
   useEffect(() => {
     const currentProductionIds = new Set(
       sales
@@ -55,9 +57,16 @@ export default function CozinhaKDSPage() {
         .map(s => s.id)
     );
 
+    const currentModifiedCookingIds = new Set(
+      sales
+        .filter(s => s.status !== 'cancelled' && s.productionStatus === 'em_producao' && s.isModifiedInKitchen)
+        .map(s => s.id)
+    );
+
     if (isInitialMount.current) {
       isInitialMount.current = false;
       prevProductionIdsRef.current = currentProductionIds;
+      prevModifiedOrdersRef.current = currentModifiedCookingIds;
       return;
     }
 
@@ -111,7 +120,27 @@ export default function CozinhaKDSPage() {
       setTimeout(() => setKitchenAlert(null), 10000);
     }
 
+    // 3. Verificar se algum pedido atualmente em produção sofreu alteração no caixa
+    const newlyModifiedOrders: Sale[] = [];
+    currentModifiedCookingIds.forEach(id => {
+      if (!prevModifiedOrdersRef.current.has(id)) {
+        const found = sales.find(s => s.id === id);
+        if (found) newlyModifiedOrders.push(found);
+      }
+    });
+
+    if (newlyModifiedOrders.length > 0) {
+      playCancellationWarning();
+      const firstMod = newlyModifiedOrders[0];
+      setKitchenAlert({
+        type: 'cancelled',
+        message: `⚠️ PEDIDO ALTERADO NA CHAPA: Comanda #${firstMod.id.slice(0, 5).toUpperCase()} (${firstMod.customerName || 'Cliente'}) sofreu alterações no Caixa! Verifique o card destacado!`
+      });
+      setTimeout(() => setKitchenAlert(null), 12000);
+    }
+
     prevProductionIdsRef.current = currentProductionIds;
+    prevModifiedOrdersRef.current = currentModifiedCookingIds;
   }, [sales]);
 
   // 1. Pedidos Ativos na Chapa (Em Produção)
@@ -549,11 +578,15 @@ export default function CozinhaKDSPage() {
                             }`}>
                               {order.orderType === 'delivery' ? '🛵 DELIVERY' : order.orderType === 'retirada' ? '🥡 BALCÃO' : '🍽️ MESA'}
                             </span>
-                            {(order.isModifiedInKitchen || order.orderDiff) && (
+                            {order.isModifiedInKitchen ? (
                               <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-red-600 text-white animate-pulse border border-red-400 shadow-md">
-                                ⚠️ MODIFICADO
+                                ⚠️ ALTERAÇÃO PENDENTE
                               </span>
-                            )}
+                            ) : order.orderDiff ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-amber-300 border border-amber-500/30">
+                                📝 MODIFICADO (CIENTE)
+                              </span>
+                            ) : null}
                           </div>
                           <p className="text-sm font-extrabold text-amber-300 mt-1 uppercase">
                             {order.customerName || 'Cliente'}
@@ -594,10 +627,21 @@ export default function CozinhaKDSPage() {
 
                       {/* Callout de Pedido Modificado (Delta Diff) */}
                       {order.orderDiff && (
-                        <div className="mb-3.5 p-3 rounded-2xl bg-amber-950/40 border-2 border-amber-500/60 space-y-1 text-xs">
-                          <span className="font-black text-amber-300 uppercase tracking-wider block text-[11px]">
-                            ⚠️ ALTERAÇÕES NO PEDIDO (DIFF):
-                          </span>
+                        <div className="mb-3.5 p-3.5 rounded-2xl bg-amber-950/40 border-2 border-amber-500/60 space-y-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-black text-amber-300 uppercase tracking-wider block text-[11px]">
+                              ⚠️ ALTERAÇÕES NO PEDIDO (DIFF):
+                            </span>
+                            {order.isModifiedInKitchen && (
+                              <button
+                                type="button"
+                                onClick={() => acknowledgeOrderModification(order.id)}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] uppercase rounded-lg shadow-md cursor-pointer transition-all flex items-center gap-1 shrink-0"
+                              >
+                                <Check size={12} /> Ciente da Alteração
+                              </button>
+                            )}
+                          </div>
                           {order.orderDiff.added.length > 0 && (
                             <div className="text-emerald-300 font-bold">
                               {order.orderDiff.added.map((item, i) => (

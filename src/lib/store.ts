@@ -526,6 +526,18 @@ export function useInventory() {
               overridesCleaned = true;
             }
 
+            let parsedDiff: any = undefined;
+            let parsedIsModified = false;
+            if (s.delay_notes && typeof s.delay_notes === 'string' && s.delay_notes.includes('KITCHEN_DIFF')) {
+              try {
+                const parsed = JSON.parse(s.delay_notes);
+                if (parsed.tag === 'KITCHEN_DIFF') {
+                  parsedDiff = parsed.orderDiff;
+                  parsedIsModified = true;
+                }
+              } catch {}
+            }
+
             return {
               id: s.id, 
               customerName: creditInfo.creditCustomerName || s.customer_name || 'Balcão',
@@ -542,6 +554,8 @@ export function useInventory() {
               targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
               delayReason: s.delay_reason || undefined,
               delayNotes: s.delay_notes || undefined,
+              orderDiff: parsedDiff,
+              isModifiedInKitchen: parsedIsModified,
               collaboratorId: creditInfo.collaboratorId || s.collaborator_id || undefined,
               collaboratorName: creditInfo.collaboratorName || s.collaborator_name || undefined,
               creditCustomerName: creditInfo.creditCustomerName || s.credit_customer_name || undefined,
@@ -892,11 +906,29 @@ export function useInventory() {
                 overridesCleaned = true;
               }
 
+              let parsedDiff = existing?.orderDiff;
+              let parsedIsModified = existing?.isModifiedInKitchen || false;
+
+              if (s.delay_notes && typeof s.delay_notes === 'string' && s.delay_notes.includes('KITCHEN_DIFF')) {
+                try {
+                  const parsed = JSON.parse(s.delay_notes);
+                  if (parsed.tag === 'KITCHEN_DIFF') {
+                    parsedDiff = parsed.orderDiff;
+                    parsedIsModified = true;
+                  }
+                } catch {}
+              } else if (s.delay_notes === null && existing?.isModifiedInKitchen) {
+                parsedIsModified = false;
+              }
+
               return {
                 id: s.id,
                 customerName: s.customer_name || 'Balcão',
                 orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
                 channel: s.channel,
+                subtotal: Number(s.subtotal) || existing?.subtotal || 0,
+                discount: Number(s.discount) || existing?.discount || 0,
+                deliveryFee: Number(s.delivery_fee) || existing?.deliveryFee || 0,
                 total: Number(s.total) || 0,
                 paymentMethod: s.payment_method,
                 date: s.created_at,
@@ -908,6 +940,8 @@ export function useInventory() {
                 targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
                 delayReason: s.delay_reason || undefined,
                 delayNotes: s.delay_notes || undefined,
+                orderDiff: parsedDiff,
+                isModifiedInKitchen: parsedIsModified,
                 items: (latestItems || []).filter(i => i.sale_id === s.id).map(i => ({
                   id: i.id,
                   productId: i.product_id,
@@ -1593,8 +1627,8 @@ export function useInventory() {
   };
 
   const addSale = async (sale: Omit<Sale, 'id' | 'date' | 'status'>) => {
-    // Pedidos entram na chapa ativa por padrão, salvo especificação contrária do operador
-    const initialProductionStatus = sale.productionStatus || 'em_producao';
+    // Por padrão operacional da hamburgueria, pedidos entram em espera para montagem de rotas de entrega
+    const initialProductionStatus = sale.productionStatus || 'em_espera';
     const initialProductionStarted = sale.productionStartedAt || new Date().toISOString();
     const initialTargetPrep = sale.targetPrepMinutes || targetPrepMinutes;
     let sData: any = null;
@@ -1981,14 +2015,17 @@ export function useInventory() {
     try {
       const updateData: any = {
         production_status: 'concluido',
-        production_completed_at: completedAt,
-        production_time_minutes: timeMinutes
+        production_completed_at: completedAt
       };
       if (delayReason) {
         updateData.delay_reason = delayReason;
         updateData.delay_notes = delayNotes;
       }
-      await supabase.from('sales').update(updateData).eq('id', saleId);
+      const { error } = await supabase.from('sales').update(updateData).eq('id', saleId);
+      if (error) {
+        console.warn('Erro ao atualizar status concluido no Supabase, tentando update simples:', error);
+        await supabase.from('sales').update({ production_status: 'concluido' }).eq('id', saleId);
+      }
     } catch (err) {
       console.warn('Erro ao concluir produção no Supabase:', err);
     }
@@ -2171,12 +2208,16 @@ export function useInventory() {
 
     const orderDiff = { added, removed, modified };
 
+    const finalizedStatus = updatedSaleData.productionStatus || existingSale.productionStatus || 'em_espera';
+    const isCurrentlyCooking = existingSale.productionStatus === 'em_producao';
+    const hasDiff = added.length > 0 || removed.length > 0 || modified.length > 0;
+
     const finalizedSale: Sale = {
       ...existingSale,
       ...updatedSaleData,
       orderDiff,
-      isModifiedInKitchen: true,
-      productionStatus: 'em_producao' // Reativa na chapa se alterado
+      isModifiedInKitchen: isCurrentlyCooking && hasDiff,
+      productionStatus: finalizedStatus
     };
 
     setSales(prev => {
@@ -2188,13 +2229,40 @@ export function useInventory() {
     });
 
     try {
-      await supabase.from('sales').update({
+      const updatePayload: Record<string, any> = {
         total: finalizedSale.total,
         subtotal: finalizedSale.subtotal,
         discount: finalizedSale.discount,
         delivery_fee: finalizedSale.deliveryFee,
-        production_status: 'em_producao'
-      }).eq('id', saleId);
+        customer_name: finalizedSale.customerName,
+        order_type: finalizedSale.orderType,
+        production_status: finalizedStatus
+      };
+      if (isCurrentlyCooking && hasDiff) {
+        updatePayload.delay_notes = JSON.stringify({ tag: 'KITCHEN_DIFF', orderDiff });
+      }
+      await supabase.from('sales').update(updatePayload).eq('id', saleId);
+
+      // Re-sincronizar itens na tabela sale_items
+      if (newItems.length > 0) {
+        await supabase.from('sale_items').delete().eq('sale_id', saleId);
+        const saleItemsPayload = newItems.map(i => {
+          let displayName = i.productName;
+          if (i.combo) displayName += ` (${i.combo})`;
+          if (i.additionals && i.additionals.length > 0) {
+            displayName += ` + [${i.additionals.map(a => a.name).join(', ')}]`;
+          }
+          if (i.notes) displayName += ` *Obs: ${i.notes}*`;
+          return {
+            sale_id: saleId,
+            product_id: i.productId,
+            product_name: displayName,
+            quantity: i.quantity,
+            unit_price: i.unitPrice
+          };
+        });
+        await supabase.from('sale_items').insert(saleItemsPayload);
+      }
     } catch (e) {
       console.warn('Erro ao salvar alteração de venda no banco:', e);
     }
@@ -2321,11 +2389,20 @@ export function useInventory() {
     await supabase.from('kitchen_checklists').update({ signed_by: personName }).eq('id', checklist.id);
   };
 
+  const acknowledgeOrderModification = async (saleId: string) => {
+    setSales(prev => prev.map(s => s.id === saleId ? { ...s, isModifiedInKitchen: false } : s));
+    try {
+      await supabase.from('sales').update({ delay_notes: null }).eq('id', saleId);
+    } catch (e) {
+      console.warn('Erro ao atualizar ciente da modificação no Supabase:', e);
+    }
+  };
+
   return { 
     items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
     products, addProduct, updateProduct, removeProduct, getProductCmv, getRealSalesCmv,
     isLoaded, isOpen, activeCashSession, allCashSessions, openCaixa, closeCaixa, toggleCaixa, deleteCashSession, deleteTestSales,
-    sales, addSale, cancelSale, reopenOrderForEdit, updateReopenedOrder,
+    sales, addSale, cancelSale, reopenOrderForEdit, updateReopenedOrder, acknowledgeOrderModification,
     movements, addMovement,
     wasteRecords, registerWaste, getTotalWasteCost,
     checklist, toggleChecklistTask, signChecklist, allChecklists,
