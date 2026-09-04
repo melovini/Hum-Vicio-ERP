@@ -183,7 +183,7 @@ export default function CaixaPage() {
   const [cart, setCart] = useState<SaleItem[]>([]);
   const [saleChannel, setSaleChannel] = useState<'balcao' | 'ifood'>('balcao');
   const [saleMethod, setSaleMethod] = useState('credito');
-  const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_espera');
+  const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_producao');
   const [pendingRemovalFromGrill, setPendingRemovalFromGrill] = useState<{ sale: Sale; action: 'pause' | 'cancel' } | null>(null);
 
   // Estados de Brindes / Cortesias
@@ -669,7 +669,7 @@ export default function CaixaPage() {
     setDiscountInput('');
     setDeliveryFeeInput('');
     setHasStoreCoupon(false);
-    setOrderProductionStatus('em_espera');
+    setOrderProductionStatus('em_producao');
     setSelectedCollaboratorId('');
     setCreditCustomerInput('');
     setCreditDueDateInput('');
@@ -1541,6 +1541,17 @@ export default function CaixaPage() {
                         <div className="grid grid-cols-3 gap-1.5">
                           <button
                             type="button"
+                            onClick={() => setOrderProductionStatus('em_producao')}
+                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
+                              orderProductionStatus === 'em_producao'
+                                ? 'bg-emerald-600 text-white font-black shadow-md ring-2 ring-emerald-400'
+                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
+                            }`}
+                          >
+                            🟢 Chapa (Padrão)
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => setOrderProductionStatus('em_espera')}
                             className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
                               orderProductionStatus === 'em_espera'
@@ -1560,17 +1571,6 @@ export default function CaixaPage() {
                             }`}
                           >
                             📅 Agendado
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setOrderProductionStatus('em_producao')}
-                            className={`py-2 px-1 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1 text-center ${
-                              orderProductionStatus === 'em_producao'
-                                ? 'bg-emerald-600 text-white font-black shadow-md ring-2 ring-emerald-400'
-                                : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
-                            }`}
-                          >
-                            🟢 Chapa / Agora
                           </button>
                         </div>
                       </div>

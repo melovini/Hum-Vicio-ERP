@@ -512,11 +512,19 @@ export function useInventory() {
         if (salesData && salesData.length > 0) {
           const overrides = getSavedProductionOverrides();
           const creditMap = getSavedCreditSalesMap();
+          let overridesCleaned = false;
           const mappedSales: Sale[] = salesData.map(s => {
             const override = overrides[s.id];
             const creditInfo = creditMap[s.id] || {};
-            const prodStatus = (override?.status || s.production_status || 'em_espera') as ProductionStatus;
-            const prodStarted = override?.startedAt || s.production_started_at || s.created_at;
+            // O Supabase é a fonte oficial da verdade sincronizada entre múltiplos dispositivos (PC Caixa e Tablet Cozinha)
+            const prodStatus = (s.production_status || override?.status || 'em_producao') as ProductionStatus;
+            const prodStarted = s.production_started_at || override?.startedAt || s.created_at;
+
+            // Se o status já estiver consolidado no Supabase, limpa o override local correspondente
+            if (override && s.production_status) {
+              delete overrides[s.id];
+              overridesCleaned = true;
+            }
 
             return {
               id: s.id, 
@@ -556,7 +564,12 @@ export function useInventory() {
           });
           setSales(mappedSales);
           if (typeof window !== 'undefined') {
-            try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(mappedSales.slice(0, 100))); } catch {}
+            try { 
+              localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(mappedSales.slice(0, 100))); 
+              if (overridesCleaned) {
+                localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(overrides));
+              }
+            } catch {}
           }
         } else if (typeof window !== 'undefined') {
           const cached = localStorage.getItem('hum_vicio_cached_sales');
@@ -797,20 +810,87 @@ export function useInventory() {
     };
     window.addEventListener('storage', handleStorage);
 
-    // Polling contínuo a cada 3.5s para sincronizar Caixa e Cozinha em tempo real entre dispositivos
+    // Assinatura Supabase Realtime para sincronização sub-segundo (<100ms) entre PC do Caixa e Tablet da Cozinha
+    const realtimeChannel = supabase
+      .channel('sales_realtime_sync')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'sales' },
+        (payload: any) => {
+          if (payload.eventType === 'INSERT') {
+            const newSale = payload.new;
+            setSales(prev => {
+              if (prev.some(s => s.id === newSale.id)) return prev;
+              const mapped: Sale = {
+                id: newSale.id,
+                customerName: newSale.customer_name || 'Balcão',
+                orderType: (newSale.order_type || (newSale.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
+                channel: newSale.channel,
+                total: Number(newSale.total) || 0,
+                paymentMethod: newSale.payment_method,
+                date: newSale.created_at,
+                status: newSale.status || 'completed',
+                productionStatus: (newSale.production_status || 'em_producao') as ProductionStatus,
+                productionStartedAt: newSale.production_started_at || newSale.created_at,
+                productionCompletedAt: newSale.production_completed_at || undefined,
+                productionTimeMinutes: newSale.production_time_minutes ? Number(newSale.production_time_minutes) : undefined,
+                targetPrepMinutes: newSale.target_prep_minutes ? Number(newSale.target_prep_minutes) : 20,
+                delayReason: newSale.delay_reason || undefined,
+                delayNotes: newSale.delay_notes || undefined,
+                items: []
+              };
+              return [mapped, ...prev];
+            });
+          } else if (payload.eventType === 'UPDATE') {
+            const updated = payload.new;
+            setSales(prev => prev.map(s => {
+              if (s.id === updated.id) {
+                return {
+                  ...s,
+                  customerName: updated.customer_name || s.customerName,
+                  status: updated.status || s.status,
+                  productionStatus: (updated.production_status || s.productionStatus) as ProductionStatus,
+                  productionStartedAt: updated.production_started_at || s.productionStartedAt,
+                  productionCompletedAt: updated.production_completed_at || s.productionCompletedAt,
+                  productionTimeMinutes: updated.production_time_minutes ? Number(updated.production_time_minutes) : s.productionTimeMinutes,
+                  delayReason: updated.delay_reason || s.delayReason,
+                  delayNotes: updated.delay_notes || s.delayNotes,
+                  total: Number(updated.total) || s.total
+                };
+              }
+              return s;
+            }));
+          } else if (payload.eventType === 'DELETE') {
+            const oldId = payload.old?.id;
+            if (oldId) {
+              setSales(prev => prev.filter(s => s.id !== oldId));
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    // Polling contínuo a cada 3.5s para garantir sincronização resiliente e atualização de itens
     const syncInterval = setInterval(async () => {
       try {
         const { data: latestSales } = await supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(60);
         const { data: latestItems } = await supabase.from('sale_items').select('*');
         if (latestSales && latestSales.length > 0) {
           const overrides = getSavedProductionOverrides();
+          let overridesCleaned = false;
           setSales(prev => {
             const localOnly = prev.filter(p => p.id.startsWith('local_') && !latestSales.some(ls => ls.id === p.id));
             const remoteMapped: Sale[] = latestSales.map(s => {
               const existing = prev.find(p => p.id === s.id);
               const override = overrides[s.id];
-              const prodStatus = (override?.status || s.production_status || existing?.productionStatus || 'em_espera') as ProductionStatus;
-              const prodStarted = override?.startedAt || s.production_started_at || existing?.productionStartedAt || s.created_at;
+              // Supabase é a fonte oficial da verdade compartilhada entre múltiplos dispositivos
+              const prodStatus = (s.production_status || override?.status || existing?.productionStatus || 'em_producao') as ProductionStatus;
+              const prodStarted = s.production_started_at || override?.startedAt || existing?.productionStartedAt || s.created_at;
+
+              if (override && s.production_status) {
+                delete overrides[s.id];
+                overridesCleaned = true;
+              }
 
               return {
                 id: s.id,
@@ -842,6 +922,9 @@ export function useInventory() {
             });
             return [...localOnly, ...remoteMapped];
           });
+          if (overridesCleaned && typeof window !== 'undefined') {
+            try { localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(overrides)); } catch {}
+          }
         }
       } catch {}
     }, 3500);
@@ -849,6 +932,7 @@ export function useInventory() {
     return () => {
       window.removeEventListener('storage', handleStorage);
       clearInterval(syncInterval);
+      supabase.removeChannel(realtimeChannel);
     };
   }, []);
 
@@ -1509,12 +1593,13 @@ export function useInventory() {
   };
 
   const addSale = async (sale: Omit<Sale, 'id' | 'date' | 'status'>) => {
-    const initialProductionStatus = sale.productionStatus || 'em_espera';
+    // Pedidos entram na chapa ativa por padrão, salvo especificação contrária do operador
+    const initialProductionStatus = sale.productionStatus || 'em_producao';
     const initialProductionStarted = sale.productionStartedAt || new Date().toISOString();
     const initialTargetPrep = sale.targetPrepMinutes || targetPrepMinutes;
     let sData: any = null;
 
-    // 1. Tentar inserção completa com colunas novas
+    // 1. Tentar inserção completa com colunas novas e status completed
     try {
       const { data, error } = await supabase.from('sales').insert({
         channel: sale.channel, 
@@ -1522,6 +1607,7 @@ export function useInventory() {
         payment_method: sale.paymentMethod,
         customer_name: sale.customerName || 'Balcão',
         order_type: sale.orderType || 'mesa',
+        status: 'completed',
         production_status: initialProductionStatus,
         production_started_at: initialProductionStarted,
         target_prep_minutes: initialTargetPrep
@@ -1542,7 +1628,8 @@ export function useInventory() {
           total: sale.total, 
           payment_method: sale.paymentMethod,
           customer_name: sale.customerName || 'Balcão',
-          order_type: sale.orderType || 'mesa'
+          order_type: sale.orderType || 'mesa',
+          status: 'completed'
         }).select().single();
 
         if (!retryErr && retryData) {

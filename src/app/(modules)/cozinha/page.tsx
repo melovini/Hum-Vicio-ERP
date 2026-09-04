@@ -5,7 +5,7 @@ import {
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
   Eye, Check, ListChecks, MessageSquare, Utensils,
-  Volume2, BellRing, User, X
+  Volume2, BellRing, User, X, Play
 } from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
@@ -16,7 +16,7 @@ export default function CozinhaKDSPage() {
   const { 
     sales, items, updateStatus, isLoaded, 
     checklist, toggleChecklistTask, signChecklist,
-    targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus 
+    targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus, updateBatchProductionStatus
   } = useInventory();
 
   const [activeTab, setActiveTab] = useState<'chapa' | 'previsao' | 'faltas' | 'checklist'>('chapa');
@@ -418,6 +418,55 @@ export default function CozinhaKDSPage() {
       {/* ========================================================================= */}
       {activeTab === 'chapa' && (
         <div>
+          {/* BANNER TOUCH AMIGÁVEL P/ TABLET: PEDIDOS NA FILA DE ESPERA / PRÓXIMOS */}
+          {queueOrders.length > 0 && (
+            <div className="mb-6 p-4 md:p-5 rounded-3xl bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-red-500/20 border-2 border-amber-500/50 shadow-2xl flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <div className="p-3 bg-amber-500 text-slate-950 rounded-2xl font-black shrink-0 shadow-lg shadow-amber-500/30">
+                  <Clock size={24} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-black text-white text-base md:text-lg">
+                      {queueOrders.length} pedido(s) aguardando na fila
+                    </span>
+                    <span className="px-2 py-0.5 bg-amber-500 text-slate-950 font-black text-xs rounded-full animate-pulse">
+                      Próximo: #{queueOrders[0].id.slice(0, 5).toUpperCase()}
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-200 mt-1 font-semibold">
+                    {queueOrders[0].customerName || 'Balcão'} • {queueOrders[0].items?.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateOrderProductionStatus(queueOrders[0].id, 'em_producao');
+                    playKitchenChime();
+                  }}
+                  className="flex-1 md:flex-initial py-3 px-5 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-emerald-500/30 cursor-pointer active:scale-95 transition-all"
+                >
+                  <Flame size={18} /> Puxar Próximo p/ Chapa
+                </button>
+                {queueOrders.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateBatchProductionStatus(queueOrders.map(o => o.id), 'em_producao');
+                      playKitchenChime();
+                    }}
+                    className="flex-1 md:flex-initial py-3 px-4 bg-slate-900 hover:bg-slate-800 text-amber-300 border border-amber-500/40 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 cursor-pointer active:scale-95 transition-all"
+                  >
+                    <Play size={16} /> Puxar Todos ({queueOrders.length})
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
           {productionOrders.length === 0 ? (
             <div className="glass-card rounded-3xl p-16 text-center border border-slate-800 my-8">
               <div className="w-20 h-20 mx-auto bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mb-4">
@@ -644,9 +693,24 @@ export default function CozinhaKDSPage() {
                   A cozinha pode consultar esta previsão para <strong>adiantar porções, carnes e maioneses</strong> antes de entrarem na chapa!
                 </p>
               </div>
-              <div className="px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded-2xl text-center">
-                <span className="text-xs text-blue-300 font-bold block uppercase">Na Fila Futura</span>
-                <strong className="text-2xl font-mono text-white">{queueOrders.length} pedidos</strong>
+              <div className="flex flex-col sm:flex-row items-center gap-3">
+                <div className="px-4 py-2 bg-blue-500/10 border border-blue-500/30 rounded-2xl text-center">
+                  <span className="text-xs text-blue-300 font-bold block uppercase">Na Fila Futura</span>
+                  <strong className="text-2xl font-mono text-white">{queueOrders.length} pedidos</strong>
+                </div>
+                {queueOrders.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      updateBatchProductionStatus(queueOrders.map(o => o.id), 'em_producao');
+                      playKitchenChime();
+                      setActiveTab('chapa');
+                    }}
+                    className="py-3 px-5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-orange-500/30 cursor-pointer active:scale-95 transition-all"
+                  >
+                    <Flame size={18} /> Puxar Todos p/ Chapa ({queueOrders.length})
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -737,9 +801,17 @@ export default function CozinhaKDSPage() {
                   </div>
                 </div>
 
-                <div className="text-center p-2 rounded-xl bg-slate-950/80 border border-slate-800/80 text-[11px] text-slate-400 font-semibold">
-                  Aguardando liberação oficial do Balcão
-                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateOrderProductionStatus(order.id, 'em_producao');
+                    playKitchenChime();
+                    setActiveTab('chapa');
+                  }}
+                  className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-orange-500/25 cursor-pointer active:scale-95 transition-all"
+                >
+                  <Flame size={16} /> 🔥 Puxar para a Chapa Agora
+                </button>
               </div>
             ))}
           </div>
