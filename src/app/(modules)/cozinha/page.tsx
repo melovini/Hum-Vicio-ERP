@@ -17,11 +17,18 @@ export default function CozinhaKDSPage() {
     sales, items, updateStatus, isLoaded, 
     checklist, toggleChecklistTask, signChecklist,
     targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus, updateBatchProductionStatus,
-    acknowledgeOrderModification
+    acknowledgeOrderModification,
+    activeCashSession, isOpen
   } = useInventory();
 
   const [activeTab, setActiveTab] = useState<'chapa' | 'previsao' | 'faltas' | 'checklist'>('chapa');
   const [now, setNow] = useState(Date.now());
+
+  // Horário de abertura do turno ativo para isolamento estrito
+  const sessionStartTime = useMemo(() => {
+    if (!activeCashSession || !isOpen) return 0;
+    return new Date(activeCashSession.openedAt).getTime();
+  }, [activeCashSession, isOpen]);
 
   // Atribuição de Colaboradores em Tarefas do Checklist
   const [selectedTaskForAssignment, setSelectedTaskForAssignment] = useState<ChecklistTask | null>(null);
@@ -51,15 +58,21 @@ export default function CozinhaKDSPage() {
 
   // Monitorar novas remessas liberadas para a chapa, cancelamentos e alterações em pedidos no fogo
   useEffect(() => {
+    if (!activeCashSession || !isOpen || sessionStartTime === 0) {
+      prevProductionIdsRef.current = new Set();
+      prevModifiedOrdersRef.current = new Set();
+      return;
+    }
+
     const currentProductionIds = new Set(
       sales
-        .filter(s => s.status !== 'cancelled' && s.productionStatus === 'em_producao')
+        .filter(s => s.status !== 'cancelled' && s.productionStatus === 'em_producao' && new Date(s.date).getTime() >= sessionStartTime)
         .map(s => s.id)
     );
 
     const currentModifiedCookingIds = new Set(
       sales
-        .filter(s => s.status !== 'cancelled' && s.productionStatus === 'em_producao' && s.isModifiedInKitchen)
+        .filter(s => s.status !== 'cancelled' && s.productionStatus === 'em_producao' && s.isModifiedInKitchen && new Date(s.date).getTime() >= sessionStartTime)
         .map(s => s.id)
     );
 
@@ -141,18 +154,23 @@ export default function CozinhaKDSPage() {
 
     prevProductionIdsRef.current = currentProductionIds;
     prevModifiedOrdersRef.current = currentModifiedCookingIds;
-  }, [sales]);
+  }, [sales, activeCashSession, isOpen, sessionStartTime]);
 
-  // 1. Pedidos Ativos na Chapa (Em Produção)
+  // 1. Pedidos Ativos na Chapa (Em Produção - Apenas do Turno de Caixa Ativo)
   const productionOrders = useMemo(() => {
+    if (!activeCashSession || !isOpen) return [];
     return sales
-      .filter(s => s.status === 'completed' && s.productionStatus === 'em_producao')
+      .filter(s => {
+        if (s.status !== 'completed' || s.productionStatus !== 'em_producao') return false;
+        if (sessionStartTime > 0 && new Date(s.date).getTime() < sessionStartTime) return false;
+        return true;
+      })
       .sort((a, b) => {
         const timeA = new Date(a.productionStartedAt || a.date).getTime();
         const timeB = new Date(b.productionStartedAt || b.date).getTime();
         return timeA - timeB; // Mais antigos primeiro
       });
-  }, [sales]);
+  }, [sales, activeCashSession, isOpen, sessionStartTime]);
 
   // Resumo de Hambúrgueres na Chapa no Momento
   const currentGrillBurgersSummary = useMemo(() => {
@@ -170,12 +188,18 @@ export default function CozinhaKDSPage() {
     };
   }, [productionOrders]);
 
-  // 2. Pedidos em Espera ou Agendados (Previsão de Demanda)
+  // 2. Pedidos em Espera ou Agendados (Previsão de Demanda - Apenas do Turno de Caixa Ativo)
   const queueOrders = useMemo(() => {
+    if (!activeCashSession || !isOpen) return [];
     return sales
-      .filter(s => s.status === 'completed' && (s.productionStatus === 'em_espera' || s.productionStatus === 'agendado'))
+      .filter(s => {
+        if (s.status !== 'completed') return false;
+        if (s.productionStatus !== 'em_espera' && s.productionStatus !== 'agendado') return false;
+        if (sessionStartTime > 0 && new Date(s.date).getTime() < sessionStartTime) return false;
+        return true;
+      })
       .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-  }, [sales]);
+  }, [sales, activeCashSession, isOpen, sessionStartTime]);
 
   // 3. Previsão Agregada de Insumos/Molhos dos Próximos Pedidos
   const upcomingPrepSummary = useMemo(() => {
@@ -311,9 +335,22 @@ export default function CozinhaKDSPage() {
                 KDS CHAPA
               </span>
             </div>
-            <p className="text-xs text-slate-400">
-              Tempo Alvo do Balcão: <strong className="text-amber-400 font-mono">{targetPrepMinutes} min</strong> • {productionOrders.length} pedidos em produção
-            </p>
+            <div className="flex items-center gap-2 flex-wrap mt-0.5">
+              <p className="text-xs text-slate-400">
+                Tempo Alvo: <strong className="text-amber-400 font-mono">{targetPrepMinutes} min</strong> • {productionOrders.length} na chapa
+              </p>
+              {isOpen && activeCashSession ? (
+                <span className="px-2 py-0.5 bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 rounded-full text-[10px] font-extrabold flex items-center gap-1.5 shadow-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  Turno Aberto: {activeCashSession.openedBy || 'Balcão'} ({new Date(activeCashSession.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                </span>
+              ) : (
+                <span className="px-2 py-0.5 bg-rose-950/80 text-rose-300 border border-rose-500/40 rounded-full text-[10px] font-extrabold flex items-center gap-1.5 shadow-sm">
+                  <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                  Caixa Fechado (Aguardando Abertura)
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
@@ -496,7 +533,17 @@ export default function CozinhaKDSPage() {
             </div>
           )}
 
-          {productionOrders.length === 0 ? (
+          {!isOpen || !activeCashSession ? (
+            <div className="glass-card rounded-3xl p-16 text-center border border-rose-500/30 bg-rose-950/10 my-8 shadow-2xl">
+              <div className="w-20 h-20 mx-auto bg-rose-500/10 text-rose-400 rounded-full flex items-center justify-center mb-4">
+                <AlertOctagon size={44} />
+              </div>
+              <h2 className="text-3xl font-extrabold text-white mb-2">Caixa Fechado</h2>
+              <p className="text-slate-400 max-w-lg mx-auto text-sm">
+                Nenhum turno de caixa aberto no momento. Abra o caixa no terminal do Balcão/PDV para iniciar novos pedidos e liberar a chapa da cozinha.
+              </p>
+            </div>
+          ) : productionOrders.length === 0 ? (
             <div className="glass-card rounded-3xl p-16 text-center border border-slate-800 my-8">
               <div className="w-20 h-20 mx-auto bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mb-4">
                 <CheckCircle size={44} />
@@ -759,106 +806,120 @@ export default function CozinhaKDSPage() {
             </div>
           </div>
 
-          {/* Resumo de Insumos e Pré-Preparos Necessários */}
-          {queueOrders.length > 0 && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* Lanches Previstos */}
-              <div className="glass-card rounded-3xl p-6 border border-slate-800">
-                <h3 className="font-extrabold text-base text-amber-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                  <Utensils size={18} /> Lanches nos Próximos Pedidos ({upcomingPrepSummary.totalBurgers} un)
-                </h3>
-                <div className="space-y-2">
-                  {Object.entries(upcomingPrepSummary.productCounts).map(([name, qty]) => (
-                    <div key={name} className="flex justify-between items-center p-3 rounded-xl bg-slate-900 border border-slate-800">
-                      <span className="font-bold text-white text-sm">{name}</span>
-                      <span className="px-3 py-1 bg-amber-500/20 text-amber-300 font-mono font-black text-sm rounded-lg">
-                        {qty}x
-                      </span>
-                    </div>
-                  ))}
-                </div>
+          {queueOrders.length === 0 ? (
+            <div className="glass-card rounded-3xl p-16 text-center border border-slate-800 my-8">
+              <div className="w-16 h-16 mx-auto bg-blue-500/10 text-blue-400 rounded-full flex items-center justify-center mb-4">
+                <Clock size={36} />
               </div>
-
-              {/* Maioneses e Adicionais dos Próximos */}
-              <div className="glass-card rounded-3xl p-6 border border-slate-800">
-                <h3 className="font-extrabold text-base text-emerald-400 uppercase tracking-wider mb-4 flex items-center gap-2">
-                  🥫 Adicionais & Maioneses Solicitadas
-                </h3>
-                {Object.keys(upcomingPrepSummary.additionalsCounts).length === 0 ? (
-                  <p className="text-slate-500 text-xs py-4 text-center">Nenhum adicional específico nos próximos pedidos.</p>
-                ) : (
+              <h3 className="text-xl font-bold text-white mb-2">Fila Futura Vazia</h3>
+              <p className="text-slate-400 max-w-md mx-auto text-sm">
+                {!isOpen || !activeCashSession 
+                  ? 'O caixa está fechado. Quando um turno for aberto e novos pedidos entrarem no PDV, eles aparecerão aqui.'
+                  : 'Nenhum pedido em espera ou agendado no momento para este turno.'}
+              </p>
+            </div>
+          ) : (
+            <>
+              {/* Resumo de Insumos e Pré-Preparos Necessários */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                {/* Lanches Previstos */}
+                <div className="glass-card rounded-3xl p-6 border border-slate-800">
+                  <h3 className="font-extrabold text-base text-amber-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    <Utensils size={18} /> Lanches nos Próximos Pedidos ({upcomingPrepSummary.totalBurgers} un)
+                  </h3>
                   <div className="space-y-2">
-                    {Object.entries(upcomingPrepSummary.additionalsCounts).map(([name, qty]) => (
+                    {Object.entries(upcomingPrepSummary.productCounts).map(([name, qty]) => (
                       <div key={name} className="flex justify-between items-center p-3 rounded-xl bg-slate-900 border border-slate-800">
-                        <span className="font-bold text-slate-200 text-sm">{name}</span>
-                        <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 font-mono font-black text-sm rounded-lg">
+                        <span className="font-bold text-white text-sm">{name}</span>
+                        <span className="px-3 py-1 bg-amber-500/20 text-amber-300 font-mono font-black text-sm rounded-lg">
                           {qty}x
                         </span>
                       </div>
                     ))}
                   </div>
-                )}
-              </div>
-
-            </div>
-          )}
-
-          {/* Cards dos Pedidos em Espera */}
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-            {queueOrders.map(order => (
-              <div key={order.id} className="rounded-3xl p-5 border border-slate-800 bg-slate-900/60 flex flex-col justify-between">
-                <div>
-                  <div className="flex justify-between items-start pb-3 mb-3 border-b border-slate-800">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono font-black text-lg text-slate-300">
-                          #{order.id.slice(0, 5).toUpperCase()}
-                        </span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                          order.productionStatus === 'agendado' ? 'bg-purple-600 text-white' : 'bg-amber-600 text-white'
-                        }`}>
-                          {order.productionStatus === 'agendado' ? '📅 AGENDADO' : '⏳ EM ESPERA'}
-                        </span>
-                      </div>
-                      <p className="text-sm font-bold text-white mt-1 uppercase">
-                        {order.customerName || 'Cliente'}
-                      </p>
-                    </div>
-
-                    <span className="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-1 rounded-lg">
-                      Balcão
-                    </span>
-                  </div>
-
-                  <div className="space-y-2 mb-3">
-                    {order.items?.map((item, idx) => (
-                      <div key={idx} className="text-xs text-slate-300 bg-slate-950/60 p-2 rounded-xl">
-                        <span className="font-bold text-white">[{item.quantity}x] {item.productName}</span>
-                        {item.combo && <p className="text-[10px] text-amber-400">+ Combo: {item.combo}</p>}
-                        {item.additionals && item.additionals.length > 0 && (
-                          <p className="text-[10px] text-emerald-300">+ Adicionais: {item.additionals.map(a => a.name).join(', ')}</p>
-                        )}
-                        {item.notes && <p className="text-[10px] text-amber-200 italic">Obs: {item.notes}</p>}
-                      </div>
-                    ))}
-                  </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    updateOrderProductionStatus(order.id, 'em_producao');
-                    playKitchenChime();
-                    setActiveTab('chapa');
-                  }}
-                  className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-orange-500/25 cursor-pointer active:scale-95 transition-all"
-                >
-                  <Flame size={16} /> 🔥 Puxar para a Chapa Agora
-                </button>
+                {/* Maioneses e Adicionais dos Próximos */}
+                <div className="glass-card rounded-3xl p-6 border border-slate-800">
+                  <h3 className="font-extrabold text-base text-emerald-400 uppercase tracking-wider mb-4 flex items-center gap-2">
+                    🥫 Adicionais & Maioneses Solicitadas
+                  </h3>
+                  {Object.keys(upcomingPrepSummary.additionalsCounts).length === 0 ? (
+                    <p className="text-slate-500 text-xs py-4 text-center">Nenhum adicional específico nos próximos pedidos.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {Object.entries(upcomingPrepSummary.additionalsCounts).map(([name, qty]) => (
+                        <div key={name} className="flex justify-between items-center p-3 rounded-xl bg-slate-900 border border-slate-800">
+                          <span className="font-bold text-slate-200 text-sm">{name}</span>
+                          <span className="px-3 py-1 bg-emerald-500/20 text-emerald-300 font-mono font-black text-sm rounded-lg">
+                            {qty}x
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
               </div>
-            ))}
-          </div>
+
+              {/* Cards dos Pedidos em Espera */}
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+                {queueOrders.map(order => (
+                  <div key={order.id} className="rounded-3xl p-5 border border-slate-800 bg-slate-900/60 flex flex-col justify-between">
+                    <div>
+                      <div className="flex justify-between items-start pb-3 mb-3 border-b border-slate-800">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-black text-lg text-slate-300">
+                              #{order.id.slice(0, 5).toUpperCase()}
+                            </span>
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                              order.productionStatus === 'agendado' ? 'bg-purple-600 text-white' : 'bg-amber-600 text-white'
+                            }`}>
+                              {order.productionStatus === 'agendado' ? '📅 AGENDADO' : '⏳ EM ESPERA'}
+                            </span>
+                          </div>
+                          <p className="text-sm font-bold text-white mt-1 uppercase">
+                            {order.customerName || 'Cliente'}
+                          </p>
+                        </div>
+
+                        <span className="text-[11px] font-mono text-slate-400 bg-slate-800 px-2 py-1 rounded-lg">
+                          Balcão
+                        </span>
+                      </div>
+
+                      <div className="space-y-2 mb-3">
+                        {order.items?.map((item, idx) => (
+                          <div key={idx} className="text-xs text-slate-300 bg-slate-950/60 p-2 rounded-xl">
+                            <span className="font-bold text-white">[{item.quantity}x] {item.productName}</span>
+                            {item.combo && <p className="text-[10px] text-amber-400">+ Combo: {item.combo}</p>}
+                            {item.additionals && item.additionals.length > 0 && (
+                              <p className="text-[10px] text-emerald-300">+ Adicionais: {item.additionals.map(a => a.name).join(', ')}</p>
+                            )}
+                            {item.notes && <p className="text-[10px] text-amber-200 italic">Obs: {item.notes}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        updateOrderProductionStatus(order.id, 'em_producao');
+                        playKitchenChime();
+                        setActiveTab('chapa');
+                      }}
+                      className="w-full py-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-2xl text-xs uppercase tracking-wider flex items-center justify-center gap-2 shadow-lg shadow-orange-500/25 cursor-pointer active:scale-95 transition-all"
+                    >
+                      <Flame size={16} /> 🔥 Puxar para a Chapa Agora
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
 

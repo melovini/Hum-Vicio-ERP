@@ -55,6 +55,21 @@ export default function CaixaPage() {
   const [selectedOrdersForRoute, setSelectedOrdersForRoute] = useState<string[]>([]);
   const [routeSearchQuery, setRouteSearchQuery] = useState('');
   const [selectedRouteToPrint, setSelectedRouteToPrint] = useState<DeliveryRouteBlock | null>(null);
+  const [historyScope, setHistoryScope] = useState<'turno' | 'todos'>('turno');
+
+  // Isolamento estrito de pedidos por turno de caixa
+  const sessionStartTime = useMemo(() => {
+    if (!activeCashSession || !isOpen) return 0;
+    return new Date(activeCashSession.openedAt).getTime();
+  }, [activeCashSession, isOpen]);
+
+  const currentSessionSales = useMemo(() => {
+    return sales.filter(s => {
+      if (s.status === 'cancelled') return false;
+      if (sessionStartTime > 0 && new Date(s.date).getTime() < sessionStartTime) return false;
+      return true;
+    });
+  }, [sales, sessionStartTime]);
 
   // Histórico permanente de IDs de comandas entregues (para nunca retornarem ao delivery sem rota)
   const [deliveredSaleIds, setDeliveredSaleIds] = useState<string[]>(() => {
@@ -86,9 +101,20 @@ export default function CaixaPage() {
     return sales.filter(s => 
       s.status !== 'cancelled' && 
       (s.orderType === 'delivery' || s.channel === 'ifood') && 
+      (sessionStartTime === 0 || new Date(s.date).getTime() >= sessionStartTime) &&
       !allRoutedSaleIds.has(s.id)
     );
-  }, [sales, allRoutedSaleIds]);
+  }, [sales, allRoutedSaleIds, sessionStartTime]);
+
+  // Resetar rotas e seleções em memória caso o caixa seja fechado ou inexistente
+  useEffect(() => {
+    if (!isOpen || !activeCashSession) {
+      setDeliveryRoutes([]);
+      setDeliveredSaleIds([]);
+      setSelectedOrdersForRoute([]);
+      setSelectedOrdersForBatch([]);
+    }
+  }, [isOpen, activeCashSession]);
 
   // Modais de Exclusão Segura de Caixa de Teste
   const [showDeleteTestModal, setShowDeleteTestModal] = useState(false);
@@ -294,9 +320,13 @@ export default function CaixaPage() {
   const sessionStats = useMemo(() => {
     const initial = activeCashSession?.initialAmount || 0;
     
-    // Filtrar vendas em dinheiro após a abertura
+    // Filtrar vendas em dinheiro após a abertura do turno ativo
     const cashSales = sales
-      .filter(s => s.status === 'completed' && s.paymentMethod === 'dinheiro')
+      .filter(s => {
+        if (s.status !== 'completed' || s.paymentMethod !== 'dinheiro') return false;
+        if (sessionStartTime > 0 && new Date(s.date).getTime() < sessionStartTime) return false;
+        return true;
+      })
       .reduce((acc, s) => acc + s.total, 0);
 
     const suprimentos = movements
@@ -316,7 +346,7 @@ export default function CaixaPage() {
       sangrias,
       expectedInDrawer
     };
-  }, [activeCashSession, sales, movements]);
+  }, [activeCashSession, sales, movements, sessionStartTime]);
 
   // Lista dos 18 adicionais oficiais
   const availableAdditionals = useMemo(() => {
@@ -604,8 +634,13 @@ export default function CaixaPage() {
   }, [saleChannel, hasStoreCoupon, storeCouponInput]);
 
   const waitingOrders = useMemo(() => {
-    return sales.filter(s => s.status !== 'cancelled' && (s.productionStatus === 'em_espera' || s.productionStatus === 'agendado'));
-  }, [sales]);
+    return sales.filter(s => {
+      if (s.status === 'cancelled') return false;
+      if (s.productionStatus !== 'em_espera' && s.productionStatus !== 'agendado') return false;
+      if (sessionStartTime > 0 && new Date(s.date).getTime() < sessionStartTime) return false;
+      return true;
+    });
+  }, [sales, sessionStartTime]);
 
   const batchBurgersSummary = useMemo(() => {
     const selectedSales = sales.filter(s => selectedOrdersForBatch.includes(s.id));
@@ -790,6 +825,12 @@ export default function CaixaPage() {
     if (!operatorOpenInput.trim()) return;
     await openCaixa(Number(initialAmountInput) || 0, operatorOpenInput.trim());
 
+    // Limpar rotas e seleções em memória para o novo turno
+    setDeliveryRoutes([]);
+    setDeliveredSaleIds([]);
+    setSelectedOrdersForRoute([]);
+    setSelectedOrdersForBatch([]);
+
     // RF02 - Carga Inicial por Turno: Clona o template selecionado para a sessão do salão
     const novaSessao = createInitialSessionFromTemplate(activeCashSession?.id || 'sessao_' + Date.now().toString(36), selectedInitialLayoutId);
     setFloorSession(novaSessao);
@@ -806,6 +847,12 @@ export default function CaixaPage() {
     const operator = operatorCloseInput.trim();
 
     await closeCaixa(counted, operator, expected);
+
+    // Limpar rotas e seleções em memória ao fechar o turno
+    setDeliveryRoutes([]);
+    setDeliveredSaleIds([]);
+    setSelectedOrdersForRoute([]);
+    setSelectedOrdersForBatch([]);
 
     // Alerta antifraude em caso de quebra ou sobra no fechamento cego
     if (Math.abs(variance) > 0.05) {
@@ -1261,6 +1308,10 @@ export default function CaixaPage() {
                   try {
                     const res = await deleteCashSession(sessionToDeleteId, deleteSessionPassword);
                     if (res.success) {
+                      setDeliveryRoutes([]);
+                      setDeliveredSaleIds([]);
+                      setSelectedOrdersForRoute([]);
+                      setSelectedOrdersForBatch([]);
                       alert(`Caixa de teste apagado com sucesso!\n${res.count} venda(s) de teste foram canceladas e expurgadas da contabilidade.`);
                       setShowDeleteTestModal(false);
                       setDeleteSessionPassword('');
@@ -1401,14 +1452,14 @@ export default function CaixaPage() {
                   <Flame size={16} className="text-status-occupied" /> Produção / KDS
                 </div>
                 <div className="flex items-center gap-1">
-                  {sales.filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido').length > 0 && (
+                  {currentSessionSales.filter(s => s.productionStatus === 'concluido').length > 0 && (
                     <span className="px-1.5 py-0.5 bg-status-free text-slate-950 text-[10px] font-mono tabular-nums font-bold rounded-full animate-pulse" title="Pedidos Prontos">
-                      🛎️ {sales.filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido').length}
+                      🛎️ {currentSessionSales.filter(s => s.productionStatus === 'concluido').length}
                     </span>
                   )}
-                  {sales.filter(s => s.status !== 'cancelled' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length > 0 && (
+                  {currentSessionSales.filter(s => s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao').length > 0 && (
                     <span className="px-1.5 py-0.5 bg-status-occupied text-slate-950 text-[10px] font-mono tabular-nums font-bold rounded-full">
-                      {sales.filter(s => s.status !== 'cancelled' && (s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao')).length}
+                      {currentSessionSales.filter(s => s.productionStatus === 'em_espera' || s.productionStatus === 'em_producao').length}
                     </span>
                   )}
                 </div>
@@ -1425,9 +1476,9 @@ export default function CaixaPage() {
                 <div className="flex items-center gap-2.5">
                   <Truck size={16} className="text-cyan-400" /> Rotas & Entregadores
                 </div>
-                {sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood')).length > 0 && (
+                {currentSessionSales.filter(s => s.orderType === 'delivery' || s.channel === 'ifood').length > 0 && (
                   <span className="px-1.5 py-0.5 bg-cyan-500/20 text-cyan-300 text-[10px] font-mono tabular-nums font-bold rounded-full">
-                    {sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood')).length}
+                    {currentSessionSales.filter(s => s.orderType === 'delivery' || s.channel === 'ifood').length}
                   </span>
                 )}
               </button>
@@ -1440,7 +1491,7 @@ export default function CaixaPage() {
                     : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
                 }`}
               >
-                <History size={16} className="text-brand-accent" /> Histórico ({sales.filter(s => s.status === 'completed').length})
+                <History size={16} className="text-brand-accent" /> Histórico ({currentSessionSales.length})
               </button>
 
               <button 
@@ -2309,7 +2360,7 @@ export default function CaixaPage() {
                         className="px-3.5 py-1.5 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md cursor-pointer transition-all"
                         title="Ir para o Painel de Separação de Rotas por Entregador"
                       >
-                        <Truck size={14} /> 🛵 Rotas ({sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood')).length})
+                        <Truck size={14} /> 🛵 Rotas ({currentSessionSales.filter(s => s.orderType === 'delivery' || s.channel === 'ifood').length})
                       </button>
                     </div>
                   </div>
@@ -2360,21 +2411,19 @@ export default function CaixaPage() {
                     </div>
                   )}
 
-                  {/* Lista de Pedidos de Produção */}
-                  {sales.filter(s => {
-                    if (s.status === 'cancelled') return false;
+                  {/* Lista de Pedidos de Produção (Apenas do Turno Ativo) */}
+                  {currentSessionSales.filter(s => {
                     if (productionFilter === 'todos') return true;
                     return (s.productionStatus || 'em_producao') === productionFilter;
                   }).length === 0 ? (
                     <div className="py-16 text-center text-slate-500">
                       <Flame size={44} className="mx-auto mb-2 opacity-20 text-amber-500" />
-                      <p className="text-sm">Nenhum pedido encontrado nesta categoria de produção.</p>
+                      <p className="text-sm">Nenhum pedido encontrado nesta categoria de produção para o turno ativo.</p>
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {sales
+                      {currentSessionSales
                         .filter(s => {
-                          if (s.status === 'cancelled') return false;
                           if (productionFilter === 'todos') return true;
                           return (s.productionStatus || 'em_producao') === productionFilter;
                         })
@@ -3228,15 +3277,52 @@ export default function CaixaPage() {
               )}
 
               {/* ABA HISTÓRICO DE VENDAS */}
-              {activeTab === 'historico' && (
-                <div className="glass-card rounded-3xl p-8 border-t-4 border-blue-500">
-                  <h2 className="text-2xl font-bold text-white mb-6">Histórico de Pedidos</h2>
-                  
-                  {sales.length === 0 ? (
-                    <p className="text-slate-500 text-center py-12">Nenhuma venda registrada ainda.</p>
-                  ) : (
-                    <div className="space-y-4">
-                      {sales.map((sale) => (
+              {activeTab === 'historico' && (() => {
+                const displayedHistorySales = historyScope === 'turno' ? currentSessionSales : sales;
+                return (
+                  <div className="glass-card rounded-3xl p-8 border-t-4 border-blue-500">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-800">
+                      <div>
+                        <h2 className="text-2xl font-bold text-white">Histórico de Pedidos</h2>
+                        <p className="text-xs text-slate-400 mt-1">
+                          Visualize e gerencie as comandas registradas no sistema.
+                        </p>
+                      </div>
+
+                      {/* Seletor de Escopo: Turno Atual vs Histórico Geral */}
+                      <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setHistoryScope('turno')}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                            historyScope === 'turno'
+                              ? 'bg-blue-600 text-white font-black shadow-md'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Turno Atual ({currentSessionSales.length})
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setHistoryScope('todos')}
+                          className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                            historyScope === 'todos'
+                              ? 'bg-blue-600 text-white font-black shadow-md'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                        >
+                          Histórico Geral ({sales.length})
+                        </button>
+                      </div>
+                    </div>
+                    
+                    {displayedHistorySales.length === 0 ? (
+                      <p className="text-slate-500 text-center py-12">
+                        {historyScope === 'turno' ? 'Nenhuma venda registrada no turno atual.' : 'Nenhuma venda registrada ainda.'}
+                      </p>
+                    ) : (
+                      <div className="space-y-4">
+                        {displayedHistorySales.map((sale) => (
                         <div key={sale.id} className={`p-5 rounded-2xl border transition-all ${
                           sale.status === 'cancelled' 
                             ? 'bg-red-500/5 border-red-500/20 opacity-70' 
@@ -3327,7 +3413,8 @@ export default function CaixaPage() {
                     </div>
                   )}
                 </div>
-              )}
+              );
+            })()}
 
               {/* ABA SANGRIA / GAVETA */}
               {activeTab === 'sangria' && (

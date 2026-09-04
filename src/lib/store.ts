@@ -590,7 +590,17 @@ export function useInventory() {
               }
             } catch {}
           }
+        } else if (salesData && salesData.length === 0) {
+          // O banco de dados retornou oficialmente 0 vendas ativas (expurgadas ou limpas)
+          setSales([]);
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.removeItem('hum_vicio_cached_sales');
+              localStorage.removeItem('hum_vicio_prod_status_map');
+            } catch {}
+          }
         } else if (typeof window !== 'undefined') {
+          // Fallback offline exclusivamente em caso de erro real de conexão
           const cached = localStorage.getItem('hum_vicio_cached_sales');
           if (cached) {
             try {
@@ -970,6 +980,18 @@ export function useInventory() {
           if (overridesCleaned && typeof window !== 'undefined') {
             try { localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(overrides)); } catch {}
           }
+        } else if (Array.isArray(latestSales) && latestSales.length === 0) {
+          // Quando todas as vendas foram expurgadas no banco, zera a lista e o cache
+          setSales(prev => {
+            const localOnly = prev.filter(p => p.id.startsWith('local_'));
+            if (typeof window !== 'undefined') {
+              try {
+                localStorage.removeItem('hum_vicio_cached_sales');
+                localStorage.removeItem('hum_vicio_prod_status_map');
+              } catch {}
+            }
+            return localOnly;
+          });
         }
       } catch {}
     }, 3500);
@@ -1445,6 +1467,24 @@ export function useInventory() {
 
   // --- CAIXA ACTIONS (EM NUVEM) ---
   const openCaixa = async (initialAmount: number, operatorName: string) => {
+    // 1. Ao iniciar um novo turno de caixa, limpamos as rotas e estados de entrega de turnos anteriores
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('hum_vicio_delivery_routes');
+        localStorage.removeItem('hum_vicio_delivered_sales');
+        localStorage.removeItem('hum_vicio_prod_status_map');
+      } catch {}
+    }
+
+    // 2. Garantir que pedidos de turnos anteriores não fiquem pendentes na chapa
+    try {
+      await supabase
+        .from('sales')
+        .update({ production_status: 'concluido' })
+        .in('production_status', ['em_espera', 'em_producao'])
+        .lt('created_at', new Date().toISOString());
+    } catch {}
+
     try {
       const { data } = await supabase.from('cash_sessions').insert({
         status: 'open',
@@ -1500,6 +1540,15 @@ export function useInventory() {
   const closeCaixa = async (finalAmount: number, operatorName: string, expectedAmount?: number) => {
     const variance = finalAmount - (expectedAmount || 0);
     const now = new Date().toISOString();
+
+    // Limpar rotas e estados de entrega locais ao encerrar o caixa
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.removeItem('hum_vicio_delivery_routes');
+        localStorage.removeItem('hum_vicio_delivered_sales');
+        localStorage.removeItem('hum_vicio_prod_status_map');
+      } catch {}
+    }
 
     if (activeCashSession) {
       try {
@@ -1559,8 +1608,18 @@ export function useInventory() {
     }
 
     const session = allCashSessions.find(s => s.id === sessionId);
-    const openedAt = session ? new Date(session.openedAt).getTime() : 0;
-    const closedAt = session?.closedAt ? new Date(session.closedAt).getTime() : Date.now();
+    let openedAt = session ? new Date(session.openedAt).getTime() : 0;
+    let closedAt = session?.closedAt ? new Date(session.closedAt).getTime() : Date.now();
+
+    if (!session) {
+      try {
+        const { data: dbSess } = await supabase.from('cash_sessions').select('*').eq('id', sessionId).single();
+        if (dbSess) {
+          openedAt = new Date(dbSess.opened_at).getTime();
+          closedAt = dbSess.closed_at ? new Date(dbSess.closed_at).getTime() : Date.now();
+        }
+      } catch {}
+    }
 
     // Vendas locais que ocorreram no período da sessão
     const localSaleIds = sales
@@ -1609,34 +1668,48 @@ export function useInventory() {
     }
 
     setAllCashSessions(prev => prev.filter(s => s.id !== sessionId));
-    if (allSaleIdsToDelete.length > 0) {
-      setSales(prev => {
-        const remaining = prev.filter(s => !allSaleIdsToDelete.includes(s.id));
-        if (typeof window !== 'undefined') {
-          try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(remaining.slice(0, 100))); } catch {}
-        }
-        return remaining;
-      });
 
-      // Limpar os pedidos expurgados de quaisquer rotas salvas localmente
+    setSales(prev => {
+      const remaining = prev.filter(s => !allSaleIdsToDelete.includes(s.id));
       if (typeof window !== 'undefined') {
         try {
-          const routesRaw = localStorage.getItem('hum_vicio_delivery_routes');
-          if (routesRaw) {
-            const routes = JSON.parse(routesRaw);
-            const cleanedRoutes = routes.map((r: any) => ({
-              ...r,
-              saleIds: r.saleIds.filter((id: string) => !allSaleIdsToDelete.includes(id))
-            }));
-            localStorage.setItem('hum_vicio_delivery_routes', JSON.stringify(cleanedRoutes));
+          if (remaining.length === 0) {
+            localStorage.removeItem('hum_vicio_cached_sales');
+          } else {
+            localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(remaining.slice(0, 100)));
           }
         } catch {}
       }
+      return remaining;
+    });
+
+    // Limpar os pedidos expurgados de quaisquer rotas salvas localmente
+    if (typeof window !== 'undefined') {
+      try {
+        const routesRaw = localStorage.getItem('hum_vicio_delivery_routes');
+        if (routesRaw) {
+          const routes = JSON.parse(routesRaw);
+          const cleanedRoutes = routes.map((r: any) => ({
+            ...r,
+            saleIds: r.saleIds.filter((id: string) => !allSaleIdsToDelete.includes(id))
+          }));
+          localStorage.setItem('hum_vicio_delivery_routes', JSON.stringify(cleanedRoutes));
+        }
+      } catch {}
     }
 
     if (activeCashSession?.id === sessionId) {
       setActiveCashSession(null);
       setIsOpen(false);
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem('hum_vicio_delivery_routes');
+          localStorage.removeItem('hum_vicio_delivered_sales');
+          localStorage.removeItem('hum_vicio_prod_status_map');
+          localStorage.removeItem('hum_vicio_cached_sales');
+        } catch {}
+      }
+      setSales([]);
     }
 
     addAuditLog(
