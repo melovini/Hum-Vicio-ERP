@@ -22,6 +22,19 @@ export async function getCollaboratorsAction(): Promise<{
   }
 }
 
+async function assertAdminSession(): Promise<boolean> {
+  try {
+    const { cookies } = await import('next/headers');
+    const { verifySessionToken, SESSION_COOKIE_NAME } = await import('@/lib/session');
+    const cookieStore = await cookies();
+    const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+    const session = await verifySessionToken(token);
+    return Boolean(session.valid && session.role === 'admin');
+  } catch {
+    return false;
+  }
+}
+
 export async function saveCollaboratorAction(collab: Collaborator): Promise<{
   success: boolean;
   isCloudSynced: boolean;
@@ -29,6 +42,15 @@ export async function saveCollaboratorAction(collab: Collaborator): Promise<{
   error?: string;
 }> {
   try {
+    const isAdmin = await assertAdminSession();
+    if (!isAdmin) {
+      return {
+        success: false,
+        isCloudSynced: false,
+        updatedList: [],
+        error: 'Acesso negado: apenas o Administrador Geral pode adicionar ou alterar colaboradores e senhas.'
+      };
+    }
     return await saveServerCollaborator(collab);
   } catch (err: any) {
     console.error('[actions] Erro em saveCollaboratorAction:', err);
@@ -45,15 +67,26 @@ export async function toggleActiveCollaboratorAction(id: string): Promise<{
   success: boolean;
   isCloudSynced: boolean;
   updatedList: Collaborator[];
+  error?: string;
 }> {
   try {
+    const isAdmin = await assertAdminSession();
+    if (!isAdmin) {
+      return {
+        success: false,
+        isCloudSynced: false,
+        updatedList: [],
+        error: 'Acesso negado: apenas o Administrador Geral pode alterar status de colaboradores.'
+      };
+    }
     return await toggleActiveServerCollaborator(id);
   } catch (err: any) {
     console.error('[actions] Erro em toggleActiveCollaboratorAction:', err);
     return {
       success: false,
       isCloudSynced: false,
-      updatedList: []
+      updatedList: [],
+      error: 'Erro ao alterar status do colaborador.'
     };
   }
 }
@@ -62,15 +95,26 @@ export async function deleteCollaboratorAction(id: string): Promise<{
   success: boolean;
   isCloudSynced: boolean;
   updatedList: Collaborator[];
+  error?: string;
 }> {
   try {
+    const isAdmin = await assertAdminSession();
+    if (!isAdmin) {
+      return {
+        success: false,
+        isCloudSynced: false,
+        updatedList: [],
+        error: 'Acesso negado: apenas o Administrador Geral pode excluir colaboradores.'
+      };
+    }
     return await deleteServerCollaborator(id);
   } catch (err: any) {
     console.error('[actions] Erro em deleteCollaboratorAction:', err);
     return {
       success: false,
       isCloudSynced: false,
-      updatedList: []
+      updatedList: [],
+      error: 'Erro ao excluir colaborador.'
     };
   }
 }

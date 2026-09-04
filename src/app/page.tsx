@@ -1,8 +1,17 @@
 import Link from 'next/link';
-import { ChefHat, MonitorDot, LayoutDashboard, ChevronRight, TrendingUp, LogOut } from 'lucide-react';
+import { ChefHat, MonitorDot, LayoutDashboard, ChevronRight, TrendingUp, LogOut, ShieldCheck, UserCheck } from 'lucide-react';
 import { logoutAction } from '@/app/login/actions';
+import { cookies } from 'next/headers';
+import { verifySessionToken, SESSION_COOKIE_NAME } from '@/lib/session';
 
-export default function Home() {
+export default async function Home() {
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+  const session = await verifySessionToken(token);
+  const isAdmin = Boolean(session.valid && session.role === 'admin');
+  const userRole = session.role || 'colaborador';
+  const userName = session.userName || (isAdmin ? 'Administrador Geral' : 'Gerente Operacional');
+
   return (
     <main className="relative flex min-h-screen flex-col items-center justify-center p-4 md:p-8 bg-surface-ground text-slate-100 overflow-hidden">
       {/* Blueprint Dot-Grid Sutil */}
@@ -14,18 +23,28 @@ export default function Home() {
         <div className="flex items-center justify-between pb-2 border-b border-surface-border">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-surface-card border border-surface-border text-xs font-semibold text-slate-300 shadow-xs">
             <span className="w-2 h-2 rounded-full bg-status-free animate-pulse" />
-            <span>Hum Vício ERP • Produção & Salão Sincronizados</span>
+            <span>Hum Vício ERP</span>
+            <span className="text-slate-500">•</span>
+            <span className={`flex items-center gap-1 ${isAdmin ? 'text-brand-primary font-bold' : 'text-amber-400 font-bold'}`}>
+              {isAdmin ? <ShieldCheck size={13} /> : <UserCheck size={13} />}
+              {isAdmin ? 'Administrador Geral' : 'Gerente Operacional'}
+            </span>
           </div>
 
-          <form action={logoutAction}>
-            <button
-              type="submit"
-              className="px-3 py-1.5 rounded-lg bg-surface-card hover:bg-surface-elevated border border-surface-border text-xs font-medium text-slate-400 hover:text-slate-100 flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
-              title="Encerrar turno ou trocar de perfil"
-            >
-              <LogOut size={13} /> Sair / Trocar Usuário
-            </button>
-          </form>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-400 hidden sm:inline">
+              Olá, <strong className="text-slate-200">{userName}</strong>
+            </span>
+            <form action={logoutAction}>
+              <button
+                type="submit"
+                className="px-3 py-1.5 rounded-lg bg-surface-card hover:bg-surface-elevated border border-surface-border text-xs font-medium text-slate-400 hover:text-slate-100 flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+                title="Encerrar turno ou trocar de perfil"
+              >
+                <LogOut size={13} /> Sair
+              </button>
+            </form>
+          </div>
         </div>
 
         {/* Título e Subtítulo */}
@@ -121,13 +140,16 @@ export default function Home() {
                 📊 DRE & Dashboard
               </Link>
               
-              <Link 
-                href="/admin/colaboradores" 
-                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
-                title="Gestão de Colaboradores e PINs"
-              >
-                👥 Colaboradores
-              </Link>
+              {/* Colaboradores: Exclusivo Administrador Geral */}
+              {isAdmin && (
+                <Link 
+                  href="/admin/colaboradores" 
+                  className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-brand-primary/30 rounded-lg p-2 truncate transition-colors"
+                  title="Gestão de Colaboradores e PINs (Exclusivo Master Admin)"
+                >
+                  👥 Colaboradores
+                </Link>
+              )}
 
               <Link 
                 href="/admin/mesas" 
@@ -201,13 +223,16 @@ export default function Home() {
                 📝 Checklists
               </Link>
 
-              <Link 
-                href="/admin/auditoria" 
-                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
-                title="Central de Auditoria e Segurança Antifraude"
-              >
-                🛡️ Auditoria Geral
-              </Link>
+              {/* Auditoria Geral: Exclusivo Administrador Geral */}
+              {isAdmin && (
+                <Link 
+                  href="/admin/auditoria" 
+                  className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-brand-primary/30 rounded-lg p-2 truncate transition-colors"
+                  title="Central de Auditoria e Segurança Antifraude (Exclusivo Master Admin)"
+                >
+                  🛡️ Auditoria Geral
+                </Link>
+              )}
             </div>
           </div>
 

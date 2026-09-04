@@ -50,7 +50,17 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  // Admin e Gerente têm acesso irrestrito a todos os módulos, Gestão Executiva e à Home (/)
+  // Regra Gerente: Acesso à gestão operacional, mas bloqueio de áreas sensíveis restritas ao Administrador Master
+  if (role === 'gerente') {
+    if (
+      pathname.startsWith('/admin/colaboradores') ||
+      pathname.startsWith('/admin/auditoria')
+    ) {
+      return NextResponse.redirect(new URL('/admin/dashboard', request.url));
+    }
+  }
+
+  // Administrador Master tem acesso irrestrito a todos os módulos
   return NextResponse.next();
 }
 

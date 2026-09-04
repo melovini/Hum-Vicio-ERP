@@ -49,3 +49,24 @@ export async function logoutAction(): Promise<void> {
   cookieStore.delete('hum_vicio_role');
   redirect('/login');
 }
+
+export async function getCurrentSessionAction(): Promise<{
+  role: import('@/lib/session').UserRole | null;
+  userName?: string;
+  collaboratorId?: string;
+}> {
+  try {
+    const { verifySessionToken } = await import('@/lib/session');
+    const cookieStore = await cookies();
+    const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
+    const session = await verifySessionToken(token);
+    if (session.valid && session.role) {
+      return {
+        role: session.role,
+        userName: session.userName,
+        collaboratorId: session.collaboratorId
+      };
+    }
+  } catch {}
+  return { role: null };
+}

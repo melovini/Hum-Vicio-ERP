@@ -64,6 +64,22 @@ export default function DashboardPage() {
     setShowFixedExpensesModal(false);
   };
 
+  // Identificação do Perfil do Usuário
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+
+  useEffect(() => {
+    async function loadUserRole() {
+      try {
+        const { getCurrentSessionAction } = await import('@/app/login/actions');
+        const res = await getCurrentSessionAction();
+        setCurrentUserRole(res.role);
+      } catch {}
+    }
+    loadUserRole();
+  }, []);
+
+  const isAdmin = currentUserRole === 'admin';
+
   // Modal de Exclusão de Caixa de Teste
   const [sessionToDelete, setSessionToDelete] = useState<CashSession | null>(null);
   const [adminPasswordInput, setAdminPasswordInput] = useState('');
@@ -434,6 +450,10 @@ export default function DashboardPage() {
   const handleConfirmDeleteSession = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sessionToDelete) return;
+    if (!isAdmin) {
+      setAdminActionError('Acesso negado: apenas o Administrador Geral pode excluir turnos de caixa.');
+      return;
+    }
     setIsDeleting(true);
     setAdminActionError('');
 
@@ -455,6 +475,10 @@ export default function DashboardPage() {
   };
 
   const handlePurgeTodayTestSales = async () => {
+    if (!isAdmin) {
+      alert('Acesso negado: apenas o Administrador Geral pode expurgar vendas de teste.');
+      return;
+    }
     const todayStr = getLocalDateString(new Date());
     const todaySales = sales.filter(s => getLocalDateString(s.date) === todayStr).map(s => s.id);
     if (todaySales.length === 0) {
@@ -550,22 +574,25 @@ export default function DashboardPage() {
               <span>Cruzamento por Horários</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setActiveTab('gerenciar_caixas')}
-              className={`py-2 px-3.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
-                activeTab === 'gerenciar_caixas'
-                  ? 'bg-surface-elevated text-white border border-surface-borderHover shadow-xs'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <ShieldAlert size={14} className="text-status-danger" />
-              <span>Caixas & Reset de Testes</span>
-            </button>
+            {/* Aba Exclusiva do Administrador Geral: Gestão e Reset de Caixas */}
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('gerenciar_caixas')}
+                className={`py-2 px-3.5 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  activeTab === 'gerenciar_caixas'
+                    ? 'bg-surface-elevated text-white border border-surface-borderHover shadow-xs'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <ShieldAlert size={14} className="text-status-danger" />
+                <span>Caixas & Reset de Testes</span>
+              </button>
+            )}
           </div>
 
           {/* Atalho Rápido para o Dono / Master Admin limpar testes do dia */}
-          {activeTab === 'gerenciar_caixas' && (
+          {isAdmin && activeTab === 'gerenciar_caixas' && (
             <button
               type="button"
               onClick={handlePurgeTodayTestSales}
@@ -1313,20 +1340,24 @@ export default function DashboardPage() {
                               ) : '—'}
                             </td>
 
-                            {/* Botão de Excluir */}
+                            {/* Botão de Excluir (Exclusivo Administrador Geral) */}
                             <td className="py-3 px-4 text-right">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setSessionToDelete(session);
-                                  setAdminPasswordInput('');
-                                  setAdminActionError('');
-                                }}
-                                className="py-1 px-2.5 bg-status-danger/10 hover:bg-status-danger/20 text-status-danger border border-status-danger/30 rounded-lg text-xs font-semibold cursor-pointer transition-colors inline-flex items-center gap-1"
-                                title="Excluir este caixa e expurgar suas vendas de teste"
-                              >
-                                <Trash2 size={13} /> Excluir
-                              </button>
+                              {isAdmin ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSessionToDelete(session);
+                                    setAdminPasswordInput('');
+                                    setAdminActionError('');
+                                  }}
+                                  className="py-1 px-2.5 bg-status-danger/10 hover:bg-status-danger/20 text-status-danger border border-status-danger/30 rounded-lg text-xs font-semibold cursor-pointer transition-colors inline-flex items-center gap-1"
+                                  title="Excluir este caixa e expurgar suas vendas de teste"
+                                >
+                                  <Trash2 size={13} /> Excluir
+                                </button>
+                              ) : (
+                                <span className="text-slate-600 text-xs">—</span>
+                              )}
                             </td>
                           </tr>
                         );
@@ -1340,8 +1371,8 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* MODAL DE CONFIRMAÇÃO DE EXCLUSÃO (MASTER ADMIN) */}
-        {sessionToDelete && (
+        {/* MODAL DE CONFIRMAÇÃO DE EXCLUSÃO (EXCLUSIVO MASTER ADMIN) */}
+        {isAdmin && sessionToDelete && (
           <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
             <div className="bg-surface-card border border-surface-border rounded-xl max-w-md w-full p-6 shadow-2xl space-y-4">
               <div className="flex items-center gap-3 text-status-danger pb-3 border-b border-surface-border">
