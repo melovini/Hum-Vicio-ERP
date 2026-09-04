@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useMemo, useRef } from 'react';
-import { useInventory, Sale, SaleItem, DelayReason, InventoryItem, ChecklistTask } from '@/lib/store';
+import { useInventory, Sale, SaleItem, DelayReason, InventoryItem, ChecklistTask, DEFAULT_INGREDIENT_STATIONS, KitchenStation } from '@/lib/store';
 import { 
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
@@ -14,7 +14,7 @@ import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
 
 export default function CozinhaKDSPage() {
   const { 
-    sales, items, updateStatus, isLoaded, 
+    sales, items, products, updateStatus, isLoaded, 
     checklist, toggleChecklistTask, signChecklist,
     targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus, updateBatchProductionStatus,
     acknowledgeOrderModification,
@@ -174,8 +174,7 @@ export default function CozinhaKDSPage() {
 
   // Classificação Inteligente de Itens por Estação (Chapa vs. Fritadeira & Pontos)
   const getItemStationDetails = (item: SaleItem) => {
-    const name = item.productName || '';
-    const nameLower = name.toLowerCase();
+    const rawName = item.productName || '';
     const notes = (item.notes || '').toLowerCase();
     const combo = (item.combo || '').toLowerCase();
     const qty = Number(item.quantity) || 1;
@@ -194,73 +193,127 @@ export default function CozinhaKDSPage() {
     let fryerChicken = 0;
     let fryerCheese = 0;
 
-    // 1. Identificar Empanados (Vão para a Fritadeira!)
-    const isChickenBreaded = nameLower.includes('frango empanado') || (nameLower.includes('argentina') && nameLower.includes('empanado'));
-    const isCheeseBreaded = nameLower.includes('israel') || nameLower.includes('queijo minas empanado') || nameLower.includes('queijo empanado');
-
-    // 2. Identificar Lanches
-    const isBurger = nameLower.includes('hamb') || nameLower.includes('burger') || 
-                     nameLower.includes('alemanha') || nameLower.includes('argentina') || 
-                     nameLower.includes('brasil') || nameLower.includes('estados unidos') || 
-                     nameLower.includes('eua') || nameLower.includes('méxico') || 
-                     nameLower.includes('mexico') || nameLower.includes('wakanda') || 
-                     nameLower.includes('kids') || nameLower.includes('smash');
-
-    if (isBurger) {
-      isDouble = nameLower.includes('duplo');
-      const multiplier = isDouble ? 2 : 1;
-
-      if (isChickenBreaded) {
-        fryerChicken += qty * multiplier;
-      } else if (isCheeseBreaded) {
-        fryerCheese += qty * multiplier;
-      } else {
-        chapaPatties += qty * multiplier;
-      }
-    }
-
-    // 3. Adicionais de Carne ou Empanados
-    if (Array.isArray(item.additionals)) {
-      item.additionals.forEach(add => {
-        const aLower = (add.name || '').toLowerCase();
-        if (aLower.includes('frango empanado')) {
-          fryerChicken += qty;
-        } else if (aLower.includes('queijo') && aLower.includes('empanado')) {
-          fryerCheese += qty;
-        } else if (aLower.includes('hamb') || aLower.includes('bovino') || aLower.includes('costela') || aLower.includes('linguiça') || aLower.includes('linguica') || aLower.includes('carne')) {
-          chapaPatties += qty;
-        }
+    // 1. Extrair adicionais embutidos no nome entre colchetes "+ [Nome Insumo]"
+    const additionalsFromName: string[] = [];
+    const addMatches = rawName.match(/\+\s*\[(.*?)\]/g);
+    if (addMatches) {
+      addMatches.forEach(m => {
+        const addClean = m.replace(/^\+\s*\[/, '').replace(/\]$/, '').trim();
+        if (addClean) additionalsFromName.push(addClean);
       });
     }
 
-    // Adicionais embutidos no nome (ex: '+ [Hambúrguer Bovino 180g]')
-    if (nameLower.includes('[hambúrguer bovino') || nameLower.includes('[hambúrguer costela') || nameLower.includes('[hambúrguer linguiça') || nameLower.includes('[hamburguer')) {
-      chapaPatties += qty;
-    }
-    if (nameLower.includes('[hamb. frango empanado') || nameLower.includes('[frango empanado')) {
-      fryerChicken += qty;
-    }
-    if (nameLower.includes('[hamb. queijo minas empanado') || nameLower.includes('[queijo minas empanado')) {
-      fryerCheese += qty;
+    // Nome limpo do produto base (sem adicionais, combos ou observações no título)
+    const baseName = rawName
+      .replace(/\+\s*\[.*?\]/g, '')
+      .replace(/\s*\(Combo.*?\)/i, '')
+      .replace(/\s*\*Obs:.*?\*/i, '')
+      .trim();
+    const baseLower = baseName.toLowerCase();
+    isDouble = baseLower.includes('duplo');
+
+    // 2. Verificar se o produto base possui receita cadastrada
+    const matchedProduct = products.find(p => 
+      (item.productId && p.id === item.productId) || 
+      p.name.toLowerCase() === baseLower
+    );
+
+    let hasResolvedBaseFromRecipe = false;
+    if (matchedProduct && Array.isArray(matchedProduct.recipe) && matchedProduct.recipe.length > 0) {
+      let recipeHasHotStation = false;
+      matchedProduct.recipe.forEach(r => {
+        const ing = items.find(i => i.id === r.ingredientId);
+        const station = ing?.station || (ing?.name ? DEFAULT_INGREDIENT_STATIONS[ing.name.toLowerCase().trim()] : undefined);
+        
+        if (station === 'chapa') {
+          chapaPatties += r.quantity * qty;
+          recipeHasHotStation = true;
+        } else if (station === 'fritadeira_frango') {
+          fryerChicken += r.quantity * qty;
+          recipeHasHotStation = true;
+        } else if (station === 'fritadeira_queijo') {
+          fryerCheese += r.quantity * qty;
+          recipeHasHotStation = true;
+        } else if (station === 'fritadeira_batata') {
+          if (matchedProduct.category === 'combo') {
+            fryerBatatasCombo += qty;
+          } else {
+            fryerBatatasAvulsa += qty;
+            fryerBatataName = matchedProduct.name;
+          }
+          recipeHasHotStation = true;
+        } else if (station === 'fritadeira_onion') {
+          if (matchedProduct.category === 'combo') {
+            fryerOnionsCombo += qty;
+          } else {
+            fryerOnionsAvulsa += qty;
+          }
+          recipeHasHotStation = true;
+        }
+      });
+
+      if (recipeHasHotStation) {
+        hasResolvedBaseFromRecipe = true;
+      }
     }
 
-    // 4. Batatas & Onions (Combos vs. Avulsas)
-    const isComboBatata = combo.includes('batata') || nameLower.includes('combo batata') || nameLower.includes('batata e bebida') || nameLower.includes('batata + bebida');
-    const isComboOnion = combo.includes('onion') || combo.includes('anel') || combo.includes('cebola') || nameLower.includes('combo onion') || nameLower.includes('combo anéis') || nameLower.includes('anéis de cebola + bebida');
+    // 3. Fallback inteligente de alta precisão para o produto base (caso não tenha receita cadastrada)
+    if (!hasResolvedBaseFromRecipe) {
+      const multiplier = (isDouble ? 2 : 1) * qty;
+
+      if (baseLower.includes('estados unidos') || baseLower === 'eua' || baseLower.includes('eua duplo') || baseLower.includes('frango empanado')) {
+        fryerChicken += multiplier;
+      } else if (baseLower.includes('argentina') && baseLower.includes('empanado')) {
+        // Argentina Empanado: 1x Costela 180g na Chapa + 1x Queijo Minas Empanado na Fritadeira
+        chapaPatties += 1 * qty;
+        fryerCheese += 1 * qty;
+      } else if (baseLower.includes('israel')) {
+        fryerCheese += multiplier;
+      } else if (baseLower.includes('argentina') || baseLower.includes('alemanha') || baseLower.includes('brasil') || 
+                 baseLower.includes('méxico') || baseLower.includes('mexico') || baseLower.includes('wakanda') || 
+                 baseLower.includes('kids') || baseLower.includes('hamb') || baseLower.includes('burger')) {
+        chapaPatties += multiplier;
+      } else if (baseLower.includes('batata') || baseLower.includes('fritas')) {
+        fryerBatatasAvulsa += qty;
+        fryerBatataName = baseName;
+      } else if (baseLower.includes('onion') || baseLower.includes('anel') || baseLower.includes('anéis') || baseLower.includes('aneis')) {
+        fryerOnionsAvulsa += qty;
+      }
+    }
+
+    // 4. Adicionais de Carne ou Empanados (DESACOPLADOS DO LANCHE BASE)
+    const allAdditionals: string[] = [
+      ...(item.additionals || []).map(a => a.name),
+      ...additionalsFromName
+    ];
+
+    allAdditionals.forEach(addName => {
+      const aLower = addName.toLowerCase();
+      const matchedIng = items.find(i => i.name.toLowerCase() === aLower || aLower.includes(i.name.toLowerCase()));
+      const addStation = matchedIng?.station || DEFAULT_INGREDIENT_STATIONS[aLower];
+
+      if (addStation === 'fritadeira_frango' || aLower.includes('frango empanado')) {
+        fryerChicken += qty;
+      } else if (addStation === 'fritadeira_queijo' || (aLower.includes('queijo') && aLower.includes('empanado'))) {
+        fryerCheese += qty;
+      } else if (addStation === 'chapa' || aLower.includes('hamb') || aLower.includes('bovino') || aLower.includes('costela') || aLower.includes('linguiça') || aLower.includes('linguica') || aLower.includes('carne')) {
+        chapaPatties += qty;
+      } else if (addStation === 'fritadeira_batata' || aLower.includes('batata')) {
+        fryerBatatasAvulsa += qty;
+      } else if (addStation === 'fritadeira_onion' || aLower.includes('onion') || aLower.includes('anel') || aLower.includes('anéis')) {
+        fryerOnionsAvulsa += qty;
+      }
+    });
+
+    // 5. Combos (Batatas vs. Onions)
+    const isComboBatata = combo.includes('batata') || rawName.toLowerCase().includes('combo batata') || rawName.toLowerCase().includes('batata e bebida') || rawName.toLowerCase().includes('batata + bebida');
+    const isComboOnion = combo.includes('onion') || combo.includes('anel') || combo.includes('cebola') || rawName.toLowerCase().includes('combo onion') || rawName.toLowerCase().includes('combo anéis') || rawName.toLowerCase().includes('anéis de cebola + bebida');
 
     if (isComboBatata) fryerBatatasCombo += qty;
     if (isComboOnion) fryerOnionsCombo += qty;
 
-    if (!isBurger && (nameLower.includes('batata') || nameLower.includes('fritas'))) {
-      fryerBatatasAvulsa += qty;
-      fryerBatataName = name;
-    }
-    if (!isBurger && (nameLower.includes('anel') || nameLower.includes('anéis') || nameLower.includes('onion'))) {
-      fryerOnionsAvulsa += qty;
-    }
-
-    // 5. Ponto da Carne
-    const combinedNotes = (name + ' ' + notes).toLowerCase();
+    // 6. Ponto da Carne
+    const combinedNotes = (rawName + ' ' + notes).toLowerCase();
     if (combinedNotes.includes('mal passado') || combinedNotes.includes('mal-passado') || combinedNotes.includes('malpassado')) {
       meatPoint = 'Mal Passado';
     } else if (combinedNotes.includes('ao ponto p/ bem') || combinedNotes.includes('ao ponto pra bem') || combinedNotes.includes('ponto mais') || combinedNotes.includes('p/ bem')) {
@@ -311,7 +364,11 @@ export default function CozinhaKDSPage() {
         // Estação Chapa
         totalChapaPatties += details.chapaPatties;
         if (details.chapaPatties > 0) {
-          const cleanName = item.productName.replace(/\s*\(Combo.*?\)/i, '').replace(/\s*\+.*$/, '').trim();
+          const cleanName = item.productName
+            .replace(/\+\s*\[.*?\]/g, '')
+            .replace(/\s*\(Combo.*?\)/i, '')
+            .replace(/\s*\*Obs:.*?\*/i, '')
+            .trim();
           burgerCounts[cleanName] = (burgerCounts[cleanName] || 0) + item.quantity;
         }
         if (details.meatPoint) {
@@ -362,7 +419,7 @@ export default function CozinhaKDSPage() {
         totalCheeseBreaded
       }
     };
-  }, [productionOrders]);
+  }, [productionOrders, products, items]);
 
   // 2. Pedidos em Espera ou Agendados (Previsão de Demanda - Apenas do Turno de Caixa Ativo)
   const queueOrders = useMemo(() => {
@@ -1041,7 +1098,7 @@ export default function CozinhaKDSPage() {
                               <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
                                 {details.chapaPatties > 0 && (
                                   <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] font-black rounded-lg flex items-center gap-1">
-                                    🔥 CHAPA: {details.chapaPatties}x {details.isDouble ? 'Carnes (Duplo)' : 'Carne'}
+                                    🔥 CHAPA: {details.chapaPatties}x {details.chapaPatties > 1 ? (details.isDouble ? 'Carnes (Duplo)' : 'Carnes') : 'Carne'}
                                   </span>
                                 )}
                                 {details.meatPoint && (

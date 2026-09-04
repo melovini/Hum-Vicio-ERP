@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
-import { useInventory, InventoryItem } from '@/lib/store';
-import { ArrowLeft, Database, Plus, Trash2, Edit2, Check, X, AlertTriangle, ShieldAlert } from 'lucide-react';
+import { useInventory, InventoryItem, KitchenStation } from '@/lib/store';
+import { ArrowLeft, Database, Plus, Trash2, Edit2, Check, X, AlertTriangle, ShieldAlert, Flame } from 'lucide-react';
 import Link from 'next/link';
 
 export default function GestaoInsumosPage() {
@@ -19,11 +19,13 @@ export default function GestaoInsumosPage() {
   const [cost, setCost] = useState('');
   const [stock, setStock] = useState('');
   const [minStock, setMinStock] = useState('');
+  const [station, setStation] = useState<KitchenStation>('nenhuma');
 
   if (!isLoaded) return null;
 
   const resetForm = () => {
     setName(''); setCategory('Geral'); setUnit('kg'); setCost(''); setStock(''); setMinStock('');
+    setStation('nenhuma');
     setIsAdding(false); setEditingId(null);
   };
 
@@ -37,7 +39,8 @@ export default function GestaoInsumosPage() {
         name, category, unit, 
         costPerUnit: Number(cost), 
         currentStock: Number(stock),
-        minStock: minStockNum
+        minStock: minStockNum,
+        station
       });
     } else {
       addInventoryItem({
@@ -45,7 +48,8 @@ export default function GestaoInsumosPage() {
         costPerUnit: Number(cost), 
         currentStock: Number(stock),
         status: 'ok',
-        minStock: minStockNum
+        minStock: minStockNum,
+        station
       });
     }
     resetForm();
@@ -58,6 +62,7 @@ export default function GestaoInsumosPage() {
     setCost(item.costPerUnit.toString());
     setStock(item.currentStock.toString());
     setMinStock(item.minStock !== undefined ? item.minStock.toString() : '');
+    setStation(item.station || 'nenhuma');
     setEditingId(item.id);
     setIsAdding(true);
   };
@@ -142,7 +147,7 @@ export default function GestaoInsumosPage() {
               {editingId ? 'Editar Insumo' : 'Cadastrar Novo Insumo'}
             </h2>
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-              <div className="md:col-span-4">
+              <div className="md:col-span-3">
                 <label className="block text-sm text-slate-400 font-bold mb-2">Nome do Insumo *</label>
                 <input type="text" value={name} onChange={e=>setName(e.target.value)} placeholder="Ex: Queijo Cheddar Fatiado" className="w-full bg-slate-950/50 border border-slate-700/50 rounded-2xl p-4 text-white outline-none focus:border-blue-500" />
               </div>
@@ -150,14 +155,31 @@ export default function GestaoInsumosPage() {
                 <label className="block text-sm text-slate-400 font-bold mb-2">Categoria</label>
                 <input type="text" value={category} onChange={e=>setCategory(e.target.value)} placeholder="Ex: Queijos" className="w-full bg-slate-950/50 border border-slate-700/50 rounded-2xl p-4 text-white outline-none focus:border-blue-500" />
               </div>
-              <div className="md:col-span-2">
+              <div className="md:col-span-3">
+                <label className="block text-sm text-amber-400 font-bold mb-2 flex items-center gap-1.5">
+                  <Flame size={16} /> Estação Cozinha (KDS)
+                </label>
+                <select 
+                  value={station} 
+                  onChange={e=>setStation(e.target.value as KitchenStation)} 
+                  className="w-full bg-slate-950/50 border border-amber-500/40 rounded-2xl p-4 text-white outline-none focus:border-amber-400"
+                >
+                  <option value="nenhuma">🍽️ Montagem / Nenhuma</option>
+                  <option value="chapa">🔥 Chapa (Hambúrgueres / Carnes)</option>
+                  <option value="fritadeira_frango">🍗 Fritadeira - Frango Empanado</option>
+                  <option value="fritadeira_queijo">🧀 Fritadeira - Queijo Empanado</option>
+                  <option value="fritadeira_batata">🍟 Fritadeira - Batatas</option>
+                  <option value="fritadeira_onion">🧅 Fritadeira - Anéis de Cebola</option>
+                </select>
+              </div>
+              <div className="md:col-span-1">
                 <label className="block text-sm text-slate-400 font-bold mb-2">Unidade</label>
                 <select value={unit} onChange={e=>setUnit(e.target.value)} className="w-full bg-slate-950/50 border border-slate-700/50 rounded-2xl p-4 text-white outline-none focus:border-blue-500 appearance-none">
-                  <option value="kg">Quilo (kg)</option>
-                  <option value="g">Grama (g)</option>
-                  <option value="un">Unidade (un)</option>
-                  <option value="L">Litro (L)</option>
-                  <option value="ml">Mililitro (ml)</option>
+                  <option value="kg">kg</option>
+                  <option value="g">g</option>
+                  <option value="un">un</option>
+                  <option value="L">L</option>
+                  <option value="ml">ml</option>
                 </select>
               </div>
               <div className="md:col-span-1">
@@ -168,18 +190,18 @@ export default function GestaoInsumosPage() {
                 <label className="block text-sm text-slate-400 font-bold mb-2">Estoque</label>
                 <input type="number" step="0.01" value={stock} onChange={e=>setStock(e.target.value)} placeholder="0" className="w-full bg-slate-950/50 border border-slate-700/50 rounded-2xl p-4 text-white outline-none focus:border-blue-500" />
               </div>
-              <div className="md:col-span-2">
-                <label className="block text-sm text-amber-400 font-bold mb-2 flex items-center gap-1">
-                  ⚠️ Ponto Reposição
+              <div className="md:col-span-1">
+                <label className="block text-sm text-amber-400 font-bold mb-2 flex items-center gap-1" title="Ponto de Reposição">
+                  ⚠️ Mín.
                 </label>
                 <input 
                   type="number" 
                   step="0.01" 
                   value={minStock} 
                   onChange={e=>setMinStock(e.target.value)} 
-                  placeholder="Estoque mín." 
+                  placeholder="Mín." 
                   className="w-full bg-slate-950/50 border border-amber-500/40 rounded-2xl p-4 text-white outline-none focus:border-amber-400" 
-                  title="Alerta automático quando o estoque atingir ou for menor que este nível"
+                  title="Alerta automático quando o estoque atingir este nível"
                 />
               </div>
             </div>
@@ -202,6 +224,7 @@ export default function GestaoInsumosPage() {
                 <thead>
                   <tr className="bg-slate-900/80 border-b border-slate-800 text-xs text-slate-400 uppercase tracking-wider">
                     <th className="p-4 font-bold">Nome</th>
+                    <th className="p-4 font-bold">Estação (KDS)</th>
                     <th className="p-4 font-bold">Custo Unitário</th>
                     <th className="p-4 font-bold">Estoque Atual</th>
                     <th className="p-4 font-bold">Ponto Reposição</th>
@@ -224,6 +247,38 @@ export default function GestaoInsumosPage() {
                               </span>
                             )}
                           </div>
+                        </td>
+                        <td className="p-4">
+                          {item.station === 'chapa' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black bg-amber-500/20 text-amber-300 border border-amber-500/40">
+                              🔥 Chapa
+                            </span>
+                          )}
+                          {item.station === 'fritadeira_frango' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black bg-orange-500/20 text-orange-300 border border-orange-500/40">
+                              🍗 Frango
+                            </span>
+                          )}
+                          {item.station === 'fritadeira_queijo' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black bg-yellow-500/20 text-yellow-300 border border-yellow-500/40">
+                              🧀 Queijo Empanado
+                            </span>
+                          )}
+                          {item.station === 'fritadeira_batata' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black bg-yellow-500/20 text-yellow-300 border border-yellow-500/40">
+                              🍟 Batata
+                            </span>
+                          )}
+                          {item.station === 'fritadeira_onion' && (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-black bg-purple-500/20 text-purple-300 border border-purple-500/40">
+                              🧅 Onion
+                            </span>
+                          )}
+                          {(!item.station || item.station === 'nenhuma') && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-medium bg-slate-800/60 text-slate-400 border border-slate-700/50">
+                              🍽️ Montagem
+                            </span>
+                          )}
                         </td>
                         <td className="p-4 font-mono text-emerald-400">R$ {item.costPerUnit.toFixed(2)} / {item.unit}</td>
                         <td className="p-4 font-mono">

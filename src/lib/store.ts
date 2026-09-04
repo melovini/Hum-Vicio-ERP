@@ -6,6 +6,14 @@ import { validateMasterPassword } from '@/lib/collaborators';
 // === INSUMOS (Inventário) ===
 export type StockStatus = 'ok' | 'acabando' | 'zerado';
 
+export type KitchenStation = 
+  | 'nenhuma' 
+  | 'chapa' 
+  | 'fritadeira_frango' 
+  | 'fritadeira_queijo' 
+  | 'fritadeira_batata' 
+  | 'fritadeira_onion';
+
 export interface InventoryItem {
   id: string;
   name: string;
@@ -16,6 +24,7 @@ export interface InventoryItem {
   minStock?: number; // Ponto de Reposição / Estoque Mínimo
   status: StockStatus;
   isActive?: boolean;
+  station?: KitchenStation; // Estação de Preparo (Chapa vs. Fritadeira vs. Nenhuma)
 }
 
 // === PRODUTOS (Lanches/Combos) ===
@@ -327,6 +336,70 @@ function saveMinStockItem(id: string, minStock: number) {
   } catch {}
 }
 
+export const DEFAULT_INGREDIENT_STATIONS: Record<string, KitchenStation> = {
+  // Carnes para Chapa
+  'hambúrguer bovino 180g': 'chapa',
+  'hamburguer bovino 180g': 'chapa',
+  'carne bovina (blend)': 'chapa',
+  'carne bovina': 'chapa',
+  'hambúrguer recheado costela 180g': 'chapa',
+  'hamburguer recheado costela 180g': 'chapa',
+  'hambúrguer de linguiça 150g': 'chapa',
+  'hamburguer de linguiça 150g': 'chapa',
+  'hamburguer de linguica 150g': 'chapa',
+  'hamb. bovino recheado mozarela 180g': 'chapa',
+  'hamb bovino recheado mozarela 180g': 'chapa',
+
+  // Fritadeira - Frango Empanado
+  'hamb. frango empanado c/ cream cheese 150g': 'fritadeira_frango',
+  'hamb frango empanado c/ cream cheese 150g': 'fritadeira_frango',
+  'frango empanado': 'fritadeira_frango',
+
+  // Fritadeira - Queijo Empanado
+  'hamb. queijo minas empanado 120g': 'fritadeira_queijo',
+  'hamb queijo minas empanado 120g': 'fritadeira_queijo',
+  'queijo minas empanado': 'fritadeira_queijo',
+  'queijo empanado': 'fritadeira_queijo',
+
+  // Fritadeira - Batatas
+  'batata palito congelada': 'fritadeira_batata',
+  'batata frita palito': 'fritadeira_batata',
+  'batata congelada': 'fritadeira_batata',
+
+  // Fritadeira - Onions
+  'anéis de cebola congelados': 'fritadeira_onion',
+  'aneis de cebola congelados': 'fritadeira_onion',
+  'anéis de cebola': 'fritadeira_onion',
+  'aneis de cebola': 'fritadeira_onion',
+};
+
+export function getDefaultStationForIngredient(name: string): KitchenStation {
+  const norm = (name || '').toLowerCase().trim();
+  if (DEFAULT_INGREDIENT_STATIONS[norm]) return DEFAULT_INGREDIENT_STATIONS[norm];
+  for (const [key, station] of Object.entries(DEFAULT_INGREDIENT_STATIONS)) {
+    if (norm.includes(key) || key.includes(norm)) return station;
+  }
+  return 'nenhuma';
+}
+
+export function getSavedStationMap(): Record<string, KitchenStation> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem('hum_vicio_ingredient_stations_map') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+export function saveStationItem(id: string, station: KitchenStation) {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedStationMap();
+    map[id] = station;
+    localStorage.setItem('hum_vicio_ingredient_stations_map', JSON.stringify(map));
+  } catch {}
+}
+
 function getSavedCreditSalesMap(): Record<string, {
   collaboratorId?: string;
   collaboratorName?: string;
@@ -479,14 +552,19 @@ export function useInventory() {
       const { data: invData } = await supabase.from('inventory').select('*');
       if (invData) {
         const minStockMap = getSavedMinStockMap();
-        setItems(invData.map(i => ({
-          id: i.id, name: i.name, category: i.category, unit: i.unit, 
-          costPerUnit: Number(i.cost_per_unit) || 0, 
-          currentStock: Number(i.current_stock) || 0, 
-          minStock: i.min_stock !== undefined && i.min_stock !== null ? Number(i.min_stock) : minStockMap[i.id],
-          status: i.status,
-          isActive: i.is_active !== undefined ? i.is_active : true
-        })));
+        const stationMap = getSavedStationMap();
+        setItems(invData.map(i => {
+          const customStation = (i.station || stationMap[i.id] || getDefaultStationForIngredient(i.name)) as KitchenStation;
+          return {
+            id: i.id, name: i.name, category: i.category, unit: i.unit, 
+            costPerUnit: Number(i.cost_per_unit) || 0, 
+            currentStock: Number(i.current_stock) || 0, 
+            minStock: i.min_stock !== undefined && i.min_stock !== null ? Number(i.min_stock) : minStockMap[i.id],
+            status: i.status,
+            isActive: i.is_active !== undefined ? i.is_active : true,
+            station: customStation
+          };
+        }));
       }
 
       // 2. Fetch Products & Recipes
@@ -1014,7 +1092,8 @@ export function useInventory() {
         const res = await supabase.from('inventory').insert({
           name: item.name, category: item.category, unit: item.unit, 
           cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status,
-          min_stock: item.minStock
+          min_stock: item.minStock,
+          station: item.station || getDefaultStationForIngredient(item.name)
         }).select().single();
         data = res.data;
         error = res.error;
@@ -1037,7 +1116,10 @@ export function useInventory() {
       if (item.minStock !== undefined) {
         saveMinStockItem(newId, item.minStock);
       }
-      setItems([...items, { ...item, id: newId }]);
+      const finalStation = item.station || getDefaultStationForIngredient(item.name);
+      saveStationItem(newId, finalStation);
+
+      setItems([...items, { ...item, id: newId, station: finalStation }]);
     } catch (err: any) {
       alert(`Erro inesperado: ${err.message}`);
     }
@@ -1055,11 +1137,16 @@ export function useInventory() {
       saveMinStockItem(id, updates.minStock);
       dbUpdates.min_stock = updates.minStock;
     }
+    if (updates.station !== undefined) {
+      saveStationItem(id, updates.station);
+      dbUpdates.station = updates.station;
+    }
 
     try {
       await supabase.from('inventory').update(dbUpdates).eq('id', id);
     } catch {
-      // Fallback sem min_stock caso coluna não exista no Postgres
+      // Fallback sem station ou min_stock caso coluna não exista no Postgres
+      delete dbUpdates.station;
       delete dbUpdates.min_stock;
       try {
         await supabase.from('inventory').update(dbUpdates).eq('id', id);
