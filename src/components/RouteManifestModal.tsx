@@ -60,7 +60,7 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
       text += 'ITENS:\n';
       sale.items.forEach(item => {
         text += `  • ${item.quantity}x ${item.productName}\n`;
-        if (item.notes) text += `    OBS: ${item.notes}\n`;
+        if (item.notes) text += `    *** OBS: ${item.notes.toUpperCase()} ***\n`;
       });
       text += `VALOR TOTAL: R$ ${sale.total.toFixed(2)}\n`;
     });
@@ -91,7 +91,7 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
     routeSales.forEach((sale, idx) => {
       text += `📍 *Entrega ${idx + 1} - Comanda #${sale.id.slice(0, 6).toUpperCase()}*\n`;
       text += `👤 *Cliente:* ${sale.customerName || 'Cliente'}\n`;
-      text += `🍔 *Itens:* ${sale.items.map(i => `${i.quantity}x ${i.productName}${i.notes ? ` (${i.notes})` : ''}`).join(', ')}\n`;
+      text += `🍔 *Itens:* ${sale.items.map(i => `${i.quantity}x ${i.productName}${i.notes ? ` (OBS: ${i.notes.toUpperCase()})` : ''}`).join(', ')}\n`;
       text += `💰 *Valor:* R$ ${sale.total.toFixed(2)}\n`;
       if (sale.paymentMethod === 'dinheiro') {
         text += `💵 *Cobrança:* RECEBER R$ ${sale.total.toFixed(2)} EM DINHEIRO\n`;
@@ -233,7 +233,7 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
                     {sale.items.map((i, itemIdx) => (
                       <div key={itemIdx} className="pl-1">
                         • {i.quantity}x {i.productName}
-                        {i.notes && <span className="text-[10px] font-normal italic block pl-2 text-zinc-600">Obs: {i.notes}</span>}
+                        {i.notes && <span className="text-[10px] font-black uppercase block pl-2 text-black mt-0.5">*** OBS: {i.notes.toUpperCase()} ***</span>}
                       </div>
                     ))}
                   </div>

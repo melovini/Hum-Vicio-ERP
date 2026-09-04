@@ -655,7 +655,7 @@ export function useInventory() {
                 quantity: Number(i.quantity) || 0, 
                 unitPrice: Number(i.unit_price) || 0,
                 combo: i.combo || undefined,
-                notes: i.notes || undefined,
+                notes: i.notes ? i.notes.trim().toUpperCase() : undefined,
                 additionals: Array.isArray(i.additionals) ? i.additionals : undefined
               }))
             };
@@ -1049,7 +1049,7 @@ export function useInventory() {
                   quantity: Number(i.quantity) || 0,
                   unitPrice: Number(i.unit_price) || 0,
                   combo: i.combo || undefined,
-                  notes: i.notes || undefined,
+                  notes: i.notes ? i.notes.trim().toUpperCase() : undefined,
                   additionals: Array.isArray(i.additionals) ? i.additionals : undefined
                 }))
               };
@@ -1886,7 +1886,14 @@ export function useInventory() {
     return { success: true };
   };
 
-  const addSale = async (sale: Omit<Sale, 'id' | 'date' | 'status'>) => {
+  const addSale = async (rawSale: Omit<Sale, 'id' | 'date' | 'status'>) => {
+    // Normalizar observações para caixa alta em todos os itens para alerta e visualização da cozinha
+    const normalizedItems = (rawSale.items || []).map(i => ({
+      ...i,
+      notes: i.notes?.trim() ? i.notes.trim().toUpperCase() : undefined
+    }));
+    const sale = { ...rawSale, items: normalizedItems };
+
     // Por padrão operacional da hamburgueria, pedidos entram em espera para montagem de rotas de entrega
     const initialProductionStatus = sale.productionStatus || 'em_espera';
     const initialProductionStarted = sale.productionStartedAt || new Date().toISOString();
@@ -2429,7 +2436,10 @@ export function useInventory() {
     if (!existingSale) return { success: false };
 
     const oldItems: SaleItem[] = existingSale.originalItemsSnapshot || existingSale.items || [];
-    const newItems: SaleItem[] = updatedSaleData.items || [];
+    const newItems: SaleItem[] = (updatedSaleData.items || []).map(i => ({
+      ...i,
+      notes: i.notes?.trim() ? i.notes.trim().toUpperCase() : undefined
+    }));
 
     // 1. Calcular Adicionados
     const added: SaleItem[] = [];
@@ -2475,6 +2485,7 @@ export function useInventory() {
     const finalizedSale: Sale = {
       ...existingSale,
       ...updatedSaleData,
+      items: newItems,
       orderDiff,
       originalItemsSnapshot: newItems.map(i => ({ ...i })),
       isModifiedInKitchen: isCurrentlyCooking && hasDiff,

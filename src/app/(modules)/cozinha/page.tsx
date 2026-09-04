@@ -455,7 +455,7 @@ export default function CozinhaKDSPage() {
         });
 
         if (item.notes) {
-          notesSummary.push(`[${o.customerName || 'Cliente'}]: ${item.notes}`);
+          notesSummary.push(`[${(o.customerName || 'Cliente').toUpperCase()}]: ${item.notes.toUpperCase()}`);
         }
       });
     });
@@ -482,7 +482,7 @@ export default function CozinhaKDSPage() {
   const handleConfirmDelayAndComplete = async () => {
     if (!selectedDelayedSale) return;
     setIsSubmittingDelay(true);
-    await completeOrderProduction(selectedDelayedSale.id, selectedReason, delayNotes.trim() || undefined);
+    await completeOrderProduction(selectedDelayedSale.id, selectedReason, delayNotes.trim() ? delayNotes.trim().toUpperCase() : undefined);
     setIsSubmittingDelay(false);
     setSelectedDelayedSale(null);
   };
@@ -1151,9 +1151,9 @@ export default function CozinhaKDSPage() {
                               )}
 
                               {item.notes && (
-                                <div className="mt-1 p-1.5 bg-amber-500/20 border border-amber-500/40 rounded-xl text-xs font-black text-amber-200 flex items-center gap-1.5 uppercase">
-                                  <AlertOctagon size={14} className="text-amber-400 shrink-0" />
-                                  <span>OBS: {item.notes}</span>
+                                <div className="mt-1.5 p-2 bg-amber-500/25 border-2 border-amber-500/60 rounded-xl text-xs font-black text-amber-200 flex items-center gap-2 uppercase tracking-wide shadow-sm">
+                                  <AlertOctagon size={16} className="text-amber-400 shrink-0 animate-pulse" />
+                                  <span>*** OBS: {item.notes.toUpperCase()} ***</span>
                                 </div>
                               )}
                             </div>
@@ -1333,7 +1333,12 @@ export default function CozinhaKDSPage() {
                               {item.additionals && item.additionals.length > 0 && (
                                 <p className="text-[10px] text-emerald-300">+ Adicionais: {item.additionals.map(a => a.name).join(', ')}</p>
                               )}
-                              {item.notes && <p className="text-[10px] text-amber-200 italic">Obs: {item.notes}</p>}
+                              {item.notes && (
+                                <div className="mt-1 p-1 bg-amber-500/25 border border-amber-500/50 rounded-lg text-[10px] font-black text-amber-200 flex items-center gap-1 uppercase tracking-wide">
+                                  <AlertOctagon size={12} className="text-amber-400 shrink-0" />
+                                  <span>*** OBS: {item.notes.toUpperCase()} ***</span>
+                                </div>
+                              )}
                             </div>
                           ))}
                         </div>
@@ -1651,10 +1656,10 @@ export default function CozinhaKDSPage() {
               </label>
               <input
                 type="text"
-                placeholder="Ex: Refeito hambúrguer por queima do queijo, etc."
+                placeholder="Ex: REFEITO HAMBÚRGUER POR QUEIMA DO QUEIJO, ETC."
                 value={delayNotes}
-                onChange={e => setDelayNotes(e.target.value)}
-                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-xs outline-none focus:border-red-500"
+                onChange={e => setDelayNotes(e.target.value.toUpperCase())}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl p-3 text-white text-xs outline-none focus:border-red-500 uppercase font-bold placeholder:normal-case placeholder:font-normal"
               />
             </div>
 

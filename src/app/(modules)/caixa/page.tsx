@@ -545,7 +545,7 @@ export default function CaixaPage() {
       combo: comboName,
       comboPrice,
       additionals: additionalsList,
-      notes: burgerNotes.trim() || undefined
+      notes: burgerNotes.trim() ? burgerNotes.trim().toUpperCase() : undefined
     };
 
     setCart([...cart, newItem]);
@@ -697,6 +697,12 @@ export default function CaixaPage() {
       return;
     }
 
+    // Normalizar observações de todos os itens do carrinho para CAIXA ALTA (destaque de cozinha)
+    const normalizedCart = cart.map(i => ({
+      ...i,
+      notes: i.notes?.trim() ? i.notes.trim().toUpperCase() : undefined
+    }));
+
     // Fluxo de Atualização de Pedido Reaberto
     if (editingReopenedSale) {
       updateReopenedOrder(editingReopenedSale.id, {
@@ -709,7 +715,7 @@ export default function CaixaPage() {
         storeCouponSubsidy: storeCouponSubsidyAmount,
         total: cartTotal,
         paymentMethod: saleMethod,
-        items: cart,
+        items: normalizedCart,
         productionStatus: orderProductionStatus || editingReopenedSale.productionStatus || 'em_espera'
       }).then(res => {
         if (res.success && res.sale) {
@@ -791,7 +797,7 @@ export default function CaixaPage() {
       storeCouponSubsidy: storeCouponSubsidyAmount,
       total: cartTotal,
       paymentMethod: saleMethod,
-      items: cart,
+      items: normalizedCart,
       productionStatus: orderProductionStatus,
       targetPrepMinutes,
       collaboratorId: saleMethod === 'consumo_funcionario' ? selectedCollaboratorId : undefined,
@@ -963,12 +969,15 @@ export default function CaixaPage() {
     setCancelError('');
   };
 
-  // Atalho rápido de observações
+  // Atalho rápido de observações (sempre em CAIXA ALTA para alertar a cozinha)
   const toggleQuickNote = (noteText: string) => {
-    if (burgerNotes.includes(noteText)) {
-      setBurgerNotes(burgerNotes.replace(noteText, '').replace(/,\s*,/g, ',').trim());
+    const upperText = noteText.toUpperCase();
+    const currentUpper = burgerNotes.toUpperCase();
+    if (currentUpper.includes(upperText)) {
+      const regex = new RegExp(`(?:^|,\\s*)${upperText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'gi');
+      setBurgerNotes(currentUpper.replace(regex, '').replace(/^,\s*|,\s*$/g, '').trim().toUpperCase());
     } else {
-      setBurgerNotes(prev => prev ? `${prev}, ${noteText}` : noteText);
+      setBurgerNotes(prev => prev ? `${prev}, ${upperText}`.toUpperCase() : upperText);
     }
   };
 
@@ -2076,8 +2085,8 @@ export default function CaixaPage() {
                                     </p>
                                   )}
                                   {item.notes && (
-                                    <p className="text-[10px] italic text-slate-400 bg-slate-900 px-2 py-0.5 rounded-md inline-block">
-                                      Obs: {item.notes}
+                                    <p className="text-[10px] font-black uppercase text-amber-300 bg-amber-950/60 border border-amber-500/40 px-2 py-0.5 rounded-md inline-block tracking-wide shadow-xs">
+                                      *** OBS: {item.notes.toUpperCase()} ***
                                     </p>
                                   )}
                                 </div>
@@ -4056,19 +4065,19 @@ export default function CaixaPage() {
                     <MessageSquare size={14} className="text-blue-400" /> Ponto da Carne & Observações (Para a Cozinha):
                   </h3>
 
-                  {/* Atalhos Rápidos */}
+                  {/* Atalhos Rápidos (sempre em CAIXA ALTA) */}
                   <div className="flex flex-wrap gap-1.5 mb-2.5">
                     {[
-                      'Ao ponto', 'Bem passado', 'Ao ponto p/ bem', 
-                      'Sem cebola', 'Sem salada', 'Sem molho', 'Molho à parte'
+                      'AO PONTO', 'BEM PASSADO', 'AO PONTO P/ BEM', 
+                      'SEM CEBOLA', 'SEM SALADA', 'SEM MOLHO', 'MOLHO À PARTE'
                     ].map(chip => (
                       <button
                         key={chip}
                         type="button"
                         onClick={() => toggleQuickNote(chip)}
-                        className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
-                          burgerNotes.includes(chip)
-                            ? 'bg-amber-500 text-slate-950 font-bold'
+                        className={`px-3 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer uppercase ${
+                          burgerNotes.toUpperCase().includes(chip)
+                            ? 'bg-amber-500 text-slate-950 font-black shadow-md'
                             : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
                         }`}
                       >
@@ -4080,9 +4089,9 @@ export default function CaixaPage() {
                   <input 
                     type="text"
                     value={burgerNotes}
-                    onChange={e => setBurgerNotes(e.target.value)}
-                    placeholder="Outra observação (ex: pouco sal, cortar ao meio...)"
-                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-white text-xs outline-none focus:border-amber-500"
+                    onChange={e => setBurgerNotes(e.target.value.toUpperCase())}
+                    placeholder="OUTRA OBSERVAÇÃO (EX: POUCO SAL, CORTAR AO MEIO...)"
+                    className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-white text-xs outline-none focus:border-amber-500 uppercase font-bold tracking-wide placeholder:normal-case placeholder:font-normal"
                   />
                 </div>
 

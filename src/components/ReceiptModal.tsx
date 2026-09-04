@@ -50,15 +50,15 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
       text += 'ITENS DIFERENCIAIS:\n';
       activeDiff.added.forEach(item => {
         text += `[+] ${item.quantity}x ${item.productName} (ADICIONADO)\n`;
-        if (item.notes) text += `    OBS: ${item.notes}\n`;
+        if (item.notes) text += `    *** OBS: ${item.notes.toUpperCase()} ***\n`;
       });
       activeDiff.removed.forEach(item => {
         text += `[-] ${item.quantity}x ${item.productName} (CANCELADO)\n`;
       });
       activeDiff.modified.forEach(m => {
         text += `[*] ${m.item.quantity}x ${m.item.productName} (MODIFICADO)\n`;
-        text += `    DE: ${m.oldNotes || 'Sem obs'}\n`;
-        text += `    PARA: ${m.newNotes || 'Sem obs'}\n`;
+        text += `    DE: ${(m.oldNotes || 'Sem obs').toUpperCase()}\n`;
+        text += `    PARA: ${(m.newNotes || 'Sem obs').toUpperCase()}\n`;
       });
       text += divider;
       text += '*** ATENCAO CHAPA / PRODUCAO ***\n';
@@ -94,7 +94,8 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
         const itemTot = ((item.unitPrice || 0) * item.quantity).toFixed(2);
         const namePad = item.productName.slice(0, 26).padEnd(28, ' ');
         text += `${namePad} ${item.quantity}x ${itemTot}\n`;
-        if (item.combo) text += `  + ${item.combo}\n`;
+        if (item.combo) text += `  + ${item.combo.toUpperCase()}\n`;
+        if (item.notes) text += `  *** OBS: ${item.notes.toUpperCase()} ***\n`;
       });
       text += subDivider;
       if (sale.subtotal) text += `SUBTOTAL:                    R$ ${sale.subtotal.toFixed(2)}\n`;
@@ -252,7 +253,11 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                       {activeDiff.added.map((item, idx) => (
                         <div key={idx} className="pl-2 border-l-2 border-black font-bold">
                           <span className="text-sm">[+] {item.quantity}x {item.productName} (ADICIONADO)</span>
-                          {item.notes && <p className="text-xs italic pl-2">OBS: {item.notes}</p>}
+                          {item.notes && (
+                            <p className="text-xs font-black bg-black text-white px-1.5 py-0.5 mt-1 inline-block uppercase">
+                              *** OBS: {item.notes.toUpperCase()} ***
+                            </p>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -277,8 +282,8 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                       {activeDiff.modified.map((m, idx) => (
                         <div key={idx} className="pl-2 border-l-2 border-black text-xs">
                           <span className="font-bold">[*] {m.item.quantity}x {m.item.productName}</span>
-                          <p className="text-[11px] pl-2 line-through">DE: {m.oldNotes || 'Sem obs'}</p>
-                          <p className="text-[11px] pl-2 font-black">PARA: {m.newNotes || 'Sem obs'}</p>
+                          <p className="text-[11px] pl-2 line-through uppercase">DE: {(m.oldNotes || 'Sem obs').toUpperCase()}</p>
+                          <p className="text-[11px] pl-2 font-black uppercase">PARA: {(m.newNotes || 'Sem obs').toUpperCase()}</p>
                         </div>
                       ))}
                     </div>
@@ -364,7 +369,8 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                       <div key={idx} className="flex justify-between items-start text-xs">
                         <div className="pr-2">
                           <p className="font-bold">{item.productName}</p>
-                          {item.combo && <p className="text-[10px] text-slate-700 pl-2">+ {item.combo}</p>}
+                          {item.combo && <p className="text-[10px] font-bold text-slate-700 pl-2 uppercase">+ {item.combo.toUpperCase()}</p>}
+                          {item.notes && <p className="text-[10px] font-black text-black pl-2 uppercase">*** OBS: {item.notes.toUpperCase()} ***</p>}
                         </div>
                         <span className="font-bold shrink-0">
                           {item.quantity}x R$ {(item.unitPrice || 0).toFixed(2)}
