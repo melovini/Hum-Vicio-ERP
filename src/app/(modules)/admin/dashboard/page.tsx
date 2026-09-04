@@ -1,12 +1,13 @@
 'use client';
 import { useState, useEffect, useMemo } from 'react';
-import { useInventory, Sale, CashSession } from '@/lib/store';
+import { useInventory, Sale, CashSession, FixedExpensesConfig, DEFAULT_FIXED_EXPENSES } from '@/lib/store';
 import { 
   ArrowLeft, LayoutDashboard, TrendingUp, TrendingDown, 
   DollarSign, AlertTriangle, Utensils, Settings2, Check,
   Store, Bike, ShoppingBag, PieChart, Award, Users, Info,
   Calendar, Clock, Filter, GitCompare, Trash2, ShieldAlert,
-  ChevronRight, RefreshCw, Flame, BarChart3, AlertCircle
+  ChevronRight, RefreshCw, Flame, BarChart3, AlertCircle,
+  Target, Receipt, HelpCircle, X
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -22,7 +23,9 @@ export default function DashboardPage() {
     wasteRecords = [],
     allCashSessions = [],
     deleteCashSession,
-    deleteTestSales
+    deleteTestSales,
+    fixedExpensesConfig = DEFAULT_FIXED_EXPENSES,
+    saveFixedExpensesConfig
   } = useInventory();
   
   // Abas de navegação do Dashboard
@@ -45,10 +48,21 @@ export default function DashboardPage() {
   });
   const [compareDateB, setCompareDateB] = useState(() => new Date().toISOString().split('T')[0]);
 
-  // Despesas fixas diárias
-  const [dailyFixedExpense, setDailyFixedExpense] = useState<number>(150);
-  const [editingExpense, setEditingExpense] = useState(false);
-  const [tempExpense, setTempExpense] = useState('150');
+  // Modal de Configuração Estruturada de Custos Fixos Mensais (Break-Even)
+  const [showFixedExpensesModal, setShowFixedExpensesModal] = useState(false);
+  const [expensesForm, setExpensesForm] = useState<FixedExpensesConfig>(DEFAULT_FIXED_EXPENSES);
+
+  useEffect(() => {
+    if (fixedExpensesConfig) {
+      setExpensesForm(fixedExpensesConfig);
+    }
+  }, [fixedExpensesConfig]);
+
+  const handleSaveExpensesForm = (e: React.FormEvent) => {
+    e.preventDefault();
+    saveFixedExpensesConfig(expensesForm);
+    setShowFixedExpensesModal(false);
+  };
 
   // Modal de Exclusão de Caixa de Teste
   const [sessionToDelete, setSessionToDelete] = useState<CashSession | null>(null);
@@ -56,25 +70,6 @@ export default function DashboardPage() {
   const [adminActionError, setAdminActionError] = useState('');
   const [adminActionSuccess, setAdminActionSuccess] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('hum_vicio_daily_fixed_expense');
-      if (saved) {
-        setDailyFixedExpense(Number(saved) || 150);
-        setTempExpense(saved);
-      }
-    } catch {}
-  }, []);
-
-  const saveExpense = () => {
-    const val = Number(tempExpense) || 0;
-    setDailyFixedExpense(val);
-    try {
-      localStorage.setItem('hum_vicio_daily_fixed_expense', val.toString());
-    } catch {}
-    setEditingExpense(false);
-  };
 
   // Helper de comparação de data local (YYYY-MM-DD)
   const getLocalDateString = (dateInput: string | Date): string => {
@@ -168,15 +163,11 @@ export default function DashboardPage() {
   const realCmv = useMemo(() => {
     try {
       if (typeof getRealSalesCmv === 'function') {
-        // Se a função aceitar lista ou for global:
-        const val = getRealSalesCmv();
-        // Ajuste proporcional ao período filtrado
-        const ratio = sales.length > 0 ? filteredSales.length / sales.length : 1;
-        return (Number(val) || 0) * (totalRevenue > 0 ? ratio : 0);
+        return getRealSalesCmv(filteredSales);
       }
     } catch {}
     return totalRevenue * 0.30;
-  }, [getRealSalesCmv, totalRevenue, filteredSales.length, sales.length]);
+  }, [getRealSalesCmv, filteredSales, totalRevenue]);
 
   const cmvPercentage = totalRevenue > 0 ? (realCmv / totalRevenue) * 100 : 0;
 
@@ -217,8 +208,115 @@ export default function DashboardPage() {
       .reduce((acc, s) => acc + (Number(s.total) || 0), 0);
   }, [filteredSales]);
 
+  // Custo Fixo Total Mensal (Soma Estruturada)
+  const totalMonthlyFixedExpense = useMemo(() => {
+    const cfg = fixedExpensesConfig || DEFAULT_FIXED_EXPENSES;
+    return (
+      (Number(cfg.rent) || 0) +
+      (Number(cfg.electricity) || 0) +
+      (Number(cfg.gas) || 0) +
+      (Number(cfg.water) || 0) +
+      (Number(cfg.internetSoftware) || 0) +
+      (Number(cfg.payroll) || 0) +
+      (Number(cfg.proLabore) || 0) +
+      (Number(cfg.otherExpenses) || 0)
+    );
+  }, [fixedExpensesConfig]);
+
+  const operatingDaysPerMonth = (fixedExpensesConfig?.operatingDaysPerMonth) || 26;
+  const dailyProratedFixedExpense = totalMonthlyFixedExpense / (operatingDaysPerMonth > 0 ? operatingDaysPerMonth : 26);
+
+  // Custo Fixo Rateado Proporcionalmente pelo Filtro de Período
+  const proratedFixedExpense = useMemo(() => {
+    switch (periodFilter) {
+      case 'hoje':
+      case 'ontem':
+        return dailyProratedFixedExpense * 1;
+
+      case 'esta_semana': {
+        const now = new Date();
+        const day = now.getDay();
+        const daysPassed = day === 0 ? 6 : Math.min(day, 6);
+        return dailyProratedFixedExpense * Math.max(1, daysPassed);
+      }
+
+      case 'finais_de_semana':
+        return dailyProratedFixedExpense * 8; // Média de 8 dias de final de semana/mês
+
+      case 'este_mes':
+      case 'mes_anterior':
+        return totalMonthlyFixedExpense;
+
+      case 'personalizado': {
+        if (!customStartDate || !customEndDate) return dailyProratedFixedExpense;
+        const start = new Date(customStartDate);
+        const end = new Date(customEndDate);
+        const diffDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+        return dailyProratedFixedExpense * diffDays;
+      }
+
+      default:
+        return dailyProratedFixedExpense;
+    }
+  }, [periodFilter, dailyProratedFixedExpense, totalMonthlyFixedExpense, customStartDate, customEndDate]);
+
+  // Margem de Contribuição & Ponto de Equilíbrio
   const contributionMargin = totalRevenue - realCmv - wasteLoss - totalFees;
-  const netProfit = contributionMargin - dailyFixedExpense;
+  const contributionMarginRatio = totalRevenue > 0 ? (contributionMargin / totalRevenue) : 0;
+
+  // Ponto de Equilíbrio Financeiro em R$
+  const breakEvenRevenue = contributionMarginRatio > 0 
+    ? (proratedFixedExpense / contributionMarginRatio) 
+    : 0;
+
+  // Contagem de Hambúrgueres / Itens no Período
+  const totalBurgersCount = useMemo(() => {
+    return filteredSales.reduce((acc, s) => {
+      return acc + (s.items || []).reduce((itemAcc, item) => itemAcc + (item.quantity || 1), 0);
+    }, 0);
+  }, [filteredSales]);
+
+  // Ponto de Equilíbrio em Quantidade de Hambúrgueres / Lanches
+  const averagePricePerBurger = totalBurgersCount > 0 ? (totalRevenue / totalBurgersCount) : 32.0;
+  const averageContributionMarginPerBurger = averagePricePerBurger * (contributionMarginRatio > 0 ? contributionMarginRatio : 0.45);
+  const breakEvenBurgersCount = averageContributionMarginPerBurger > 0
+    ? Math.ceil(proratedFixedExpense / averageContributionMarginPerBurger)
+    : 0;
+
+  // Lucro Líquido Real do Período
+  const netProfit = contributionMargin - proratedFixedExpense;
+
+  // Progresso rumo ao Break-Even
+  const breakEvenProgress = breakEvenRevenue > 0
+    ? Math.min(100, Math.round((totalRevenue / breakEvenRevenue) * 100))
+    : (totalRevenue > 0 ? 100 : 0);
+
+  const isBreakEvenReached = totalRevenue >= breakEvenRevenue && breakEvenRevenue > 0;
+
+  // Resumo de Contas a Receber (Fiado VIP & Consumo Equipe)
+  const creditSalesSummary = useMemo(() => {
+    const all = sales || [];
+    const pending = all.filter(s => 
+      (s.paymentMethod === 'fiado_vip' || s.paymentMethod === 'consumo_funcionario') && 
+      s.creditStatus !== 'quitado' &&
+      s.status === 'completed'
+    );
+    const fiadoPending = pending.filter(s => s.paymentMethod === 'fiado_vip');
+    const colabPending = pending.filter(s => s.paymentMethod === 'consumo_funcionario');
+
+    const totalPendingAmount = pending.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+    const fiadoAmount = fiadoPending.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+    const colabAmount = colabPending.reduce((acc, s) => acc + (Number(s.total) || 0), 0);
+
+    return {
+      pendingCount: pending.length,
+      totalPendingAmount,
+      fiadoCount: fiadoPending.length,
+      fiadoAmount,
+      colabCount: colabPending.length,
+      colabAmount
+    };
+  }, [sales]);
 
   const modalityStats = useMemo(() => {
     let mesaTotal = 0, mesaCount = 0;
@@ -546,6 +644,128 @@ export default function DashboardPage() {
               </div>
             )}
 
+            {/* HERO CARD: PONTO DE EQUILÍBRIO & CONTAS A RECEBER */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+              {/* Card Ponto de Equilíbrio */}
+              <div className="lg:col-span-2 bg-surface-card rounded-xl p-5 border border-surface-border space-y-4 relative overflow-hidden">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className={`p-2 rounded-lg ${isBreakEvenReached ? 'bg-status-free/20 text-status-free' : 'bg-brand-primary/20 text-brand-primary'}`}>
+                      <Target size={20} />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h2 className="text-sm font-bold text-white tracking-tight">Ponto de Equilíbrio Operacional (Break-Even)</h2>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                          isBreakEvenReached 
+                            ? 'bg-status-free/20 text-status-free border border-status-free/30' 
+                            : 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                        }`}>
+                          {isBreakEvenReached ? 'Lucro Real Atingido' : 'Rumo ao Break-Even'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Custo Fixo Rateado: <strong className="text-slate-200">R$ {proratedFixedExpense.toFixed(2)}</strong> ({periodFilter === 'hoje' || periodFilter === 'ontem' ? '1 dia operacional' : periodFilter})
+                      </p>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowFixedExpensesModal(true)}
+                    className="py-1.5 px-3 bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer self-start sm:self-auto shadow-xs"
+                  >
+                    <Settings2 size={13} className="text-slate-400" />
+                    <span>Configurar Fixos (R$ {totalMonthlyFixedExpense.toFixed(0)}/mês)</span>
+                  </button>
+                </div>
+
+                {/* Métricas de Break-Even */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                  <div className="bg-surface-ground/70 rounded-lg p-3 border border-surface-border/60">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block">Meta Break-Even (R$)</span>
+                    <span className="font-mono tabular-nums text-lg font-bold text-white">
+                      R$ {breakEvenRevenue > 0 ? breakEvenRevenue.toFixed(2) : '0.00'}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block">Faturamento mínimo para zero a zero</span>
+                  </div>
+
+                  <div className="bg-surface-ground/70 rounded-lg p-3 border border-surface-border/60">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block">Meta em Hambúrgueres</span>
+                    <span className="font-mono tabular-nums text-lg font-bold text-brand-accent">
+                      {breakEvenBurgersCount} lanches
+                    </span>
+                    <span className="text-[10px] text-slate-500 block">
+                      {totalBurgersCount} vendidos ({totalBurgersCount >= breakEvenBurgersCount ? 'Meta atingida' : `faltam ${Math.max(0, breakEvenBurgersCount - totalBurgersCount)}`})
+                    </span>
+                  </div>
+
+                  <div className="bg-surface-ground/70 rounded-lg p-3 border border-surface-border/60">
+                    <span className="text-[10px] uppercase tracking-wider text-slate-400 font-semibold block">Resultado Real</span>
+                    <span className={`font-mono tabular-nums text-lg font-bold ${netProfit >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
+                      {netProfit >= 0 ? `+ R$ ${netProfit.toFixed(2)}` : `- R$ ${Math.abs(netProfit).toFixed(2)}`}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block">
+                      {netProfit >= 0 ? 'Excedente de Lucro Líquido' : 'Déficit para cobrir custos'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Barra de Progresso Rumo ao Break-Even */}
+                <div className="space-y-1.5 pt-1">
+                  <div className="flex justify-between text-xs font-mono tabular-nums">
+                    <span className="text-slate-400">Faturamento vs Break-Even:</span>
+                    <span className={`font-bold ${isBreakEvenReached ? 'text-status-free' : 'text-slate-200'}`}>
+                      {breakEvenProgress}% {isBreakEvenReached && '• 100% Cobrindo Custos'}
+                    </span>
+                  </div>
+                  <div className="w-full bg-surface-ground h-2.5 rounded-full overflow-hidden border border-surface-border">
+                    <div 
+                      className={`h-full rounded-full transition-all duration-500 ${isBreakEvenReached ? 'bg-status-free' : 'bg-brand-primary'}`}
+                      style={{ width: `${Math.min(100, breakEvenProgress)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Card Contas a Receber (Fiado & Colaboradores) */}
+              <div className="bg-surface-card rounded-xl p-5 border border-surface-border flex flex-col justify-between space-y-3">
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-brand-accent">
+                      <Receipt size={18} />
+                      <h3 className="text-sm font-bold text-white tracking-tight">Contas a Receber</h3>
+                    </div>
+                    <Link
+                      href="/caixa"
+                      className="text-[11px] text-brand-primary hover:text-brand-primaryHover font-semibold transition-colors flex items-center gap-0.5"
+                    >
+                      Ver no Caixa <ChevronRight size={12} />
+                    </Link>
+                  </div>
+                  <p className="text-xs text-slate-400">Pendências de Fiado VIP e Consumo de Funcionários da equipe.</p>
+                </div>
+
+                <div className="p-3 bg-surface-ground rounded-lg border border-surface-border space-y-2">
+                  <div className="flex justify-between items-baseline">
+                    <span className="text-xs text-slate-400">Total Pendente:</span>
+                    <span className="font-mono tabular-nums text-xl font-bold text-status-occupied">
+                      R$ {creditSalesSummary.totalPendingAmount.toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-[11px] text-slate-400 pt-1 border-t border-surface-border font-mono tabular-nums">
+                    <span>Fiado VIP ({creditSalesSummary.fiadoCount}): <strong className="text-slate-200">R$ {creditSalesSummary.fiadoAmount.toFixed(2)}</strong></span>
+                    <span>Equipe ({creditSalesSummary.colabCount}): <strong className="text-slate-200">R$ {creditSalesSummary.colabAmount.toFixed(2)}</strong></span>
+                  </div>
+                </div>
+
+                <div className="text-[11px] text-slate-500 flex items-center justify-between">
+                  <span>{creditSalesSummary.pendingCount} lançamentos em aberto</span>
+                  <span className="text-status-free font-medium">Auto-baixa no caixa</span>
+                </div>
+              </div>
+            </div>
+
             {/* KPIs Estratégicos */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="bg-surface-card rounded-xl p-4 border border-surface-border space-y-1">
@@ -720,31 +940,15 @@ export default function DashboardPage() {
                   <p className="text-xs text-slate-400">Visão financeira auditável com deduções linha por linha para o período.</p>
                 </div>
                 
-                <div className="flex items-center gap-2 bg-surface-ground border border-surface-border px-3 py-1.5 rounded-lg text-xs">
-                  <Settings2 size={14} className="text-slate-400" />
-                  <span className="text-slate-400 text-[11px]">Despesa Fixa Diária:</span>
-                  {editingExpense ? (
-                    <div className="flex items-center gap-1.5">
-                      <input 
-                        type="number"
-                        value={tempExpense}
-                        onChange={e => setTempExpense(e.target.value)}
-                        className="w-16 input-util py-0.5 px-1.5 font-mono tabular-nums text-xs"
-                        autoFocus
-                      />
-                      <button onClick={saveExpense} className="p-1 bg-brand-primary hover:bg-brand-primaryHover text-white rounded cursor-pointer">
-                        <Check size={12} />
-                      </button>
-                    </div>
-                  ) : (
-                    <button 
-                      onClick={() => setEditingExpense(true)} 
-                      className="font-mono tabular-nums font-bold text-slate-200 hover:text-brand-accent underline decoration-dotted cursor-pointer"
-                      title="Clique para editar a estimativa diária de custos fixos"
-                    >
-                      R$ {dailyFixedExpense.toFixed(2)}/dia
-                    </button>
-                  )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowFixedExpensesModal(true)}
+                    className="flex items-center gap-1.5 py-1.5 px-3 bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+                  >
+                    <Settings2 size={13} className="text-brand-accent" />
+                    <span>Configurar Custos Fixos (R$ {totalMonthlyFixedExpense.toFixed(2)}/mês)</span>
+                  </button>
                 </div>
               </div>
               
@@ -770,24 +974,53 @@ export default function DashboardPage() {
                 </div>
                 
                 <div className="flex justify-between p-3 bg-surface-elevated rounded-lg border border-brand-accent/20">
-                  <span className="font-bold text-brand-accent">(=) Margem de Contribuição Real</span>
+                  <div>
+                    <span className="font-bold text-brand-accent">(=) Margem de Contribuição Real</span>
+                    <span className="text-[10px] text-slate-400 ml-2 font-mono">({(contributionMarginRatio * 100).toFixed(1)}% da receita)</span>
+                  </div>
                   <span className="font-mono tabular-nums text-brand-accent font-bold text-sm">R$ {contributionMargin.toFixed(2)}</span>
                 </div>
 
-                <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
-                  <span className="text-slate-400 pl-3">(-) Despesas Fixas (Rateio Diário)</span>
-                  <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {dailyFixedExpense.toFixed(2)}</span>
+                <div className="flex justify-between items-center p-2.5 px-3 border-b border-surface-border/60">
+                  <div className="pl-3 space-y-0.5">
+                    <span className="text-slate-300 font-medium block">(-) Custos Fixos Estruturados (Rateio do Período)</span>
+                    <span className="text-[10px] text-slate-500 block font-mono">
+                      R$ {totalMonthlyFixedExpense.toFixed(0)}/mês ÷ {operatingDaysPerMonth} dias = R$ {dailyProratedFixedExpense.toFixed(2)}/dia (Aluguel, Luz, Gás, Folha, Pró-Labore...)
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="font-mono tabular-nums text-status-danger font-semibold block">- R$ {proratedFixedExpense.toFixed(2)}</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowFixedExpensesModal(true)}
+                      className="text-[10px] text-brand-primary hover:underline cursor-pointer"
+                    >
+                      Ajustar valores
+                    </button>
+                  </div>
                 </div>
 
                 <div className={`flex justify-between items-center p-4 rounded-xl mt-3 border ${
                   netProfit >= 0 ? 'bg-status-free/10 border-status-free/30' : 'bg-status-danger/10 border-status-danger/30'
                 }`}>
                   <div>
-                    <span className="font-bold text-sm text-white">(=) Lucro / Prejuízo Líquido</span>
-                    <p className="text-[10px] text-slate-400 mt-0.5">Saldo real após todas as deduções operacionais e fixas</p>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm text-white">(=) Lucro / Prejuízo Líquido Real</span>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                        netProfit >= 0 ? 'bg-status-free/20 text-status-free' : 'bg-status-danger/20 text-status-danger'
+                      }`}>
+                        {netProfit >= 0 ? 'Operação Lucrativa' : 'Abaixo do Break-Even'}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-0.5">
+                      {isBreakEvenReached 
+                        ? `Meta superada em R$ ${netProfit.toFixed(2)} acima de todos os custos fixos.` 
+                        : `Faltam R$ ${(Math.max(0, breakEvenRevenue - totalRevenue)).toFixed(2)} de faturamento para cobrir os custos fixos.`
+                      }
+                    </p>
                   </div>
                   <span className={`font-mono tabular-nums text-2xl font-bold ${netProfit >= 0 ? 'text-status-free' : 'text-status-danger'}`}>
-                    R$ {netProfit.toFixed(2)}
+                    {netProfit >= 0 ? `+ R$ ${netProfit.toFixed(2)}` : `- R$ ${Math.abs(netProfit).toFixed(2)}`}
                   </span>
                 </div>
               </div>
@@ -1170,6 +1403,188 @@ export default function DashboardPage() {
                     className="flex-1 py-2 bg-status-danger hover:bg-red-600 text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors flex items-center justify-center gap-1.5"
                   >
                     {isDeleting ? 'Excluindo...' : 'Confirmar Exclusão'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE CONFIGURAÇÃO DE CUSTOS FIXOS MENSAIS (BREAK-EVEN) */}
+        {showFixedExpensesModal && (
+          <div className="fixed inset-0 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
+            <div className="bg-surface-card border border-surface-border rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5">
+              <div className="flex items-center justify-between pb-3 border-b border-surface-border">
+                <div className="flex items-center gap-2.5 text-brand-primary">
+                  <Settings2 size={22} />
+                  <div>
+                    <h3 className="text-base font-bold text-white">Custos Fixos Mensais da Hamburgueria</h3>
+                    <p className="text-xs text-slate-400">Parâmetros reais para cálculo do Ponto de Equilíbrio e Lucro Líquido</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowFixedExpensesModal(false)}
+                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-surface-elevated transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveExpensesForm} className="space-y-4 text-xs">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">🏠 Aluguel do Ponto (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={expensesForm.rent}
+                      onChange={e => setExpensesForm({ ...expensesForm, rent: Number(e.target.value) || 0 })}
+                      className="w-full input-util font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">⚡ Energia Elétrica / Luz (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={expensesForm.electricity}
+                      onChange={e => setExpensesForm({ ...expensesForm, electricity: Number(e.target.value) || 0 })}
+                      className="w-full input-util font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">🔥 Gás Industrial P45 (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={expensesForm.gas}
+                      onChange={e => setExpensesForm({ ...expensesForm, gas: Number(e.target.value) || 0 })}
+                      className="w-full input-util font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">💧 Água e Saneamento (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={expensesForm.water}
+                      onChange={e => setExpensesForm({ ...expensesForm, water: Number(e.target.value) || 0 })}
+                      className="w-full input-util font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">🌐 Internet & Softwares / SaaS (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={expensesForm.internetSoftware}
+                      onChange={e => setExpensesForm({ ...expensesForm, internetSoftware: Number(e.target.value) || 0 })}
+                      className="w-full input-util font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">👥 Folha de Pagamento Equipe (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={expensesForm.payroll}
+                      onChange={e => setExpensesForm({ ...expensesForm, payroll: Number(e.target.value) || 0 })}
+                      className="w-full input-util font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">💼 Pró-labore dos Sócios (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={expensesForm.proLabore}
+                      onChange={e => setExpensesForm({ ...expensesForm, proLabore: Number(e.target.value) || 0 })}
+                      className="w-full input-util font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-300 font-semibold mb-1">📦 Outras Despesas Fixas (R$)</label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      required
+                      value={expensesForm.otherExpenses}
+                      onChange={e => setExpensesForm({ ...expensesForm, otherExpenses: Number(e.target.value) || 0 })}
+                      className="w-full input-util font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    📅 Dias de Operação por Mês (para Rateio Diário)
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="31"
+                    required
+                    value={expensesForm.operatingDaysPerMonth}
+                    onChange={e => setExpensesForm({ ...expensesForm, operatingDaysPerMonth: Number(e.target.value) || 26 })}
+                    className="w-full input-util font-mono"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">
+                    Ex: 26 dias (fechando apenas às segundas-feiras) ou 30 dias (aberto todos os dias).
+                  </span>
+                </div>
+
+                {/* Box de Resumo Proporcional */}
+                <div className="p-3.5 bg-surface-ground rounded-xl border border-surface-border space-y-1 font-mono text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Total Fixo Mensal:</span>
+                    <strong className="text-white font-bold">
+                      R$ {(
+                        Number(expensesForm.rent || 0) + Number(expensesForm.electricity || 0) + Number(expensesForm.gas || 0) +
+                        Number(expensesForm.water || 0) + Number(expensesForm.internetSoftware || 0) + Number(expensesForm.payroll || 0) +
+                        Number(expensesForm.proLabore || 0) + Number(expensesForm.otherExpenses || 0)
+                      ).toFixed(2)}
+                    </strong>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-slate-400">Custo Diário Rateado:</span>
+                    <strong className="text-brand-accent font-bold">
+                      R$ {(
+                        (Number(expensesForm.rent || 0) + Number(expensesForm.electricity || 0) + Number(expensesForm.gas || 0) +
+                        Number(expensesForm.water || 0) + Number(expensesForm.internetSoftware || 0) + Number(expensesForm.payroll || 0) +
+                        Number(expensesForm.proLabore || 0) + Number(expensesForm.otherExpenses || 0)) / (Number(expensesForm.operatingDaysPerMonth) || 26)
+                      ).toFixed(2)} / dia
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowFixedExpensesModal(false)}
+                    className="flex-1 py-2.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+                  >
+                    Salvar Custos Fixos
                   </button>
                 </div>
               </form>

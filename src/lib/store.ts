@@ -12,6 +12,7 @@ export interface InventoryItem {
   unit: string;
   costPerUnit: number;
   currentStock: number;
+  minStock?: number; // Ponto de Reposição / Estoque Mínimo
   status: StockStatus;
   isActive?: boolean;
 }
@@ -80,6 +81,7 @@ export interface Sale {
   paymentMethod: string;
   items: SaleItem[];
   date: string;
+  createdAt?: string;
   status: 'completed' | 'cancelled';
   // Reabertura e Alteração de Pedidos Fechados:
   isReopened?: boolean;
@@ -108,7 +110,41 @@ export interface Sale {
   cancelledBy?: string;
   cancelledAt?: string;
   cancellationNotes?: string;
+  // Contas a Receber (Fiado VIP & Consumo de Funcionários):
+  collaboratorId?: string;
+  collaboratorName?: string;
+  creditCustomerName?: string;
+  creditDueDate?: string;
+  creditNotes?: string;
+  creditStatus?: 'pendente' | 'quitado';
+  creditPaidAt?: string;
+  creditPaidMethod?: string;
 }
+
+// === CUSTOS FIXOS MENSAIS ESTRUTURADOS (DRE & PONTO DE EQUILÍBRIO) ===
+export interface FixedExpensesConfig {
+  rent: number;               // Aluguel
+  electricity: number;        // Energia elétrica / Luz
+  gas: number;                // Gás industrial P45
+  water: number;              // Água e saneamento
+  internetSoftware: number;   // Internet, sistemas, softwares e assinaturas
+  payroll: number;            // Folha de pagamento fixa (equipe)
+  proLabore: number;          // Pró-labore dos sócios
+  otherExpenses: number;      // Outros custos fixos mensais
+  operatingDaysPerMonth: number; // Dias de operação por mês (ex: 26)
+}
+
+export const DEFAULT_FIXED_EXPENSES: FixedExpensesConfig = {
+  rent: 2500,
+  electricity: 1200,
+  gas: 800,
+  water: 250,
+  internetSoftware: 350,
+  payroll: 4500,
+  proLabore: 3000,
+  otherExpenses: 500,
+  operatingDaysPerMonth: 26
+};
 
 // === CAIXA EM NUVEM ===
 export interface CashMovement {
@@ -151,7 +187,10 @@ export type AuditAction =
   | 'EXPURGO_VENDAS_TESTE'
   | 'REABERTURA_PEDIDO'
   | 'ALTERACAO_PEDIDO'
-  | 'CHECKLIST_TAREFA';
+  | 'CHECKLIST_TAREFA'
+  | 'LIQUIDACAO_FIADO'
+  | 'CUSTOS_FIXOS_CONFIG'
+  | 'BAIXA_ESTOQUE_VENDA';
 
 export interface AuditLog {
   id: string;
@@ -269,11 +308,89 @@ function saveProductionOverrides(updates: { id: string; status: ProductionStatus
   } catch {}
 }
 
+function getSavedMinStockMap(): Record<string, number> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem('hum_vicio_min_stock_map') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveMinStockItem(id: string, minStock: number) {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedMinStockMap();
+    map[id] = minStock;
+    localStorage.setItem('hum_vicio_min_stock_map', JSON.stringify(map));
+  } catch {}
+}
+
+function getSavedCreditSalesMap(): Record<string, {
+  collaboratorId?: string;
+  collaboratorName?: string;
+  creditCustomerName?: string;
+  creditDueDate?: string;
+  creditNotes?: string;
+  creditStatus?: 'pendente' | 'quitado';
+  creditPaidAt?: string;
+  creditPaidMethod?: string;
+}> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem('hum_vicio_credit_sales_map') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+function saveCreditSaleOverride(saleId: string, creditData: any) {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedCreditSalesMap();
+    map[saleId] = { ...(map[saleId] || {}), ...creditData };
+    localStorage.setItem('hum_vicio_credit_sales_map', JSON.stringify(map));
+  } catch {}
+}
+
+function getSavedFixedExpensesConfig(): FixedExpensesConfig {
+  if (typeof window === 'undefined') return DEFAULT_FIXED_EXPENSES;
+  try {
+    const saved = localStorage.getItem('hum_vicio_fixed_expenses_config');
+    if (saved) {
+      return { ...DEFAULT_FIXED_EXPENSES, ...JSON.parse(saved) };
+    }
+  } catch {}
+  return DEFAULT_FIXED_EXPENSES;
+}
+
 export function useInventory() {
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [isLoaded, setIsLoaded] = useState(false);
   
+  // Custos Fixos Mensais (DRE & Ponto de Equilíbrio)
+  const [fixedExpensesConfig, setFixedExpensesConfigState] = useState<FixedExpensesConfig>(DEFAULT_FIXED_EXPENSES);
+
+  useEffect(() => {
+    setFixedExpensesConfigState(getSavedFixedExpensesConfig());
+  }, []);
+
+  const saveFixedExpensesConfig = (config: FixedExpensesConfig) => {
+    setFixedExpensesConfigState(config);
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('hum_vicio_fixed_expenses_config', JSON.stringify(config));
+      } catch {}
+    }
+    const totalMonthly = config.rent + config.electricity + config.gas + config.water + config.internetSoftware + config.payroll + config.proLabore + config.otherExpenses;
+    addAuditLog(
+      'CUSTOS_FIXOS_CONFIG',
+      `Custos Fixos Mensais atualizados. Total mensal: R$ ${totalMonthly.toFixed(2)} (${config.operatingDaysPerMonth} dias úteis).`,
+      'Gestor / Admin'
+    );
+  };
+
   // Caixa State (em Nuvem)
   const [isOpen, setIsOpen] = useState(false);
   const [activeCashSession, setActiveCashSession] = useState<CashSession | null>(null);
@@ -360,11 +477,14 @@ export function useInventory() {
       // 1. Fetch Inventory
       const { data: invData } = await supabase.from('inventory').select('*');
       if (invData) {
+        const minStockMap = getSavedMinStockMap();
         setItems(invData.map(i => ({
           id: i.id, name: i.name, category: i.category, unit: i.unit, 
           costPerUnit: Number(i.cost_per_unit) || 0, 
           currentStock: Number(i.current_stock) || 0, 
-          status: i.status
+          minStock: i.min_stock !== undefined && i.min_stock !== null ? Number(i.min_stock) : minStockMap[i.id],
+          status: i.status,
+          isActive: i.is_active !== undefined ? i.is_active : true
         })));
       }
 
@@ -391,14 +511,16 @@ export function useInventory() {
         
         if (salesData && salesData.length > 0) {
           const overrides = getSavedProductionOverrides();
+          const creditMap = getSavedCreditSalesMap();
           const mappedSales: Sale[] = salesData.map(s => {
             const override = overrides[s.id];
+            const creditInfo = creditMap[s.id] || {};
             const prodStatus = (override?.status || s.production_status || 'em_espera') as ProductionStatus;
             const prodStarted = override?.startedAt || s.production_started_at || s.created_at;
 
             return {
               id: s.id, 
-              customerName: s.customer_name || 'Balcão',
+              customerName: creditInfo.creditCustomerName || s.customer_name || 'Balcão',
               orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
               channel: s.channel, 
               total: Number(s.total) || 0, 
@@ -412,6 +534,14 @@ export function useInventory() {
               targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
               delayReason: s.delay_reason || undefined,
               delayNotes: s.delay_notes || undefined,
+              collaboratorId: creditInfo.collaboratorId || s.collaborator_id || undefined,
+              collaboratorName: creditInfo.collaboratorName || s.collaborator_name || undefined,
+              creditCustomerName: creditInfo.creditCustomerName || s.credit_customer_name || undefined,
+              creditDueDate: creditInfo.creditDueDate || s.credit_due_date || undefined,
+              creditNotes: creditInfo.creditNotes || s.credit_notes || undefined,
+              creditStatus: creditInfo.creditStatus || s.credit_status || (s.payment_method === 'consumo_funcionario' || s.payment_method === 'fiado_vip' ? 'pendente' : undefined),
+              creditPaidAt: creditInfo.creditPaidAt || s.credit_paid_at || undefined,
+              creditPaidMethod: creditInfo.creditPaidMethod || s.credit_paid_method || undefined,
               items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
                 id: i.id,
                 productId: i.product_id, 
@@ -725,10 +855,25 @@ export function useInventory() {
   // --- INSUMOS ACTIONS ---
   const addInventoryItem = async (item: Omit<InventoryItem, 'id'>) => {
     try {
-      const { data, error } = await supabase.from('inventory').insert({
-        name: item.name, category: item.category, unit: item.unit, 
-        cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status
-      }).select().single();
+      let data: any = null;
+      let error: any = null;
+
+      try {
+        const res = await supabase.from('inventory').insert({
+          name: item.name, category: item.category, unit: item.unit, 
+          cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status,
+          min_stock: item.minStock
+        }).select().single();
+        data = res.data;
+        error = res.error;
+      } catch {
+        const fallbackRes = await supabase.from('inventory').insert({
+          name: item.name, category: item.category, unit: item.unit, 
+          cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status
+        }).select().single();
+        data = fallbackRes.data;
+        error = fallbackRes.error;
+      }
       
       if (error) {
         console.error('Erro detalhado do Supabase:', error);
@@ -736,7 +881,11 @@ export function useInventory() {
         return;
       }
       
-      if (data) setItems([...items, { ...item, id: data.id }]);
+      const newId = data ? data.id : ('inv_' + Date.now().toString(36));
+      if (item.minStock !== undefined) {
+        saveMinStockItem(newId, item.minStock);
+      }
+      setItems([...items, { ...item, id: newId }]);
     } catch (err: any) {
       alert(`Erro inesperado: ${err.message}`);
     }
@@ -750,8 +899,22 @@ export function useInventory() {
     if (updates.costPerUnit !== undefined) dbUpdates.cost_per_unit = updates.costPerUnit;
     if (updates.currentStock !== undefined) dbUpdates.current_stock = updates.currentStock;
     if (updates.status !== undefined) dbUpdates.status = updates.status;
+    if (updates.minStock !== undefined) {
+      saveMinStockItem(id, updates.minStock);
+      dbUpdates.min_stock = updates.minStock;
+    }
 
-    await supabase.from('inventory').update(dbUpdates).eq('id', id);
+    try {
+      await supabase.from('inventory').update(dbUpdates).eq('id', id);
+    } catch {
+      // Fallback sem min_stock caso coluna não exista no Postgres
+      delete dbUpdates.min_stock;
+      try {
+        await supabase.from('inventory').update(dbUpdates).eq('id', id);
+      } catch (err) {
+        console.warn('Erro ao atualizar insumo no Supabase:', err);
+      }
+    }
     setItems(items.map(i => i.id === id ? { ...i, ...updates } : i));
   };
 
@@ -1129,8 +1292,8 @@ export function useInventory() {
     }
   };
 
-  const getRealSalesCmv = () => {
-    const completedSales = sales.filter(s => s.status === 'completed');
+  const getRealSalesCmv = (salesList?: Sale[]) => {
+    const completedSales = (salesList || sales).filter(s => s.status === 'completed');
     let totalCmv = 0;
     
     completedSales.forEach(sale => {
@@ -1435,20 +1598,67 @@ export function useInventory() {
       }
     }
 
-    // Baixa local de estoque imediata
+    // Baixa local de estoque imediata & Sincronização Supabase (Explosão de Ficha Técnica)
     const newItems = [...items];
+    const deductedItems: { id: string; name: string; deducted: number; remaining: number }[] = [];
+
     sale.items.forEach(si => {
       const prod = products.find(p => p.id === si.productId);
       if (prod) {
         prod.recipe.forEach(r => {
           const invIdx = newItems.findIndex(inv => inv.id === r.ingredientId);
           if (invIdx > -1) {
-            newItems[invIdx] = { ...newItems[invIdx], currentStock: newItems[invIdx].currentStock - (r.quantity * si.quantity) };
+            const decr = r.quantity * si.quantity;
+            const newStock = Number((newItems[invIdx].currentStock - decr).toFixed(3));
+            newItems[invIdx] = { 
+              ...newItems[invIdx], 
+              currentStock: newStock,
+              status: newStock <= 0 ? 'zerado' : (newItems[invIdx].minStock && newStock <= newItems[invIdx].minStock) ? 'acabando' : newItems[invIdx].status
+            };
+            deductedItems.push({ id: r.ingredientId, name: newItems[invIdx].name, deducted: decr, remaining: newStock });
+          }
+        });
+      }
+
+      // Baixa de insumos por adicionais extras selecionados (ex: Bacon extra, Queijo extra)
+      if (si.additionals && si.additionals.length > 0) {
+        si.additionals.forEach(add => {
+          const matchedInvIdx = newItems.findIndex(inv => 
+            inv.name.toLowerCase().includes(add.name.toLowerCase()) || 
+            add.name.toLowerCase().includes(inv.name.toLowerCase())
+          );
+          if (matchedInvIdx > -1) {
+            const decr = 1 * si.quantity;
+            const newStock = Number((newItems[matchedInvIdx].currentStock - decr).toFixed(3));
+            newItems[matchedInvIdx] = {
+              ...newItems[matchedInvIdx],
+              currentStock: newStock,
+              status: newStock <= 0 ? 'zerado' : (newItems[matchedInvIdx].minStock && newStock <= newItems[matchedInvIdx].minStock) ? 'acabando' : newItems[matchedInvIdx].status
+            };
+            deductedItems.push({ id: newItems[matchedInvIdx].id, name: newItems[matchedInvIdx].name, deducted: decr, remaining: newStock });
           }
         });
       }
     });
+
     setItems(newItems);
+
+    // Sincronização assíncrona da baixa de estoque no Supabase
+    deductedItems.forEach(async dItem => {
+      try {
+        await supabase.from('inventory').update({ current_stock: dItem.remaining }).eq('id', dItem.id);
+      } catch (err) {
+        console.warn('Erro ao sincronizar baixa de estoque no Supabase:', err);
+      }
+    });
+
+    if (deductedItems.length > 0) {
+      addAuditLog(
+        'BAIXA_ESTOQUE_VENDA',
+        `Explosão de receita: baixa automática de ${deductedItems.length} insumo(s) referente ao pedido de "${sale.customerName || 'Balcão'}".`,
+        'Sistema'
+      );
+    }
 
     // Identificação de Brindes no Pedido
     const giftItems = (sale.items || []).filter(i => i.isGift);
@@ -1494,11 +1704,15 @@ export function useInventory() {
       );
     }
 
+    // Configuração de Vendas a Prazo / Contas a Receber
+    const isCreditSale = sale.paymentMethod === 'consumo_funcionario' || sale.paymentMethod === 'fiado_vip';
+    const creditStatus = isCreditSale ? (sale.creditStatus || 'pendente') : undefined;
+
     // O pedido É SEMPRE INCLUÍDO E NUNCA SE PERDE!
     const newSaleLocal: Sale = {
       ...sale,
       id: saleId,
-      customerName: sale.customerName || 'Balcão',
+      customerName: sale.customerName || (sale.paymentMethod === 'consumo_funcionario' ? sale.collaboratorName : sale.creditCustomerName) || 'Balcão',
       orderType: sale.orderType || 'mesa',
       subtotal: sale.subtotal !== undefined ? sale.subtotal : sale.total,
       discount: sale.discount || 0,
@@ -1509,12 +1723,33 @@ export function useInventory() {
       productionStatus: initialProductionStatus,
       productionStartedAt: initialProductionStarted,
       targetPrepMinutes: initialTargetPrep,
+      collaboratorId: sale.collaboratorId,
+      collaboratorName: sale.collaboratorName,
+      creditCustomerName: sale.creditCustomerName,
+      creditDueDate: sale.creditDueDate,
+      creditNotes: sale.creditNotes,
+      creditStatus,
+      creditPaidAt: sale.creditPaidAt,
+      creditPaidMethod: sale.creditPaidMethod,
       date: sData?.created_at || new Date().toISOString(),
       status: 'completed'
     };
 
     // Salvar override do pedido para persistir localmente e nunca voltar para espera
     saveProductionOverrides([{ id: saleId, status: initialProductionStatus, startedAt: initialProductionStarted }]);
+
+    if (isCreditSale) {
+      saveCreditSaleOverride(saleId, {
+        collaboratorId: sale.collaboratorId,
+        collaboratorName: sale.collaboratorName,
+        creditCustomerName: sale.creditCustomerName,
+        creditDueDate: sale.creditDueDate,
+        creditNotes: sale.creditNotes,
+        creditStatus,
+        creditPaidAt: sale.creditPaidAt,
+        creditPaidMethod: sale.creditPaidMethod
+      });
+    }
 
     setSales(prev => {
       const updated = [newSaleLocal, ...prev];
@@ -1523,6 +1758,53 @@ export function useInventory() {
       }
       return updated;
     });
+  };
+
+  // Liquidação de Contas a Receber (Fiado VIP e Consumo de Funcionários)
+  const settleCreditSale = async (saleId: string, paymentMethod: string, operatorName: string) => {
+    const target = sales.find(s => s.id === saleId);
+    if (!target) return { success: false, message: 'Venda não encontrada' };
+
+    const paidAt = new Date().toISOString();
+    const updatedSale: Sale = {
+      ...target,
+      creditStatus: 'quitado',
+      creditPaidAt: paidAt,
+      creditPaidMethod: paymentMethod
+    };
+
+    saveCreditSaleOverride(saleId, {
+      creditStatus: 'quitado',
+      creditPaidAt: paidAt,
+      creditPaidMethod: paymentMethod
+    });
+
+    setSales(prev => {
+      const updated = prev.map(s => s.id === saleId ? updatedSale : s);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      }
+      return updated;
+    });
+
+    // Se o cliente quitou em dinheiro físico no balcão, insere suprimento na gaveta do caixa ativo
+    if (paymentMethod === 'dinheiro') {
+      await addMovement({
+        type: 'suprimento',
+        amount: target.total,
+        description: `Recebimento Quitação ${target.paymentMethod === 'consumo_funcionario' ? 'Consumo Equipe' : 'Fiado VIP'} #${saleId.slice(0, 5).toUpperCase()} (${target.customerName || target.collaboratorName || 'Cliente'})`
+      });
+    }
+
+    addAuditLog(
+      'LIQUIDACAO_FIADO',
+      `Conta a Receber #${saleId.slice(0, 6).toUpperCase()} liquidada no valor de R$ ${target.total.toFixed(2)} via ${paymentMethod.toUpperCase()} (${target.customerName || target.collaboratorName || 'Cliente'}).`,
+      operatorName || 'Operador',
+      'pendente',
+      'quitado'
+    );
+
+    return { success: true, sale: updatedSale };
   };
 
   // Ação do Balcão: alterar status de produção (para chapa, em espera, agendado)
@@ -1965,6 +2247,7 @@ export function useInventory() {
     stockAudits, saveStockAudit,
     subRecipes, saveSubRecipe, removeSubRecipe, getIngredientTrueCost,
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus, completeOrderProduction,
-    auditLogs, addAuditLog
+    auditLogs, addAuditLog,
+    fixedExpensesConfig, saveFixedExpensesConfig, settleCreditSale
   };
 }

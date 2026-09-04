@@ -7,7 +7,7 @@ import {
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
   Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid,
-  Edit3, GitCompare
+  Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -19,6 +19,7 @@ import {
   lancarConsumoNaMesa, getStoredLayoutTemplates 
 } from '@/lib/mesas';
 import { sendOwnerSecurityAlert } from '@/lib/notifications';
+import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
 
 export default function CaixaPage() {
   const { 
@@ -26,12 +27,68 @@ export default function CaixaPage() {
     openCaixa, closeCaixa, sales, addSale, cancelSale, 
     reopenOrderForEdit, updateReopenedOrder,
     movements, addMovement,
-    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus 
+    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus,
+    settleCreditSale 
   } = useInventory();
 
-  const [activeTab, setActiveTab] = useState<'pdv' | 'mesas' | 'producao' | 'historico' | 'sangria'>('pdv');
+  const [activeTab, setActiveTab] = useState<'pdv' | 'mesas' | 'producao' | 'historico' | 'sangria' | 'contas_receber'>('pdv');
   const [productionFilter, setProductionFilter] = useState<'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido'>('todos');
   const [selectedOrdersForBatch, setSelectedOrdersForBatch] = useState<string[]>([]);
+
+  // Lista de Colaboradores Ativos para Consumo da Equipe
+  const [collaboratorsList, setCollaboratorsList] = useState<Collaborator[]>([]);
+  useEffect(() => {
+    setCollaboratorsList(getActiveCollaborators());
+  }, []);
+
+  // Formas de Pagamento Especiais: Consumo de Funcionários & Fiado VIP
+  const [selectedCollaboratorId, setSelectedCollaboratorId] = useState('');
+  const [creditCustomerInput, setCreditCustomerInput] = useState('');
+  const [creditDueDateInput, setCreditDueDateInput] = useState('');
+  const [creditNotesInput, setCreditNotesInput] = useState('');
+
+  // Estados de Liquidação de Contas a Receber
+  const [saleToSettle, setSaleToSettle] = useState<Sale | null>(null);
+  const [settlementMethod, setSettlementMethod] = useState<string>('pix');
+  const [settlementOperator, setSettlementOperator] = useState('');
+  const [settling, setSettling] = useState(false);
+  const [creditTabFilter, setCreditTabFilter] = useState<'todos' | 'pendentes' | 'quitados' | 'fiado_vip' | 'consumo_funcionario'>('pendentes');
+  const [creditSearchQuery, setCreditSearchQuery] = useState('');
+
+  // Calculadora Física de Cédulas e Moedas para Fechamento Cego
+  const [usePhysicalCalc, setUsePhysicalCalc] = useState(false);
+  const [denominations, setDenominations] = useState({
+    bill100: 0,
+    bill50: 0,
+    bill20: 0,
+    bill10: 0,
+    bill5: 0,
+    bill2: 0,
+    coin1: 0,
+    coin050: 0,
+    coin025: 0,
+    coin010: 0,
+    coin005: 0
+  });
+
+  const updateDenomination = (denom: keyof typeof denominations, count: number) => {
+    const safeCount = Math.max(0, count || 0);
+    const updated = { ...denominations, [denom]: safeCount };
+    setDenominations(updated);
+    const sum = 
+      updated.bill100 * 100 +
+      updated.bill50 * 50 +
+      updated.bill20 * 20 +
+      updated.bill10 * 10 +
+      updated.bill5 * 5 +
+      updated.bill2 * 2 +
+      updated.coin1 * 1 +
+      updated.coin050 * 0.50 +
+      updated.coin025 * 0.25 +
+      updated.coin010 * 0.10 +
+      updated.coin005 * 0.05;
+    setCountedAmountInput(sum.toFixed(2));
+  };
 
   // Instância de Salão Viva no Turno de Caixa (Floor Session State)
   const [floorSession, setFloorSession] = useState<SessaoCaixaSalao>(() => getActiveFloorSession());
@@ -254,6 +311,59 @@ export default function CaixaPage() {
         return activeProducts;
     }
   }, [posCategory, activeProducts, top9Products]);
+
+  // Listagem e Métricas de Contas a Receber (Fiado VIP & Consumo de Equipe)
+  const creditMetrics = useMemo(() => {
+    let fiadoPending = 0;
+    let collabPending = 0;
+    let totalPending = 0;
+    let totalPaid = 0;
+    let pendingCount = 0;
+
+    sales.forEach(s => {
+      const isCredit = s.paymentMethod === 'fiado_vip' || s.paymentMethod === 'consumo_funcionario' || s.creditStatus !== undefined;
+      if (!isCredit || s.status === 'cancelled') return;
+
+      if (s.creditStatus === 'quitado') {
+        totalPaid += s.total;
+      } else {
+        totalPending += s.total;
+        pendingCount++;
+        if (s.paymentMethod === 'consumo_funcionario') {
+          collabPending += s.total;
+        } else {
+          fiadoPending += s.total;
+        }
+      }
+    });
+
+    return { fiadoPending, collabPending, totalPending, totalPaid, pendingCount };
+  }, [sales]);
+
+  const creditSalesList = useMemo(() => {
+    return sales.filter(s => {
+      const isCredit = s.paymentMethod === 'fiado_vip' || s.paymentMethod === 'consumo_funcionario' || s.creditStatus !== undefined;
+      if (!isCredit || s.status === 'cancelled') return false;
+
+      // Filtro de status/tipo
+      if (creditTabFilter === 'pendentes' && s.creditStatus === 'quitado') return false;
+      if (creditTabFilter === 'quitados' && s.creditStatus !== 'quitado') return false;
+      if (creditTabFilter === 'fiado_vip' && s.paymentMethod !== 'fiado_vip') return false;
+      if (creditTabFilter === 'consumo_funcionario' && s.paymentMethod !== 'consumo_funcionario') return false;
+
+      // Filtro de busca
+      if (creditSearchQuery.trim()) {
+        const q = creditSearchQuery.toLowerCase();
+        const matchCust = (s.creditCustomerName || s.customerName || '').toLowerCase().includes(q);
+        const matchCollab = (s.collaboratorName || '').toLowerCase().includes(q);
+        const matchNotes = (s.creditNotes || '').toLowerCase().includes(q);
+        const matchId = s.id.toLowerCase().includes(q);
+        if (!matchCust && !matchCollab && !matchNotes && !matchId) return false;
+      }
+
+      return true;
+    });
+  }, [sales, creditTabFilter, creditSearchQuery]);
 
   // Clique no Produto
   const handleProductClick = (product: Product) => {
@@ -497,8 +607,32 @@ export default function CaixaPage() {
       return;
     }
 
+    let finalCustomerName = customerName.trim();
+    let collabName: string | undefined = undefined;
+    let finalCreditCustomer = creditCustomerInput.trim();
+
+    if (saleMethod === 'consumo_funcionario') {
+      if (!selectedCollaboratorId) {
+        alert('Por favor, selecione qual colaborador da equipe está realizando o consumo.');
+        return;
+      }
+      const collab = collaboratorsList.find(c => c.id === selectedCollaboratorId);
+      collabName = collab?.name || 'Colaborador';
+      finalCustomerName = `[Equipe] ${collabName}`;
+    } else if (saleMethod === 'fiado_vip') {
+      if (!finalCreditCustomer && !finalCustomerName) {
+        alert('Por favor, informe o nome do cliente VIP para o registro do fiado.');
+        return;
+      }
+      finalCustomerName = `[Fiado VIP] ${finalCreditCustomer || finalCustomerName}`;
+    }
+
+    if (!finalCustomerName) {
+      finalCustomerName = (orderType === 'mesa' ? 'Mesa' : orderType === 'retirada' ? 'Retirada' : 'Delivery');
+    }
+
     addSale({
-      customerName: customerName.trim() || (orderType === 'mesa' ? 'Mesa' : orderType === 'retirada' ? 'Retirada' : 'Delivery'),
+      customerName: finalCustomerName,
       orderType,
       channel: saleChannel,
       subtotal: cartSubtotal,
@@ -509,17 +643,23 @@ export default function CaixaPage() {
       paymentMethod: saleMethod,
       items: cart,
       productionStatus: orderProductionStatus,
-      targetPrepMinutes
+      targetPrepMinutes,
+      collaboratorId: saleMethod === 'consumo_funcionario' ? selectedCollaboratorId : undefined,
+      collaboratorName: collabName,
+      creditCustomerName: saleMethod === 'fiado_vip' ? (finalCreditCustomer || customerName) : undefined,
+      creditDueDate: saleMethod === 'fiado_vip' ? (creditDueDateInput || undefined) : undefined,
+      creditNotes: saleMethod === 'fiado_vip' ? (creditNotesInput || undefined) : undefined,
+      creditStatus: (saleMethod === 'consumo_funcionario' || saleMethod === 'fiado_vip') ? 'pendente' : undefined
     });
 
     // Se o pedido for de mesa, lança o consumo automaticamente na instância da mesa
-    if (orderType === 'mesa' && customerName.trim()) {
+    if (orderType === 'mesa' && finalCustomerName) {
       const mesaAlvo = floorSession.mesas.find(
-        m => m.numeroIdentificador.toLowerCase() === customerName.trim().toLowerCase() ||
-             m.id === customerName.trim()
+        m => m.numeroIdentificador.toLowerCase() === finalCustomerName.toLowerCase() ||
+             m.id === finalCustomerName
       );
       if (mesaAlvo) {
-        const updatedFloor = lancarConsumoNaMesa(floorSession, mesaAlvo.id, cartTotal, customerName.trim(), 'Operador');
+        const updatedFloor = lancarConsumoNaMesa(floorSession, mesaAlvo.id, cartTotal, finalCustomerName, 'Operador');
         setFloorSession(updatedFloor);
       }
     }
@@ -530,6 +670,10 @@ export default function CaixaPage() {
     setDeliveryFeeInput('');
     setHasStoreCoupon(false);
     setOrderProductionStatus('em_espera');
+    setSelectedCollaboratorId('');
+    setCreditCustomerInput('');
+    setCreditDueDateInput('');
+    setCreditNotesInput('');
   };
 
   const handleAddMovement = (e: React.FormEvent) => {
@@ -577,6 +721,24 @@ export default function CaixaPage() {
     const operator = operatorCloseInput.trim();
 
     await closeCaixa(counted, operator, expected);
+
+    // Alerta antifraude em caso de quebra ou sobra no fechamento cego
+    if (Math.abs(variance) > 0.05) {
+      sendOwnerSecurityAlert({
+        type: 'FECHAMENTO_CAIXA_DIVERGENCIA',
+        title: `Alerta de Fechamento Cego: ${variance < 0 ? 'Quebra de Caixa (Falta)' : 'Sobra de Caixa (Excedente)'}`,
+        message: `O operador ${operator} encerrou o turno com divergência de ${variance < 0 ? `- R$ ${Math.abs(variance).toFixed(2)} (Falta)` : `+ R$ ${variance.toFixed(2)} (Sobra)`}. Esperado pelo sistema: R$ ${expected.toFixed(2)} | Contado fisicamente: R$ ${counted.toFixed(2)}.`,
+        operator,
+        amount: Math.abs(variance),
+        details: {
+          operador: operator,
+          esperado: expected,
+          contado: counted,
+          divergencia: variance,
+          sessaoId: activeCashSession?.id
+        }
+      });
+    }
 
     setClosingSummary({
       initial: sessionStats.initial,
@@ -680,12 +842,17 @@ export default function CaixaPage() {
             {isOpen ? (
               <button 
                 onClick={() => {
-                  setCountedAmountInput(sessionStats.expectedInDrawer.toFixed(2));
+                  setCountedAmountInput('');
+                  setDenominations({
+                    bill100: 0, bill50: 0, bill20: 0, bill10: 0, bill5: 0, bill2: 0,
+                    coin1: 0, coin050: 0, coin025: 0, coin010: 0, coin005: 0
+                  });
+                  setUsePhysicalCalc(true);
                   setShowCloseModal(true);
                 }}
                 className="px-5 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-sm"
               >
-                <Lock size={16} /> Fechar Caixa
+                <Lock size={16} /> Fechar Caixa (Cego)
               </button>
             ) : (
               <button 
@@ -774,62 +941,169 @@ export default function CaixaPage() {
           </div>
         )}
 
-        {/* Modal de Fechamento */}
+        {/* Modal de Fechamento Cego */}
         {showCloseModal && (
           <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-md w-full shadow-2xl animate-fade-in">
-              <h2 className="text-2xl font-bold text-white mb-2 flex items-center gap-2">
-                <Lock className="text-red-400" /> Fechamento de Caixa
-              </h2>
-              <p className="text-slate-400 text-sm mb-6">Confira os valores na gaveta e encerre o turno.</p>
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-xl w-full shadow-2xl animate-fade-in max-h-[92vh] flex flex-col">
+              <div className="flex justify-between items-start mb-2">
+                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                  <Lock className="text-red-400" /> Fechamento Cego de Turno
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowCloseModal(false)}
+                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <p className="text-slate-400 text-xs mb-4">
+                Conte o dinheiro físico da gaveta. O sistema fará a conferência da quebra ou sobra apenas após a confirmação.
+              </p>
 
-              {/* Box de Instrução para Fechamento Cego */}
-              <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl mb-6 space-y-2 text-xs">
-                <p className="font-black text-amber-400 flex items-center gap-1.5 uppercase tracking-wide">
-                  <Lock size={15} /> Fechamento Cego Ativado
-                </p>
-                <p className="text-slate-300 leading-relaxed">
-                  Conte fisicamente todas as cédulas e moedas presentes na gaveta e digite o valor total abaixo.
-                  O sistema fará a apuração automática da quebra ou sobra de caixa após a confirmação.
-                </p>
+              {/* Toggle de Métodos de Contagem */}
+              <div className="flex gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800 mb-4 text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setUsePhysicalCalc(true)}
+                  className={`flex-1 py-2 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                    usePhysicalCalc ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  🧮 Calculadora de Cédulas & Moedas
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUsePhysicalCalc(false)}
+                  className={`flex-1 py-2 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                    !usePhysicalCalc ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  🔢 Digitar Total Direto
+                </button>
               </div>
 
-              <form onSubmit={handleConfirmClose} className="space-y-4">
-                <div>
-                  <label className="block text-slate-300 font-bold text-sm mb-2">Valor Real Contado na Gaveta (R$)</label>
-                  <input 
-                    type="number" 
-                    step="0.01" 
-                    required 
-                    value={countedAmountInput}
-                    onChange={e => setCountedAmountInput(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-2xl p-4 text-white font-mono text-xl font-bold outline-none focus:border-red-500"
-                  />
+              <form onSubmit={handleConfirmClose} className="space-y-4 overflow-y-auto pr-1 flex-1">
+                {usePhysicalCalc ? (
+                  <div className="space-y-4 bg-slate-950/60 p-4 rounded-2xl border border-slate-800">
+                    <div>
+                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                        💵 Cédulas Físicas:
+                      </span>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {[
+                          { key: 'bill100', label: 'R$ 100', mult: 100 },
+                          { key: 'bill50', label: 'R$ 50', mult: 50 },
+                          { key: 'bill20', label: 'R$ 20', mult: 20 },
+                          { key: 'bill10', label: 'R$ 10', mult: 10 },
+                          { key: 'bill5', label: 'R$ 5', mult: 5 },
+                          { key: 'bill2', label: 'R$ 2', mult: 2 }
+                        ].map(c => (
+                          <div key={c.key} className="bg-slate-900/90 border border-slate-800 p-2 rounded-xl flex items-center justify-between">
+                            <div>
+                              <span className="text-xs font-bold text-white block">{c.label}</span>
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                = R$ {(denominations[c.key as keyof typeof denominations] * c.mult).toFixed(2)}
+                              </span>
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              value={denominations[c.key as keyof typeof denominations] || ''}
+                              onChange={e => updateDenomination(c.key as keyof typeof denominations, parseInt(e.target.value) || 0)}
+                              placeholder="0"
+                              className="w-14 bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-center font-mono text-sm text-white font-bold outline-none focus:border-red-500"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
+                        🪙 Moedas:
+                      </span>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {[
+                          { key: 'coin1', label: 'R$ 1,00', mult: 1 },
+                          { key: 'coin050', label: 'R$ 0,50', mult: 0.50 },
+                          { key: 'coin025', label: 'R$ 0,25', mult: 0.25 },
+                          { key: 'coin010', label: 'R$ 0,10', mult: 0.10 },
+                          { key: 'coin005', label: 'R$ 0,05', mult: 0.05 }
+                        ].map(m => (
+                          <div key={m.key} className="bg-slate-900/90 border border-slate-800 p-2 rounded-xl flex items-center justify-between">
+                            <div>
+                              <span className="text-xs font-bold text-white block">{m.label}</span>
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                = R$ {(denominations[m.key as keyof typeof denominations] * m.mult).toFixed(2)}
+                              </span>
+                            </div>
+                            <input
+                              type="number"
+                              min="0"
+                              value={denominations[m.key as keyof typeof denominations] || ''}
+                              onChange={e => updateDenomination(m.key as keyof typeof denominations, parseInt(e.target.value) || 0)}
+                              placeholder="0"
+                              className="w-14 bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-center font-mono text-sm text-white font-bold outline-none focus:border-red-500"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* Box de Total Contado */}
+                <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 flex items-center justify-between">
+                  <div>
+                    <label className="block text-slate-400 font-bold text-xs">Total Físico em Espécie na Gaveta</label>
+                    <span className="text-[10px] text-slate-500">Valor que você está declarando estar presente</span>
+                  </div>
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-xs text-slate-400 font-mono">R$</span>
+                    {usePhysicalCalc ? (
+                      <span className="text-2xl font-mono font-black text-emerald-400">
+                        {Number(countedAmountInput || 0).toFixed(2)}
+                      </span>
+                    ) : (
+                      <input 
+                        type="number" 
+                        step="0.01" 
+                        required 
+                        value={countedAmountInput}
+                        onChange={e => setCountedAmountInput(e.target.value)}
+                        className="w-32 bg-slate-900 border border-slate-700 rounded-xl p-2 text-right text-emerald-400 font-mono text-xl font-bold outline-none focus:border-red-500"
+                        placeholder="0.00"
+                      />
+                    )}
+                  </div>
                 </div>
+
                 <div>
-                  <label className="block text-slate-300 font-bold text-sm mb-2">Operador Responsável pelo Fechamento</label>
+                  <label className="block text-slate-300 font-bold text-xs mb-1">Operador Responsável pelo Fechamento</label>
                   <input 
                     type="text" 
                     required 
                     value={operatorCloseInput}
                     onChange={e => setOperatorCloseInput(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-2xl p-4 text-white outline-none focus:border-red-500"
+                    className="w-full bg-slate-950 border border-slate-700 rounded-2xl p-3 text-white outline-none focus:border-red-500 text-sm"
                     placeholder="Seu nome"
                   />
                 </div>
-                <div className="flex gap-3 pt-4">
+
+                <div className="flex gap-3 pt-2">
                   <button 
                     type="button" 
                     onClick={() => setShowCloseModal(false)}
-                    className="flex-1 py-4 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold transition-all cursor-pointer"
+                    className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold transition-all cursor-pointer text-sm"
                   >
                     Voltar
                   </button>
                   <button 
                     type="submit" 
-                    className="flex-1 py-4 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-bold shadow-lg shadow-red-600/30 transition-all cursor-pointer"
+                    className="flex-1 py-3.5 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-bold shadow-lg shadow-red-600/30 transition-all cursor-pointer text-sm"
                   >
-                    Encerrar e Salvar
+                    Encerrar e Apurar Caixa
                   </button>
                 </div>
               </form>
@@ -929,6 +1203,24 @@ export default function CaixaPage() {
                 }`}
               >
                 <DollarSign size={16} className="text-status-danger" /> Gaveta
+              </button>
+
+              <button 
+                onClick={() => setActiveTab('contas_receber')} 
+                className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
+                  activeTab === 'contas_receber' 
+                    ? 'bg-surface-elevated text-slate-100 border-surface-borderHover shadow-xs' 
+                    : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
+                }`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <Receipt size={16} className="text-amber-400" /> Contas a Receber
+                </div>
+                {sales.filter(s => (s.paymentMethod === 'fiado_vip' || s.paymentMethod === 'consumo_funcionario') && s.creditStatus !== 'quitado' && s.status === 'completed').length > 0 && (
+                  <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[10px] font-mono tabular-nums font-bold rounded-full">
+                    {sales.filter(s => (s.paymentMethod === 'fiado_vip' || s.paymentMethod === 'consumo_funcionario') && s.creditStatus !== 'quitado' && s.status === 'completed').length}
+                  </span>
+                )}
               </button>
 
               {/* Slider de Tempo Dinâmico para a Cozinha Solicitado */}
@@ -1573,14 +1865,16 @@ export default function CaixaPage() {
                         <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                           Forma de Pagamento:
                         </label>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                           {[
                             { id: 'ifood_online', label: 'iFood Online', fee: 'Taxa 33%', isIfood: true },
                             { id: 'ifood_entrega', label: 'iFood Entrega', fee: 'Taxa 23%', isIfood: true },
                             { id: 'credito', label: 'Cartão Crédito', fee: 'Taxa 3%' },
                             { id: 'debito', label: 'Cartão Débito', fee: 'Taxa 1%' },
                             { id: 'pix', label: 'PIX Direto', fee: 'Taxa 0%' },
-                            { id: 'dinheiro', label: 'Dinheiro', fee: 'Gaveta' }
+                            { id: 'dinheiro', label: 'Dinheiro', fee: 'Gaveta' },
+                            { id: 'consumo_funcionario', label: 'Consumo Equipe', fee: 'Colaborador', isCollab: true },
+                            { id: 'fiado_vip', label: 'Fiado VIP', fee: 'A Receber', isFiado: true }
                           ].map(method => (
                             <button
                               key={method.id}
@@ -1594,19 +1888,99 @@ export default function CaixaPage() {
                               }}
                               className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border ${
                                 saleMethod === method.id 
-                                  ? 'bg-emerald-600 border-emerald-500 text-white shadow-md font-extrabold' 
+                                  ? method.isCollab 
+                                    ? 'bg-purple-600 border-purple-500 text-white shadow-md font-extrabold'
+                                    : method.isFiado
+                                      ? 'bg-amber-600 border-amber-500 text-white shadow-md font-extrabold'
+                                      : 'bg-emerald-600 border-emerald-500 text-white shadow-md font-extrabold' 
                                   : method.isIfood
                                     ? 'bg-red-500/10 border-red-500/30 text-red-300 hover:bg-red-500/20'
-                                    : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border-slate-800'
+                                    : method.isCollab
+                                      ? 'bg-purple-500/10 border-purple-500/30 text-purple-300 hover:bg-purple-500/20'
+                                      : method.isFiado
+                                        ? 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20'
+                                        : 'bg-slate-900 text-slate-300 hover:bg-slate-800 border-slate-800'
                               }`}
                             >
                               <span className="block text-xs font-bold leading-tight">{method.label}</span>
-                              <span className={`text-[10px] font-mono ${saleMethod === method.id ? 'text-emerald-100' : 'text-slate-400'}`}>
+                              <span className={`text-[10px] font-mono ${saleMethod === method.id ? 'text-white/90' : 'text-slate-400'}`}>
                                 {method.fee}
                               </span>
                             </button>
                           ))}
                         </div>
+
+                        {/* Formulário Condicional: Consumo de Funcionário */}
+                        {saleMethod === 'consumo_funcionario' && (
+                          <div className="p-3 bg-purple-500/10 border border-purple-500/30 rounded-xl space-y-2 mt-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-purple-300 flex items-center gap-1.5">
+                                <UserCheck size={14} /> Colaborador da Equipe
+                              </span>
+                              <span className="text-[10px] text-purple-400">Consumo Interno / Folha</span>
+                            </div>
+                            <select
+                              value={selectedCollaboratorId}
+                              onChange={e => setSelectedCollaboratorId(e.target.value)}
+                              className="w-full bg-slate-950 border border-purple-500/40 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-purple-400 cursor-pointer"
+                            >
+                              <option value="">-- Selecione o Colaborador --</option>
+                              {collaboratorsList.map(c => (
+                                <option key={c.id} value={c.id}>
+                                  {c.name} ({c.role === 'caixa' ? 'Caixa' : c.role === 'cozinha' ? 'Cozinha' : c.role === 'gerente' ? 'Gerente' : c.role})
+                                </option>
+                              ))}
+                            </select>
+                            {collaboratorsList.length === 0 && (
+                              <p className="text-[11px] text-amber-400">
+                                Nenhum colaborador cadastrado. Cadastre no módulo Gestão &gt; Colaboradores.
+                              </p>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Formulário Condicional: Fiado VIP */}
+                        {saleMethod === 'fiado_vip' && (
+                          <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl space-y-2.5 mt-2">
+                            <div className="flex items-center justify-between">
+                              <span className="text-xs font-bold text-amber-300 flex items-center gap-1.5">
+                                <CreditCard size={14} /> Registro de Fiado VIP
+                              </span>
+                              <span className="text-[10px] text-amber-400">Lançamento em Contas a Receber</span>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-400 mb-1">Nome do Cliente VIP *</label>
+                                <input
+                                  type="text"
+                                  placeholder="Ex: Dr. Roberto / Carla Vizinha"
+                                  value={creditCustomerInput}
+                                  onChange={e => setCreditCustomerInput(e.target.value)}
+                                  className="w-full bg-slate-950 border border-amber-500/40 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-400 mb-1">Previsão de Quitação</label>
+                                <input
+                                  type="date"
+                                  value={creditDueDateInput}
+                                  onChange={e => setCreditDueDateInput(e.target.value)}
+                                  className="w-full bg-slate-950 border border-amber-500/40 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                                />
+                              </div>
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-slate-400 mb-1">Observações / Telefone / Contato</label>
+                              <input
+                                type="text"
+                                placeholder="Ex: Paga todo dia 10 / WhatsApp (11) 99999-8888"
+                                value={creditNotesInput}
+                                onChange={e => setCreditNotesInput(e.target.value)}
+                                className="w-full bg-slate-950 border border-amber-500/40 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-amber-400"
+                              />
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       <button 
@@ -2071,6 +2445,264 @@ export default function CaixaPage() {
                       </div>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* ABA DE CONTAS A RECEBER (FIADO VIP & CONSUMO DE EQUIPE) */}
+              {activeTab === 'contas_receber' && (
+                <div className="glass-card rounded-3xl p-6 lg:p-8 border border-slate-800 space-y-6 animate-fade-in">
+                  
+                  {/* Topo / Header da Aba */}
+                  <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 pb-6 border-b border-slate-800/80">
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="p-2 rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                          <Receipt size={20} />
+                        </span>
+                        <h2 className="text-xl lg:text-2xl font-black text-white">
+                          Gestão de Contas a Receber
+                        </h2>
+                      </div>
+                      <p className="text-xs text-slate-400">
+                        Controle de crédito para Clientes VIP (Fiado) e Consumo interno de Colaboradores (Folha).
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-xs font-medium text-slate-300">
+                        Total Registros: <strong className="text-white font-mono">{creditSalesList.length}</strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* 4 Cards de Métricas em Destaque */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/20">
+                      <div className="flex items-center justify-between text-amber-400 text-xs font-bold mb-1">
+                        <span>Total Pendente (Geral)</span>
+                        <AlertCircle size={16} />
+                      </div>
+                      <div className="text-2xl font-mono font-black text-amber-300">
+                        R$ {creditMetrics.totalPending.toFixed(2)}
+                      </div>
+                      <div className="text-[11px] text-amber-400/80 mt-1">
+                        {creditMetrics.pendingCount} lançamentos em aberto
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-amber-500/5 border border-amber-500/20">
+                      <div className="flex items-center justify-between text-amber-300 text-xs font-bold mb-1">
+                        <span>Fiado VIP Pendente</span>
+                        <CreditCard size={16} />
+                      </div>
+                      <div className="text-2xl font-mono font-black text-white">
+                        R$ {creditMetrics.fiadoPending.toFixed(2)}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1">
+                        Clientes de confiança
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-purple-500/10 border border-purple-500/20">
+                      <div className="flex items-center justify-between text-purple-400 text-xs font-bold mb-1">
+                        <span>Consumo Equipe</span>
+                        <UserCheck size={16} />
+                      </div>
+                      <div className="text-2xl font-mono font-black text-purple-300">
+                        R$ {creditMetrics.collabPending.toFixed(2)}
+                      </div>
+                      <div className="text-[11px] text-purple-400/80 mt-1">
+                        Desconto em folha / vale
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-2xl bg-emerald-500/10 border border-emerald-500/20">
+                      <div className="flex items-center justify-between text-emerald-400 text-xs font-bold mb-1">
+                        <span>Total Quitado</span>
+                        <CheckCircle2 size={16} />
+                      </div>
+                      <div className="text-2xl font-mono font-black text-emerald-400">
+                        R$ {creditMetrics.totalPaid.toFixed(2)}
+                      </div>
+                      <div className="text-[11px] text-emerald-400/80 mt-1">
+                        Valores já recebidos
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Barra de Filtros e Busca */}
+                  <div className="flex flex-col md:flex-row gap-3 items-center justify-between bg-slate-950/60 p-3 rounded-2xl border border-slate-800">
+                    <div className="flex flex-wrap items-center gap-1.5 w-full md:w-auto">
+                      {(
+                        [
+                          { id: 'pendentes', label: '⏳ Pendentes' },
+                          { id: 'quitados', label: '✅ Quitados' },
+                          { id: 'fiado_vip', label: '⭐ Fiado VIP' },
+                          { id: 'consumo_funcionario', label: '👥 Consumo Equipe' },
+                          { id: 'todos', label: 'Todos' }
+                        ] as const
+                      ).map(f => (
+                        <button
+                          key={f.id}
+                          type="button"
+                          onClick={() => setCreditTabFilter(f.id)}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                            creditTabFilter === f.id
+                              ? 'bg-amber-600 text-slate-950 shadow-sm'
+                              : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="relative w-full md:w-72">
+                      <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                      <input
+                        type="text"
+                        placeholder="Buscar por cliente, colaborador..."
+                        value={creditSearchQuery}
+                        onChange={e => setCreditSearchQuery(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-8 pr-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Tabela de Contas a Receber */}
+                  <div className="overflow-x-auto rounded-2xl border border-slate-800/80">
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-950 text-slate-400 border-b border-slate-800 uppercase tracking-wider text-[10px] font-bold">
+                          <th className="p-3.5">Data / ID</th>
+                          <th className="p-3.5">Tipo</th>
+                          <th className="p-3.5">Cliente / Colaborador</th>
+                          <th className="p-3.5">Itens Consumidos</th>
+                          <th className="p-3.5">Previsão / Obs</th>
+                          <th className="p-3.5 text-right">Valor Total</th>
+                          <th className="p-3.5 text-center">Status</th>
+                          <th className="p-3.5 text-center">Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/60 bg-slate-900/40">
+                        {creditSalesList.length === 0 ? (
+                          <tr>
+                            <td colSpan={8} className="p-8 text-center text-slate-500">
+                              Nenhuma conta a receber encontrada com os filtros selecionados.
+                            </td>
+                          </tr>
+                        ) : (
+                          creditSalesList.map(sale => {
+                            const isCollab = sale.paymentMethod === 'consumo_funcionario';
+                            const isPending = sale.creditStatus !== 'quitado';
+                            const personName = isCollab 
+                              ? (sale.collaboratorName || 'Colaborador') 
+                              : (sale.creditCustomerName || sale.customerName || 'Cliente VIP');
+
+                            return (
+                              <tr key={sale.id} className="hover:bg-slate-800/40 transition-colors">
+                                <td className="p-3.5 font-mono text-slate-400">
+                                  <div>{new Date(sale.date).toLocaleDateString('pt-BR')}</div>
+                                  <div className="text-[10px] text-slate-500">
+                                    {new Date(sale.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })} • #{sale.id.slice(0, 5).toUpperCase()}
+                                  </div>
+                                </td>
+
+                                <td className="p-3.5">
+                                  {isCollab ? (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-purple-500/15 border border-purple-500/30 text-purple-300 font-bold text-[10px]">
+                                      <UserCheck size={11} /> Equipe
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-500/15 border border-amber-500/30 text-amber-300 font-bold text-[10px]">
+                                      <CreditCard size={11} /> Fiado VIP
+                                    </span>
+                                  )}
+                                </td>
+
+                                <td className="p-3.5 font-semibold text-white">
+                                  <div className="flex items-center gap-1.5">
+                                    {personName}
+                                  </div>
+                                </td>
+
+                                <td className="p-3.5 text-slate-300 max-w-xs truncate" title={sale.items.map(i => `${i.quantity}x ${i.productName}`).join(', ')}>
+                                  {sale.items.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
+                                </td>
+
+                                <td className="p-3.5 text-slate-400">
+                                  {sale.creditDueDate && (
+                                    <div className="text-[11px] font-mono text-amber-300 flex items-center gap-1">
+                                      <Calendar size={11} /> {new Date(sale.creditDueDate + 'T00:00:00').toLocaleDateString('pt-BR')}
+                                    </div>
+                                  )}
+                                  {sale.creditNotes && (
+                                    <div className="text-[10px] text-slate-500 truncate max-w-[160px]" title={sale.creditNotes}>
+                                      {sale.creditNotes}
+                                    </div>
+                                  )}
+                                  {!sale.creditDueDate && !sale.creditNotes && (
+                                    <span className="text-slate-600">-</span>
+                                  )}
+                                </td>
+
+                                <td className="p-3.5 text-right font-mono font-bold text-white text-sm">
+                                  R$ {sale.total.toFixed(2)}
+                                </td>
+
+                                <td className="p-3.5 text-center">
+                                  {isPending ? (
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/30 text-amber-400 text-[10px] font-bold">
+                                      ⏳ Pendente
+                                    </span>
+                                  ) : (
+                                    <div className="inline-flex flex-col items-center">
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">
+                                        <Check size={10} /> Quitado
+                                      </span>
+                                      {sale.creditPaidAt && (
+                                        <span className="text-[9px] text-slate-500 mt-0.5 font-mono">
+                                          {new Date(sale.creditPaidAt).toLocaleDateString('pt-BR')} via {sale.creditPaidMethod?.toUpperCase()}
+                                        </span>
+                                      )}
+                                    </div>
+                                  )}
+                                </td>
+
+                                <td className="p-3.5 text-center">
+                                  <div className="flex items-center justify-center gap-1.5">
+                                    {isPending && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSaleToSettle(sale);
+                                          setSettlementMethod('pix');
+                                          setSettlementOperator(activeCashSession?.openedBy || 'Operador');
+                                        }}
+                                        className="px-2.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold text-[11px] flex items-center gap-1 cursor-pointer transition-all shadow-xs"
+                                        title="Liquidar / Dar Baixa"
+                                      >
+                                        <Banknote size={12} /> Liquidar
+                                      </button>
+                                    )}
+                                    <button
+                                      type="button"
+                                      onClick={() => setSelectedSaleToPrint(sale)}
+                                      className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg cursor-pointer transition-all"
+                                      title="Imprimir Cupom da Venda"
+                                    >
+                                      <Printer size={13} />
+                                    </button>
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
                 </div>
               )}
             </div>
@@ -2611,6 +3243,134 @@ export default function CaixaPage() {
                   className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 cursor-pointer transition-all"
                 >
                   Confirmar Brinde
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE LIQUIDAÇÃO DE CONTAS A RECEBER */}
+        {saleToSettle && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-emerald-500/40 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl animate-fade-in space-y-5">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-2xl border border-emerald-500/20">
+                    <Banknote size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-white">Liquidar Conta</h3>
+                    <p className="text-xs text-slate-400">Registrar recebimento e quitação do débito</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSaleToSettle(null)}
+                  className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Informações da Conta */}
+              <div className="bg-slate-950/70 p-4 rounded-2xl border border-slate-800 space-y-2 text-xs">
+                <div className="flex justify-between items-center text-slate-400">
+                  <span>Devedor / Titular:</span>
+                  <strong className="text-white text-sm font-bold">
+                    {saleToSettle.creditCustomerName || saleToSettle.collaboratorName || saleToSettle.customerName}
+                  </strong>
+                </div>
+                <div className="flex justify-between items-center text-slate-400">
+                  <span>Categoria:</span>
+                  <span className={`font-bold ${saleToSettle.paymentMethod === 'consumo_funcionario' ? 'text-purple-400' : 'text-amber-400'}`}>
+                    {saleToSettle.paymentMethod === 'consumo_funcionario' ? '👥 Consumo Equipe' : '⭐ Fiado VIP'}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-slate-400 pt-1 border-t border-slate-800/80">
+                  <span className="font-bold text-slate-300">Valor a Quitar:</span>
+                  <span className="text-xl font-mono font-black text-emerald-400">
+                    R$ {saleToSettle.total.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Forma de Liquidação */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-300">
+                  Forma de Pagamento Utilizada <span className="text-emerald-400">*</span>
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: 'dinheiro', label: '💵 Dinheiro', hint: 'Gera suprimento no caixa' },
+                    { id: 'pix', label: '⚡ PIX Direto', hint: 'Conta bancária' },
+                    { id: 'debito', label: '💳 Cartão Débito', hint: 'Maquininha' },
+                    { id: 'credito', label: '💳 Cartão Crédito', hint: 'Maquininha' },
+                    { id: 'folha', label: '📄 Desconto em Folha', hint: 'Folha de pagamento' }
+                  ].map(m => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setSettlementMethod(m.id)}
+                      className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all ${
+                        settlementMethod === m.id
+                          ? 'bg-emerald-600 border-emerald-500 text-white font-bold shadow-md'
+                          : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                      }`}
+                    >
+                      <div className="text-xs font-bold">{m.label}</div>
+                      <div className="text-[10px] text-slate-400">{m.hint}</div>
+                    </button>
+                  ))}
+                </div>
+                {settlementMethod === 'dinheiro' && (
+                  <p className="text-[11px] text-emerald-400/90 bg-emerald-500/10 p-2.5 rounded-xl border border-emerald-500/20">
+                    💡 O valor de <strong>R$ {saleToSettle.total.toFixed(2)}</strong> será registrado como suprimento na gaveta do caixa atual para manter o saldo físico exato.
+                  </p>
+                )}
+              </div>
+
+              {/* Operador Responsável */}
+              <div>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  Operador Responsável pelo Recebimento
+                </label>
+                <input
+                  type="text"
+                  value={settlementOperator}
+                  onChange={e => setSettlementOperator(e.target.value)}
+                  placeholder="Nome do operador"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white text-xs outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* Botões de Ação */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSaleToSettle(null)}
+                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer transition-all"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={settling}
+                  onClick={async () => {
+                    setSettling(true);
+                    try {
+                      await settleCreditSale(
+                        saleToSettle.id, 
+                        settlementMethod, 
+                        settlementOperator.trim() || activeCashSession?.openedBy || 'Operador'
+                      );
+                      setSaleToSettle(null);
+                    } finally {
+                      setSettling(false);
+                    }
+                  }}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 cursor-pointer transition-all disabled:opacity-50"
+                >
+                  {settling ? 'Liquidando...' : 'Confirmar Quitação'}
                 </button>
               </div>
             </div>

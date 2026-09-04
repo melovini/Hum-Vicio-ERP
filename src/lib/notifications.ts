@@ -3,6 +3,7 @@ export type SecurityAlertType =
   | 'SANGRIA' 
   | 'BRINDE_OU_DESCONTO' 
   | 'TETO_GAVETA_EXCEDIDO'
+  | 'FECHAMENTO_CAIXA_DIVERGENCIA'
   | 'TESTE_SISTEMA';
 
 export interface SecurityAlertPayload {
