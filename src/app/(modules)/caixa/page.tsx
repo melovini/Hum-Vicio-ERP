@@ -21,6 +21,7 @@ import {
 } from '@/lib/mesas';
 import { sendOwnerSecurityAlert } from '@/lib/notifications';
 import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
+import { printThermalElement } from '@/lib/thermal-printer';
 
 export interface DeliveryRouteBlock {
   id: string;
@@ -4362,7 +4363,55 @@ export default function CaixaPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    window.print();
+                    const html = `
+                      <div class="text-center">
+                        <div class="font-bold text-base">HUM VICIO HAMBURGUERIA</div>
+                        <div class="text-[10px]">CNPJ: 32.588.610/0001-44</div>
+                        <div class="border-b my-1"></div>
+                        <div class="font-bold text-sm">FECHAMENTO DE CAIXA</div>
+                        <div class="text-[10px]">${new Date(closingSummary.date).toLocaleString('pt-BR')}</div>
+                        <div class="text-[10px] font-bold">OPERADOR: ${closingSummary.operator.toUpperCase()}</div>
+                        <div class="border-b my-1"></div>
+                      </div>
+                      <div class="space-y-1 text-xs">
+                        <div class="flex justify-between">
+                          <span>Troco Inicial:</span>
+                          <span class="font-bold">R$ ${closingSummary.initial.toFixed(2)}</span>
+                        </div>
+                        <div class="flex justify-between">
+                          <span>Vendas em Dinheiro:</span>
+                          <span class="font-bold">+ R$ ${closingSummary.cashSales.toFixed(2)}</span>
+                        </div>
+                        <div class="flex justify-between">
+                          <span>Suprimentos na Gaveta:</span>
+                          <span class="font-bold">+ R$ ${closingSummary.suprimentos.toFixed(2)}</span>
+                        </div>
+                        <div class="flex justify-between">
+                          <span>Sangrias Realizadas:</span>
+                          <span class="font-bold">- R$ ${closingSummary.sangrias.toFixed(2)}</span>
+                        </div>
+                        <div class="border-b my-1"></div>
+                        <div class="flex justify-between font-bold">
+                          <span>Esperado na Gaveta:</span>
+                          <span>R$ ${closingSummary.expectedInDrawer.toFixed(2)}</span>
+                        </div>
+                        <div class="flex justify-between font-bold">
+                          <span>Contado na Gaveta:</span>
+                          <span>R$ ${closingSummary.countedCash.toFixed(2)}</span>
+                        </div>
+                        <div class="border-b my-1"></div>
+                        <div class="text-center p-2 font-bold ${Math.abs(closingSummary.variance) < 0.01 ? '' : 'bg-black text-white'}">
+                          <div class="text-xs uppercase">${Math.abs(closingSummary.variance) < 0.01 ? 'CAIXA BATEU PERFEITAMENTE' : closingSummary.variance < 0 ? 'QUEBRA DE CAIXA (FALTA)' : 'SOBRA DE CAIXA'}</div>
+                          <div class="text-base">${closingSummary.variance >= 0 ? '+' : ''} R$ ${closingSummary.variance.toFixed(2)}</div>
+                        </div>
+                        <div class="border-b my-1"></div>
+                        <div class="text-center text-[10px] pt-4">
+                          Assinatura do Operador:<br><br>
+                          __________________________________
+                        </div>
+                      </div>
+                    `;
+                    printThermalElement(html, 'Fechamento de Caixa - Hum Vício');
                   }}
                   className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center gap-2 cursor-pointer transition-all"
                 >

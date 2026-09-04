@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { Sale } from '@/lib/store';
 import { DeliveryRouteBlock } from '@/app/(modules)/caixa/page';
 import { Printer, X, Truck, Copy, Share2 } from 'lucide-react';
+import { printThermalElement } from '@/lib/thermal-printer';
 
 interface RouteManifestModalProps {
   route: DeliveryRouteBlock | null;
@@ -26,15 +27,8 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
   const formattedDate = new Date().toLocaleDateString('pt-BR');
   const formattedTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  const handlePrint = async () => {
-    try {
-      if (document.fonts?.ready) {
-        await document.fonts.ready;
-      }
-    } catch {}
-    setTimeout(() => {
-      window.print();
-    }, 100);
+  const handlePrint = () => {
+    printThermalElement('thermal-route-manifest-printable', `Manifesto de Rota #${route.id ? route.id.slice(0, 6).toUpperCase() : ''} - Hum Vicio`);
   };
 
   // Gerador de Texto RAW ESC/POS (40 colunas contínuas)
@@ -142,14 +136,14 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
         @media print {
           @page {
             margin: 0 !important;
-            size: 80mm auto !important;
+            size: auto !important;
           }
           html, body {
             margin: 0 !important;
             padding: 0 !important;
-            width: 80mm !important;
-            min-width: 80mm !important;
-            max-width: 80mm !important;
+            width: 72mm !important;
+            min-width: 72mm !important;
+            max-width: 72mm !important;
             background: #ffffff !important;
             color: #000000 !important;
             font-family: 'Courier New', Courier, monospace !important;
@@ -164,10 +158,10 @@ export default function RouteManifestModal({ route, sales, onClose }: RouteManif
             position: absolute !important;
             left: 0 !important;
             top: 0 !important;
-            width: 80mm !important;
-            max-width: 80mm !important;
+            width: 72mm !important;
+            max-width: 72mm !important;
             margin: 0 !important;
-            padding: 4mm !important;
+            padding: 2mm !important;
             color: #000000 !important;
             background: #ffffff !important;
             font-family: 'Courier New', Courier, monospace !important;

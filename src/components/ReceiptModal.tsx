@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { Sale, SaleItem } from '@/lib/store';
 import { Printer, X, ChefHat, Receipt, CheckCircle, Copy, AlertTriangle, GitCompare } from 'lucide-react';
+import { printThermalElement } from '@/lib/thermal-printer';
 
 export interface OrderDiff {
   added: SaleItem[];
@@ -23,15 +24,8 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
 
   const activeDiff = diff || sale.orderDiff;
 
-  const handlePrint = async () => {
-    try {
-      if (document.fonts?.ready) {
-        await document.fonts.ready;
-      }
-    } catch {}
-    setTimeout(() => {
-      window.print();
-    }, 100);
+  const handlePrint = () => {
+    printThermalElement('thermal-receipt-printable', `Comprovante #${sale.id.slice(0, 6).toUpperCase()} - Hum Vicio`);
   };
 
   const formattedDate = new Date(sale.date).toLocaleDateString('pt-BR');
@@ -134,14 +128,14 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
         @media print {
           @page {
             margin: 0 !important;
-            size: 80mm auto !important;
+            size: auto !important;
           }
           html, body {
             margin: 0 !important;
             padding: 0 !important;
-            width: 80mm !important;
-            min-width: 80mm !important;
-            max-width: 80mm !important;
+            width: 72mm !important;
+            min-width: 72mm !important;
+            max-width: 72mm !important;
             background: #ffffff !important;
             color: #000000 !important;
             font-family: 'Courier New', Courier, monospace !important;
@@ -156,10 +150,10 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
             position: absolute !important;
             left: 0 !important;
             top: 0 !important;
-            width: 80mm !important;
-            max-width: 80mm !important;
+            width: 72mm !important;
+            max-width: 72mm !important;
             margin: 0 !important;
-            padding: 4mm !important;
+            padding: 2mm !important;
             color: #000000 !important;
             background: #ffffff !important;
             font-family: 'Courier New', Courier, monospace !important;
