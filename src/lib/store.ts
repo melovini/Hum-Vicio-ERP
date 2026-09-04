@@ -506,7 +506,12 @@ export function useInventory() {
 
       // 3. Fetch Sales (com suporte a fallback local resiliente)
       try {
-        const { data: salesData } = await supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(80);
+        const { data: salesData } = await supabase
+          .from('sales')
+          .select('*')
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .limit(80);
         const { data: saleItemsData } = await supabase.from('sale_items').select('*').not('sale_id', 'is', null);
         
         if (salesData && salesData.length > 0) {
@@ -612,6 +617,7 @@ export function useInventory() {
         const { data: allSessData } = await supabase
           .from('cash_sessions')
           .select('*')
+          .is('deleted_at', null)
           .order('opened_at', { ascending: false });
 
         if (allSessData && allSessData.length > 0) {
@@ -887,7 +893,12 @@ export function useInventory() {
     // Polling contínuo a cada 3.5s para garantir sincronização resiliente e atualização de itens
     const syncInterval = setInterval(async () => {
       try {
-        const { data: latestSales } = await supabase.from('sales').select('*').order('created_at', { ascending: false }).limit(60);
+        const { data: latestSales } = await supabase
+          .from('sales')
+          .select('*')
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .limit(60);
         const { data: latestItems } = await supabase.from('sale_items').select('*').not('sale_id', 'is', null);
         if (latestSales && latestSales.length > 0) {
           const overrides = getSavedProductionOverrides();
@@ -1551,32 +1562,76 @@ export function useInventory() {
     const openedAt = session ? new Date(session.openedAt).getTime() : 0;
     const closedAt = session?.closedAt ? new Date(session.closedAt).getTime() : Date.now();
 
-    // Vendas que ocorreram no período da sessão
-    const salesToDelete = sales.filter(s => {
-      const saleTime = new Date(s.date).getTime();
-      return saleTime >= (openedAt - 120000) && saleTime <= (closedAt + 120000);
-    });
-    const saleIdsToDelete = salesToDelete.map(s => s.id);
+    // Vendas locais que ocorreram no período da sessão
+    const localSaleIds = sales
+      .filter(s => {
+        const saleTime = new Date(s.date).getTime();
+        return saleTime >= (openedAt - 120000) && saleTime <= (closedAt + 120000);
+      })
+      .map(s => s.id);
+
+    // Buscar também diretamente no Supabase vendas criadas no período da sessão
+    let dbSaleIds: string[] = [];
+    try {
+      const { data: dbSales } = await supabase
+        .from('sales')
+        .select('id')
+        .gte('created_at', new Date(openedAt - 120000).toISOString())
+        .lte('created_at', new Date(closedAt + 120000).toISOString());
+      if (dbSales) {
+        dbSaleIds = dbSales.map(s => s.id);
+      }
+    } catch {}
+
+    const allSaleIdsToDelete = Array.from(new Set([...localSaleIds, ...dbSaleIds]));
 
     try {
-      if (saleIdsToDelete.length > 0) {
-        await supabase.from('sale_items').update({ sale_id: null }).in('sale_id', saleIdsToDelete);
-        await supabase.from('sales').update({ deleted_at: new Date().toISOString(), status: 'cancelled' }).in('id', saleIdsToDelete);
+      if (allSaleIdsToDelete.length > 0) {
+        // Desvincular itens para que nunca mais reapareçam
+        await supabase.from('sale_items').update({ sale_id: null }).in('sale_id', allSaleIdsToDelete);
+        // Soft delete nas vendas com cancelamento oficial
+        await supabase.from('sales').update({ 
+          deleted_at: new Date().toISOString(), 
+          status: 'cancelled',
+          cancellation_reason: 'Expurgado por exclusão de caixa de teste',
+          cancelled_by: 'Administrador Master',
+          cancelled_at: new Date().toISOString()
+        }).in('id', allSaleIdsToDelete);
       }
-      await supabase.from('cash_sessions').update({ deleted_at: new Date().toISOString() }).eq('id', sessionId);
+      // Soft delete na sessão de caixa
+      await supabase.from('cash_sessions').update({ 
+        deleted_at: new Date().toISOString(),
+        status: 'closed',
+        closed_at: new Date().toISOString()
+      }).eq('id', sessionId);
     } catch (err) {
       console.warn('Erro ao deletar sessão do banco:', err);
     }
 
     setAllCashSessions(prev => prev.filter(s => s.id !== sessionId));
-    if (saleIdsToDelete.length > 0) {
+    if (allSaleIdsToDelete.length > 0) {
       setSales(prev => {
-        const remaining = prev.filter(s => !saleIdsToDelete.includes(s.id));
+        const remaining = prev.filter(s => !allSaleIdsToDelete.includes(s.id));
         if (typeof window !== 'undefined') {
           try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(remaining.slice(0, 100))); } catch {}
         }
         return remaining;
       });
+
+      // Limpar os pedidos expurgados de quaisquer rotas salvas localmente
+      if (typeof window !== 'undefined') {
+        try {
+          const routesRaw = localStorage.getItem('hum_vicio_delivery_routes');
+          if (routesRaw) {
+            const routes = JSON.parse(routesRaw);
+            const cleanedRoutes = routes.map((r: any) => ({
+              ...r,
+              saleIds: r.saleIds.filter((id: string) => !allSaleIdsToDelete.includes(id))
+            }));
+            localStorage.setItem('hum_vicio_delivery_routes', JSON.stringify(cleanedRoutes));
+          }
+        } catch {}
+      }
     }
 
     if (activeCashSession?.id === sessionId) {
@@ -1586,11 +1641,11 @@ export function useInventory() {
 
     addAuditLog(
       'EXCLUSAO_CAIXA_TESTE',
-      `Sessão de Caixa #${sessionId.slice(0, 6)} excluída pelo Administrador Master. ${saleIdsToDelete.length} vendas de teste expurgadas do faturamento.`,
+      `Sessão de Caixa #${sessionId.slice(0, 6)} excluída pelo Administrador Master. ${allSaleIdsToDelete.length} vendas de teste expurgadas do faturamento e contabilidade.`,
       'Administrador Master'
     );
 
-    return { success: true, count: saleIdsToDelete.length };
+    return { success: true, count: allSaleIdsToDelete.length };
   };
 
   // Exclusão manual direta de vendas de teste selecionadas
@@ -1604,7 +1659,13 @@ export function useInventory() {
 
     try {
       await supabase.from('sale_items').update({ sale_id: null }).in('sale_id', saleIds);
-      await supabase.from('sales').update({ deleted_at: new Date().toISOString(), status: 'cancelled' }).in('id', saleIds);
+      await supabase.from('sales').update({ 
+        deleted_at: new Date().toISOString(), 
+        status: 'cancelled',
+        cancellation_reason: 'Expurgado manualmente pelo Administrador Master',
+        cancelled_by: 'Administrador Master',
+        cancelled_at: new Date().toISOString()
+      }).in('id', saleIds);
     } catch (err) {
       console.warn('Erro ao deletar vendas de teste no banco:', err);
     }
@@ -1617,9 +1678,23 @@ export function useInventory() {
       return remaining;
     });
 
+    if (typeof window !== 'undefined') {
+      try {
+        const routesRaw = localStorage.getItem('hum_vicio_delivery_routes');
+        if (routesRaw) {
+          const routes = JSON.parse(routesRaw);
+          const cleanedRoutes = routes.map((r: any) => ({
+            ...r,
+            saleIds: r.saleIds.filter((id: string) => !saleIds.includes(id))
+          }));
+          localStorage.setItem('hum_vicio_delivery_routes', JSON.stringify(cleanedRoutes));
+        }
+      } catch {}
+    }
+
     addAuditLog(
       'EXPURGO_VENDAS_TESTE',
-      `${saleIds.length} vendas de teste expurgadas do faturamento pelo Administrador Master.`,
+      `${saleIds.length} vendas de teste expurgadas do faturamento e contabilidade pelo Administrador Master.`,
       'Administrador Master'
     );
 

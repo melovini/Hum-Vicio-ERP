@@ -28,14 +28,16 @@ export interface DeliveryRouteBlock {
   courierPhone?: string;
   createdAt: string;
   dispatchedAt?: string;
+  deliveredAt?: string;
   status: 'montando' | 'em_rota' | 'entregue';
   saleIds: string[];
 }
 
 export default function CaixaPage() {
   const { 
-    products, items, isOpen, activeCashSession, 
-    openCaixa, closeCaixa, sales, addSale, cancelSale, 
+    products, items, isOpen, activeCashSession, allCashSessions,
+    openCaixa, closeCaixa, deleteCashSession, deleteTestSales,
+    sales, addSale, cancelSale, 
     reopenOrderForEdit, updateReopenedOrder,
     movements, addMovement,
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus,
@@ -48,10 +50,52 @@ export default function CaixaPage() {
 
   // Gestão de Rotas & Entregadores
   const [deliveryRoutes, setDeliveryRoutes] = useState<DeliveryRouteBlock[]>([]);
+  const [routeViewTab, setRouteViewTab] = useState<'ativas' | 'entregues'>('ativas');
   const [newCourierInput, setNewCourierInput] = useState('');
   const [selectedOrdersForRoute, setSelectedOrdersForRoute] = useState<string[]>([]);
   const [routeSearchQuery, setRouteSearchQuery] = useState('');
   const [selectedRouteToPrint, setSelectedRouteToPrint] = useState<DeliveryRouteBlock | null>(null);
+
+  // Histórico permanente de IDs de comandas entregues (para nunca retornarem ao delivery sem rota)
+  const [deliveredSaleIds, setDeliveredSaleIds] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('hum_vicio_delivered_sales');
+        if (saved) return JSON.parse(saved);
+      } catch {}
+    }
+    return [];
+  });
+
+  const markSalesAsDelivered = (ids: string[]) => {
+    setDeliveredSaleIds(prev => {
+      const combined = Array.from(new Set([...prev, ...ids]));
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_delivered_sales', JSON.stringify(combined)); } catch {}
+      }
+      return combined;
+    });
+  };
+
+  const allRoutedSaleIds = useMemo(() => {
+    const fromRoutes = deliveryRoutes.flatMap(r => r.saleIds);
+    return new Set([...fromRoutes, ...deliveredSaleIds]);
+  }, [deliveryRoutes, deliveredSaleIds]);
+
+  const unassignedDeliverySales = useMemo(() => {
+    return sales.filter(s => 
+      s.status !== 'cancelled' && 
+      (s.orderType === 'delivery' || s.channel === 'ifood') && 
+      !allRoutedSaleIds.has(s.id)
+    );
+  }, [sales, allRoutedSaleIds]);
+
+  // Modais de Exclusão Segura de Caixa de Teste
+  const [showDeleteTestModal, setShowDeleteTestModal] = useState(false);
+  const [sessionToDeleteId, setSessionToDeleteId] = useState('');
+  const [deleteSessionPassword, setDeleteSessionPassword] = useState('');
+  const [deleteSessionError, setDeleteSessionError] = useState('');
+  const [isDeletingSession, setIsDeletingSession] = useState(false);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -880,6 +924,20 @@ export default function CaixaPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            <button 
+              type="button"
+              onClick={() => {
+                setSessionToDeleteId(activeCashSession?.id || (allCashSessions[0]?.id || ''));
+                setDeleteSessionPassword('');
+                setDeleteSessionError('');
+                setShowDeleteTestModal(true);
+              }}
+              className="px-4 py-3 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-500/40 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-xs uppercase tracking-wider shadow-lg"
+              title="Apagar caixa de teste e expurgar vendas da contabilidade"
+            >
+              <Trash2 size={16} /> Apagar Caixa Teste
+            </button>
+
             {isOpen ? (
               <button 
                 onClick={() => {
@@ -1145,6 +1203,138 @@ export default function CaixaPage() {
                     className="flex-1 py-3.5 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-bold shadow-lg shadow-red-600/30 transition-all cursor-pointer text-sm"
                   >
                     Encerrar e Apurar Caixa
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        )}
+
+        {/* Modal de Apagar Caixa de Teste e Expurgar Vendas */}
+        {showDeleteTestModal && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-rose-500/40 rounded-3xl p-6 md:p-8 max-w-lg w-full shadow-2xl animate-fade-in">
+              <div className="flex justify-between items-start mb-3">
+                <h2 className="text-xl md:text-2xl font-black text-white flex items-center gap-2.5">
+                  <span className="p-2 rounded-xl bg-rose-500/20 text-rose-400 border border-rose-500/30">
+                    <Trash2 size={20} />
+                  </span>
+                  Apagar Caixa de Teste
+                </h2>
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteTestModal(false)}
+                  className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-rose-950/30 border border-rose-500/30 text-xs text-rose-200 space-y-2 mb-5">
+                <p className="font-bold flex items-center gap-1.5 text-rose-300">
+                  <ShieldAlert size={16} /> ATENÇÃO: EXPURGO CONTÁBIL TOTAL
+                </p>
+                <p>
+                  Esta ação é exclusiva para turnos e sessões de <strong>teste</strong>. Ao confirmar:
+                </p>
+                <ul className="list-disc list-inside space-y-1 text-[11px] text-rose-300/90 pl-1">
+                  <li>Todas as comandas e vendas criadas neste caixa serão canceladas e expurgadas.</li>
+                  <li>Os valores <strong>não entrarão</strong> no DRE, Faturamento, Contabilidade ou Relatórios.</li>
+                  <li>As rotas de entrega deste caixa serão limpas e desvinculadas.</li>
+                  <li>A sessão de caixa será encerrada e removida para você iniciar um novo teste do zero.</li>
+                </ul>
+              </div>
+
+              <form 
+                onSubmit={async (e) => {
+                  e.preventDefault();
+                  if (!deleteSessionPassword) {
+                    setDeleteSessionError('Informe a senha do Administrador.');
+                    return;
+                  }
+                  if (!sessionToDeleteId) {
+                    setDeleteSessionError('Nenhuma sessão de caixa encontrada para apagar.');
+                    return;
+                  }
+                  setIsDeletingSession(true);
+                  setDeleteSessionError('');
+                  try {
+                    const res = await deleteCashSession(sessionToDeleteId, deleteSessionPassword);
+                    if (res.success) {
+                      alert(`Caixa de teste apagado com sucesso!\n${res.count} venda(s) de teste foram canceladas e expurgadas da contabilidade.`);
+                      setShowDeleteTestModal(false);
+                      setDeleteSessionPassword('');
+                    } else {
+                      setDeleteSessionError(res.error || 'Senha incorreta ou erro ao apagar sessão.');
+                    }
+                  } catch (err: any) {
+                    setDeleteSessionError(err?.message || 'Erro inesperado.');
+                  } finally {
+                    setIsDeletingSession(false);
+                  }
+                }} 
+                className="space-y-4"
+              >
+                {/* Seleção de Sessão */}
+                <div>
+                  <label className="block text-slate-300 font-bold text-xs mb-1.5 uppercase tracking-wider">
+                    Sessão de Caixa a Excluir:
+                  </label>
+                  <select
+                    value={sessionToDeleteId}
+                    onChange={e => setSessionToDeleteId(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-2xl p-3.5 text-white text-xs font-bold outline-none focus:border-rose-500 cursor-pointer"
+                  >
+                    {activeCashSession && (
+                      <option value={activeCashSession.id}>
+                        🟢 CAIXA ATUAL ABERTO (#{activeCashSession.id.slice(0, 6)} - {activeCashSession.openedBy || 'Operador'} - Aberto às {new Date(activeCashSession.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                      </option>
+                    )}
+                    {allCashSessions.filter(s => s.id !== activeCashSession?.id).slice(0, 5).map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.status === 'open' ? '🟢' : '⚪'} Caixa #{s.id.slice(0, 6)} ({s.openedBy || 'Operador'} - {new Date(s.openedAt).toLocaleDateString('pt-BR')} {new Date(s.openedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Senha Master */}
+                <div>
+                  <label className="block text-slate-300 font-bold text-xs mb-1.5 uppercase tracking-wider">
+                    Senha do Administrador Master (admin):
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    placeholder="Digite a senha admin"
+                    value={deleteSessionPassword}
+                    onChange={e => {
+                      setDeleteSessionPassword(e.target.value);
+                      setDeleteSessionError('');
+                    }}
+                    className="w-full bg-slate-950 border border-slate-700 rounded-2xl p-3.5 text-white font-mono text-base outline-none focus:border-rose-500"
+                  />
+                  {deleteSessionError && (
+                    <p className="text-xs text-rose-400 font-bold mt-1.5 flex items-center gap-1">
+                      ⚠️ {deleteSessionError}
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex gap-3 pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteTestModal(false)}
+                    className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold transition-all cursor-pointer text-xs uppercase tracking-wider"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isDeletingSession}
+                    className="flex-1 py-3.5 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-2xl font-black shadow-lg shadow-rose-600/30 transition-all cursor-pointer text-xs uppercase tracking-wider flex items-center justify-center gap-2"
+                  >
+                    {isDeletingSession ? 'Expurgando...' : 'Confirmar Expurgo'}
                   </button>
                 </div>
               </form>
@@ -2366,7 +2556,7 @@ export default function CaixaPage() {
                       <div className="px-3.5 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
                         <span className="text-[10px] text-slate-400 uppercase font-black block">Sem Rota</span>
                         <span className="text-lg font-mono font-black text-amber-400">
-                          {sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood') && !deliveryRoutes.filter(r => r.status !== 'entregue').flatMap(r => r.saleIds).includes(s.id)).length}
+                          {unassignedDeliverySales.length}
                         </span>
                       </div>
 
@@ -2381,6 +2571,13 @@ export default function CaixaPage() {
                         <span className="text-[10px] text-slate-400 uppercase font-black block">Em Trânsito</span>
                         <span className="text-lg font-mono font-black text-emerald-400">
                           {deliveryRoutes.filter(r => r.status === 'em_rota').length}
+                        </span>
+                      </div>
+
+                      <div className="px-3.5 py-2 rounded-2xl bg-slate-950 border border-slate-800 text-center">
+                        <span className="text-[10px] text-slate-400 uppercase font-black block">Concluídas</span>
+                        <span className="text-lg font-mono font-black text-blue-400">
+                          {deliveryRoutes.filter(r => r.status === 'entregue').length}
                         </span>
                       </div>
                     </div>
@@ -2454,7 +2651,7 @@ export default function CaixaPage() {
                       <div className="flex items-center justify-between gap-2">
                         <h3 className="font-extrabold text-white text-sm uppercase tracking-wide flex items-center gap-2">
                           <CartIcon size={16} className="text-amber-400" />
-                          Delivery sem Rota ({sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood') && !deliveryRoutes.filter(r => r.status !== 'entregue').flatMap(r => r.saleIds).includes(s.id)).length})
+                          Delivery sem Rota ({unassignedDeliverySales.length})
                         </h3>
 
                         {/* Ação em lote se houver rotas abertas */}
@@ -2490,13 +2687,12 @@ export default function CaixaPage() {
 
                       {/* Lista de Pedidos Disponíveis */}
                       {(() => {
-                        const inActiveIds = new Set(deliveryRoutes.filter(r => r.status !== 'entregue').flatMap(r => r.saleIds));
-                        const unassigned = sales.filter(s => s.status !== 'cancelled' && (s.orderType === 'delivery' || s.channel === 'ifood') && !inActiveIds.has(s.id));
+                        const unassigned = unassignedDeliverySales;
 
                         if (unassigned.length === 0) {
                           return (
                             <div className="p-8 text-center bg-slate-950/60 rounded-2xl border border-slate-800 text-slate-500 text-xs">
-                              Nenhum pedido de delivery aguardando rota no momento. Todos foram atribuídos ou não há entregas ativas.
+                              Nenhum pedido de delivery aguardando rota no momento. Todos foram atribuídos ou já foram entregues.
                             </div>
                           );
                         }
@@ -2601,253 +2797,429 @@ export default function CaixaPage() {
 
                     {/* COLUNA DIREITA: BLOCOS DE ROTAS POR ENTREGADOR */}
                     <div className="lg:col-span-7 space-y-4">
-                      <div className="flex items-center justify-between gap-2">
-                        <h3 className="font-extrabold text-white text-sm uppercase tracking-wide flex items-center gap-2">
-                          <Truck size={16} className="text-cyan-400" />
-                          Blocos de Entregadores ({deliveryRoutes.filter(r => r.status !== 'entregue').length})
-                        </h3>
+                      {/* Abas Superiores de Filtro de Rotas: Ativas vs Concluídas */}
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-800">
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setRouteViewTab('ativas')}
+                            className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-2 cursor-pointer transition-all ${
+                              routeViewTab === 'ativas'
+                                ? 'bg-cyan-600 text-white shadow-lg shadow-cyan-600/30 ring-1 ring-cyan-400'
+                                : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                            }`}
+                          >
+                            <Truck size={15} /> Rotas Ativas ({deliveryRoutes.filter(r => r.status !== 'entregue').length})
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setRouteViewTab('entregues')}
+                            className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-2 cursor-pointer transition-all ${
+                              routeViewTab === 'entregues'
+                                ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30 ring-1 ring-emerald-400'
+                                : 'bg-slate-900 text-slate-400 hover:text-white border border-slate-800'
+                            }`}
+                          >
+                            <Check size={15} /> Concluídas / Entregues ({deliveryRoutes.filter(r => r.status === 'entregue').length})
+                          </button>
+                        </div>
 
-                        {deliveryRoutes.some(r => r.status === 'entregue') && (
+                        {routeViewTab === 'entregues' && deliveryRoutes.some(r => r.status === 'entregue') && (
                           <button
                             type="button"
                             onClick={() => {
-                              if (confirm('Limpar histórico de rotas já entregues e finalizadas?')) {
+                              if (confirm('Limpar histórico de rotas já entregues e finalizadas? Os pedidos continuarão registrados como entregues no histórico de vendas e NUNCA retornarão ao delivery sem rota.')) {
                                 saveDeliveryRoutes(deliveryRoutes.filter(r => r.status !== 'entregue'));
                               }
                             }}
-                            className="text-[10px] text-slate-500 hover:text-slate-300 cursor-pointer underline"
+                            className="text-[11px] text-slate-400 hover:text-red-400 cursor-pointer underline flex items-center gap-1 transition-colors"
                           >
-                            Limpar {deliveryRoutes.filter(r => r.status === 'entregue').length} rota(s) entregues
+                            <Trash2 size={13} /> Limpar {deliveryRoutes.filter(r => r.status === 'entregue').length} rota(s) entregues
                           </button>
                         )}
                       </div>
 
-                      {deliveryRoutes.filter(r => r.status !== 'entregue').length === 0 ? (
-                        <div className="glass-card p-12 text-center rounded-2xl border border-slate-800 text-slate-400">
-                          <Truck size={36} className="mx-auto text-slate-600 mb-3" />
-                          <h4 className="text-base font-extrabold text-white mb-1">Nenhum Bloco de Rota Ativo</h4>
-                          <p className="text-xs max-w-md mx-auto">
-                            Crie um bloco de rota informando o nome do entregador acima para organizar os pedidos e saber com quem enviar cada entrega.
-                          </p>
-                        </div>
-                      ) : (
-                        <div className="space-y-4">
-                          {deliveryRoutes.filter(r => r.status !== 'entregue').map(route => {
-                            const routeSales = route.saleIds.map(id => sales.find(s => s.id === id)).filter(Boolean) as Sale[];
-                            const routeTotal = routeSales.reduce((sum, s) => sum + s.total, 0);
-                            const waitingInRoute = routeSales.filter(s => s.productionStatus === 'em_espera');
-                            const cookingInRoute = routeSales.filter(s => s.productionStatus === 'em_producao');
-                            const readyInRoute = routeSales.filter(s => s.productionStatus === 'concluido');
+                      {/* Conteúdo da Aba 1: ROTAS ATIVAS */}
+                      {routeViewTab === 'ativas' && (
+                        <>
+                          {deliveryRoutes.filter(r => r.status !== 'entregue').length === 0 ? (
+                            <div className="glass-card p-12 text-center rounded-2xl border border-slate-800 text-slate-400">
+                              <Truck size={36} className="mx-auto text-slate-600 mb-3" />
+                              <h4 className="text-base font-extrabold text-white mb-1">Nenhum Bloco de Rota Ativo</h4>
+                              <p className="text-xs max-w-md mx-auto">
+                                Crie um bloco de rota informando o nome do entregador acima para organizar os pedidos e saber com quem enviar cada entrega.
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="space-y-4">
+                              {deliveryRoutes.filter(r => r.status !== 'entregue').map(route => {
+                                const routeSales = route.saleIds.map(id => sales.find(s => s.id === id)).filter(Boolean) as Sale[];
+                                const routeTotal = routeSales.reduce((sum, s) => sum + s.total, 0);
+                                const waitingInRoute = routeSales.filter(s => s.productionStatus === 'em_espera');
+                                const cookingInRoute = routeSales.filter(s => s.productionStatus === 'em_producao');
+                                const readyInRoute = routeSales.filter(s => s.productionStatus === 'concluido');
 
-                            return (
-                              <div
-                                key={route.id}
-                                className={`rounded-3xl border-2 p-5 transition-all shadow-xl ${
-                                  route.status === 'em_rota'
-                                    ? 'bg-slate-900/90 border-cyan-500/80 ring-1 ring-cyan-500/30'
-                                    : 'bg-slate-950/90 border-slate-800'
-                                }`}
-                              >
-                                {/* Cabeçalho do Bloco do Entregador */}
-                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-3 border-b border-slate-800">
-                                  <div className="flex items-center gap-2.5">
-                                    <div className={`p-2.5 rounded-2xl font-black ${
-                                      route.status === 'em_rota' ? 'bg-cyan-500 text-slate-950' : 'bg-slate-800 text-cyan-300'
-                                    }`}>
-                                      <Truck size={20} />
-                                    </div>
-                                    <div>
-                                      <div className="flex items-center gap-2">
-                                        <h4 className="font-extrabold text-base text-white uppercase">
-                                          Entregador: {route.courierName}
-                                        </h4>
-                                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
-                                          route.status === 'em_rota' ? 'bg-cyan-600 text-white animate-pulse' : 'bg-slate-800 text-slate-300'
+                                return (
+                                  <div
+                                    key={route.id}
+                                    className={`rounded-3xl border-2 p-5 transition-all shadow-xl ${
+                                      route.status === 'em_rota'
+                                        ? 'bg-slate-900/90 border-cyan-500/80 ring-1 ring-cyan-500/30'
+                                        : 'bg-slate-950/90 border-slate-800'
+                                    }`}
+                                  >
+                                    {/* Cabeçalho do Bloco do Entregador */}
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-3 border-b border-slate-800">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className={`p-2.5 rounded-2xl font-black ${
+                                          route.status === 'em_rota' ? 'bg-cyan-500 text-slate-950' : 'bg-slate-800 text-cyan-300'
                                         }`}>
-                                          {route.status === 'em_rota' ? '🛵 Em Trânsito' : 'Montando Rota'}
-                                        </span>
-                                      </div>
-                                      <p className="text-xs text-slate-400 mt-0.5">
-                                        Criada às {new Date(route.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                        {route.dispatchedAt && ` • Saiu às ${new Date(route.dispatchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
-                                      </p>
-                                    </div>
-                                  </div>
-
-                                  <div className="text-right flex sm:flex-col items-center sm:items-end justify-between gap-1">
-                                    <span className="font-mono font-black text-sm text-emerald-400">
-                                      Total: R$ {routeTotal.toFixed(2)}
-                                    </span>
-                                    <span className="text-[11px] text-slate-400 font-bold">
-                                      {routeSales.length} entrega(s)
-                                    </span>
-                                  </div>
-                                </div>
-
-                                {/* Status de Produção dos Pedidos desta Rota */}
-                                <div className="flex flex-wrap items-center gap-2 mb-3 text-[11px] font-mono">
-                                  {waitingInRoute.length > 0 && (
-                                    <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30">
-                                      ⏳ {waitingInRoute.length} em espera
-                                    </span>
-                                  )}
-                                  {cookingInRoute.length > 0 && (
-                                    <span className="px-2 py-0.5 rounded-lg bg-orange-500/20 text-orange-300 border border-orange-500/30">
-                                      🔥 {cookingInRoute.length} na chapa
-                                    </span>
-                                  )}
-                                  {readyInRoute.length > 0 && (
-                                    <span className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                                      🛎️ {readyInRoute.length} pronto p/ entrega
-                                    </span>
-                                  )}
-                                </div>
-
-                                {/* Lista de Comandas Atribuídas ao Bloco */}
-                                {routeSales.length === 0 ? (
-                                  <div className="p-4 rounded-xl bg-slate-900 border border-dashed border-slate-800 text-center text-xs text-slate-500 my-3">
-                                    Nenhum pedido atribuído ainda. Selecione pedidos na coluna esquerda para adicionar a este bloco.
-                                  </div>
-                                ) : (
-                                  <div className="space-y-2 mb-4">
-                                    {routeSales.map((sale, sIdx) => (
-                                      <div
-                                        key={sale.id}
-                                        className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between gap-3 text-xs"
-                                      >
-                                        <div className="min-w-0 flex-1">
+                                          <Truck size={20} />
+                                        </div>
+                                        <div>
                                           <div className="flex items-center gap-2">
-                                            <span className="font-mono font-black text-cyan-400">
-                                              #{sIdx + 1}
-                                            </span>
-                                            <span className="font-mono font-bold text-slate-300">
-                                              #{sale.id.slice(0, 5).toUpperCase()}
-                                            </span>
-                                            <strong className="text-white uppercase truncate">
-                                              {sale.customerName || 'Cliente'}
-                                            </strong>
-                                            <span className={`px-1.5 py-0.2 rounded text-[9px] font-black uppercase ${
-                                              sale.productionStatus === 'concluido' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'
+                                            <h4 className="font-extrabold text-base text-white uppercase">
+                                              Entregador: {route.courierName}
+                                            </h4>
+                                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                                              route.status === 'em_rota' ? 'bg-cyan-600 text-white animate-pulse' : 'bg-slate-800 text-slate-300'
                                             }`}>
-                                              {sale.productionStatus === 'concluido' ? 'Pronto' : sale.productionStatus === 'em_producao' ? 'Chapa' : 'Espera'}
+                                              {route.status === 'em_rota' ? '🛵 Em Trânsito' : 'Montando Rota'}
                                             </span>
                                           </div>
-                                          <p className="text-[11px] text-slate-400 mt-0.5 truncate">
-                                            {sale.items?.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
+                                          <p className="text-xs text-slate-400 mt-0.5">
+                                            Criada às {new Date(route.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                            {route.dispatchedAt && ` • Saiu às ${new Date(route.dispatchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
                                           </p>
                                         </div>
+                                      </div>
 
-                                        <div className="flex items-center gap-2 shrink-0">
-                                          <span className="font-mono font-black text-slate-200">
-                                            R$ {sale.total.toFixed(2)}
-                                          </span>
+                                      <div className="text-right flex sm:flex-col items-center sm:items-end justify-between gap-1">
+                                        <span className="font-mono font-black text-sm text-emerald-400">
+                                          Total: R$ {routeTotal.toFixed(2)}
+                                        </span>
+                                        <span className="text-[11px] text-slate-400 font-bold">
+                                          {routeSales.length} entrega(s)
+                                        </span>
+                                      </div>
+                                    </div>
+
+                                    {/* Status de Produção dos Pedidos desta Rota */}
+                                    <div className="flex flex-wrap items-center gap-2 mb-3 text-[11px] font-mono">
+                                      {waitingInRoute.length > 0 && (
+                                        <span className="px-2 py-0.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                                          ⏳ {waitingInRoute.length} em espera
+                                        </span>
+                                      )}
+                                      {cookingInRoute.length > 0 && (
+                                        <span className="px-2 py-0.5 rounded-lg bg-orange-500/20 text-orange-300 border border-orange-500/30">
+                                          🔥 {cookingInRoute.length} na chapa
+                                        </span>
+                                      )}
+                                      {readyInRoute.length > 0 && (
+                                        <span className="px-2 py-0.5 rounded-lg bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                                          🛎️ {readyInRoute.length} pronto p/ entrega
+                                        </span>
+                                      )}
+                                    </div>
+
+                                    {/* Lista de Comandas Atribuídas ao Bloco */}
+                                    {routeSales.length === 0 ? (
+                                      <div className="p-4 rounded-xl bg-slate-900 border border-dashed border-slate-800 text-center text-xs text-slate-500 my-3">
+                                        Nenhum pedido atribuído ainda. Selecione pedidos na coluna esquerda para adicionar a este bloco.
+                                      </div>
+                                    ) : (
+                                      <div className="space-y-2 mb-4">
+                                        {routeSales.map((sale, sIdx) => (
+                                          <div
+                                            key={sale.id}
+                                            className="p-3 rounded-xl bg-slate-900/80 border border-slate-800 flex items-center justify-between gap-3 text-xs"
+                                          >
+                                            <div className="min-w-0 flex-1">
+                                              <div className="flex items-center gap-2">
+                                                <span className="font-mono font-black text-cyan-400">
+                                                  #{sIdx + 1}
+                                                </span>
+                                                <span className="font-mono font-bold text-slate-300">
+                                                  #{sale.id.slice(0, 5).toUpperCase()}
+                                                </span>
+                                                <strong className="text-white uppercase truncate">
+                                                  {sale.customerName || 'Cliente'}
+                                                </strong>
+                                                <span className={`px-1.5 py-0.2 rounded text-[9px] font-black uppercase ${
+                                                  sale.productionStatus === 'concluido' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'
+                                                }`}>
+                                                  {sale.productionStatus === 'concluido' ? 'Pronto' : sale.productionStatus === 'em_producao' ? 'Chapa' : 'Espera'}
+                                                </span>
+                                              </div>
+                                              <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                                                {sale.items?.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
+                                              </p>
+                                            </div>
+
+                                            <div className="flex items-center gap-2 shrink-0">
+                                              <span className="font-mono font-black text-slate-200">
+                                                R$ {sale.total.toFixed(2)}
+                                              </span>
+                                              <button
+                                                type="button"
+                                                onClick={() => {
+                                                  const updated = deliveryRoutes.map(item => {
+                                                    if (item.id === route.id) {
+                                                      return { ...item, saleIds: item.saleIds.filter(id => id !== sale.id) };
+                                                    }
+                                                    return item;
+                                                  });
+                                                  saveDeliveryRoutes(updated);
+                                                }}
+                                                className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
+                                                title="Remover deste bloco de entrega"
+                                              >
+                                                <X size={14} />
+                                              </button>
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+
+                                    {/* BARRA DE AÇÕES DO BLOCO DE ENTREGA */}
+                                    <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
+                                      <div className="flex flex-wrap items-center gap-2">
+                                        {/* Botão de Enviar Todos em Espera para a Chapa Conjuntamente */}
+                                        {waitingInRoute.length > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const waitingIds = waitingInRoute.map(s => s.id);
+                                              updateBatchProductionStatus(waitingIds, 'em_producao');
+                                            }}
+                                            className="py-2 px-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95"
+                                          >
+                                            <Flame size={14} /> Liberar Rota p/ Chapa ({waitingInRoute.length})
+                                          </button>
+                                        )}
+
+                                        {/* Botão de Despachar Rota */}
+                                        {route.status === 'montando' && routeSales.length > 0 && (
                                           <button
                                             type="button"
                                             onClick={() => {
                                               const updated = deliveryRoutes.map(item => {
                                                 if (item.id === route.id) {
-                                                  return { ...item, saleIds: item.saleIds.filter(id => id !== sale.id) };
+                                                  return { ...item, status: 'em_rota' as const, dispatchedAt: new Date().toISOString() };
                                                 }
                                                 return item;
                                               });
                                               saveDeliveryRoutes(updated);
                                             }}
-                                            className="p-1 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-500/10 transition-all cursor-pointer"
-                                            title="Remover deste bloco de entrega"
+                                            className="py-2 px-3 bg-cyan-600 hover:bg-cyan-500 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
                                           >
-                                            <X size={14} />
+                                            <Truck size={14} /> Despachar c/ Entregador
                                           </button>
+                                        )}
+
+                                        {/* Botão de Imprimir Romaneio da Rota */}
+                                        {routeSales.length > 0 && (
+                                          <button
+                                            type="button"
+                                            onClick={() => setSelectedRouteToPrint(route)}
+                                            className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+                                          >
+                                            <Printer size={14} /> Romaneio
+                                          </button>
+                                        )}
+                                      </div>
+
+                                      <div className="flex items-center gap-2">
+                                        {route.status === 'em_rota' && (
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              const updated = deliveryRoutes.map(item => {
+                                                if (item.id === route.id) {
+                                                  return { 
+                                                    ...item, 
+                                                    status: 'entregue' as const,
+                                                    deliveredAt: new Date().toISOString()
+                                                  };
+                                                }
+                                                return item;
+                                              });
+                                              saveDeliveryRoutes(updated);
+                                              markSalesAsDelivered(route.saleIds);
+                                              updateBatchProductionStatus(route.saleIds, 'concluido');
+                                            }}
+                                            className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all"
+                                          >
+                                            <Check size={14} /> Concluir Rota
+                                          </button>
+                                        )}
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (confirm(`Desfazer bloco do entregador "${route.courierName}"? Os pedidos retornarão para a fila de disponíveis.`)) {
+                                              saveDeliveryRoutes(deliveryRoutes.filter(item => item.id !== route.id));
+                                            }
+                                          }}
+                                          className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer"
+                                          title="Desfazer este bloco"
+                                        >
+                                          <Trash2 size={15} />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </>
+                      )}
+
+                      {/* Conteúdo da Aba 2: ROTAS CONCLUÍDAS / ENTREGUES */}
+                      {routeViewTab === 'entregues' && (
+                        <>
+                          {deliveryRoutes.filter(r => r.status === 'entregue').length === 0 ? (
+                            <div className="glass-card p-12 text-center rounded-2xl border border-slate-800 text-slate-400">
+                              <CheckCircle2 size={36} className="mx-auto text-emerald-600 mb-3" />
+                              <h4 className="text-base font-extrabold text-white mb-1">Nenhuma Rota Concluída Ainda</h4>
+                              <p className="text-xs max-w-md mx-auto">
+                                Quando o motoboy retornar e você clicar em &quot;Concluir Rota&quot;, os blocos finalizados aparecerão aqui para conferência, impressão de romaneio e prestação de contas.
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="space-y-4">
+                              {deliveryRoutes.filter(r => r.status === 'entregue').map(route => {
+                                const routeSales = route.saleIds.map(id => sales.find(s => s.id === id)).filter(Boolean) as Sale[];
+                                const routeTotal = routeSales.reduce((sum, s) => sum + s.total, 0);
+
+                                return (
+                                  <div
+                                    key={route.id}
+                                    className="rounded-3xl border-2 border-emerald-500/40 bg-slate-950/90 p-5 transition-all shadow-xl"
+                                  >
+                                    {/* Cabeçalho do Bloco Entregue */}
+                                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 mb-3 border-b border-slate-800">
+                                      <div className="flex items-center gap-2.5">
+                                        <div className="p-2.5 rounded-2xl font-black bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                                          <CheckCircle2 size={20} />
+                                        </div>
+                                        <div>
+                                          <div className="flex items-center gap-2">
+                                            <h4 className="font-extrabold text-base text-white uppercase">
+                                              Entregador: {route.courierName}
+                                            </h4>
+                                            <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                                              <Check size={12} /> Entregue
+                                            </span>
+                                          </div>
+                                          <p className="text-xs text-slate-400 mt-0.5">
+                                            {route.deliveredAt 
+                                              ? `Finalizada às ${new Date(route.deliveredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                                              : `Criada às ${new Date(route.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                                            {route.dispatchedAt && ` • Saiu às ${new Date(route.dispatchedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`}
+                                          </p>
                                         </div>
                                       </div>
-                                    ))}
-                                  </div>
-                                )}
 
-                                {/* BARRA DE AÇÕES DO BLOCO DE ENTREGA */}
-                                <div className="pt-3 border-t border-slate-800 flex flex-wrap items-center justify-between gap-2">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    {/* Botão de Enviar Todos em Espera para a Chapa Conjuntamente */}
-                                    {waitingInRoute.length > 0 && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          const waitingIds = waitingInRoute.map(s => s.id);
-                                          updateBatchProductionStatus(waitingIds, 'em_producao');
-                                        }}
-                                        className="py-2 px-3 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black rounded-xl text-xs uppercase tracking-wider flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95"
-                                      >
-                                        <Flame size={14} /> Liberar Rota p/ Chapa ({waitingInRoute.length})
-                                      </button>
-                                    )}
+                                      <div className="text-right flex sm:flex-col items-center sm:items-end justify-between gap-1">
+                                        <span className="font-mono font-black text-sm text-emerald-400">
+                                          Total: R$ {routeTotal.toFixed(2)}
+                                        </span>
+                                        <span className="text-[11px] text-slate-400 font-bold">
+                                          {routeSales.length} entrega(s) concluída(s)
+                                        </span>
+                                      </div>
+                                    </div>
 
-                                    {/* Botão de Despachar Rota */}
-                                    {route.status === 'montando' && routeSales.length > 0 && (
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          const updated = deliveryRoutes.map(item => {
-                                            if (item.id === route.id) {
-                                              return { ...item, status: 'em_rota' as const, dispatchedAt: new Date().toISOString() };
+                                    {/* Lista de Comandas Entregues */}
+                                    <div className="space-y-2 mb-4">
+                                      {routeSales.map((sale, sIdx) => (
+                                        <div
+                                          key={sale.id}
+                                          className="p-3 rounded-xl bg-slate-900/60 border border-slate-800/80 flex items-center justify-between gap-3 text-xs"
+                                        >
+                                          <div className="min-w-0 flex-1">
+                                            <div className="flex items-center gap-2">
+                                              <span className="font-mono font-black text-emerald-400">
+                                                #{sIdx + 1}
+                                              </span>
+                                              <span className="font-mono font-bold text-slate-400">
+                                                #{sale.id.slice(0, 5).toUpperCase()}
+                                              </span>
+                                              <strong className="text-slate-200 uppercase truncate">
+                                                {sale.customerName || 'Cliente'}
+                                              </strong>
+                                              <span className="px-1.5 py-0.2 rounded text-[9px] font-black uppercase bg-emerald-950 text-emerald-300 border border-emerald-800">
+                                                Entregue
+                                              </span>
+                                            </div>
+                                            <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                                              {sale.items?.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
+                                            </p>
+                                          </div>
+
+                                          <div className="flex items-center gap-2 shrink-0">
+                                            <span className="font-mono font-black text-slate-300">
+                                              R$ {sale.total.toFixed(2)}
+                                            </span>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+
+                                    {/* Ações da Rota Concluída */}
+                                    <div className="pt-3 border-t border-slate-800 flex items-center justify-between gap-2">
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          type="button"
+                                          onClick={() => setSelectedRouteToPrint(route)}
+                                          className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+                                        >
+                                          <Printer size={14} /> Romaneio
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            if (confirm(`Reabrir rota do entregador "${route.courierName}" para o status "Em Trânsito"?`)) {
+                                              const updated = deliveryRoutes.map(item => {
+                                                if (item.id === route.id) {
+                                                  return { ...item, status: 'em_rota' as const, deliveredAt: undefined };
+                                                }
+                                                return item;
+                                              });
+                                              saveDeliveryRoutes(updated);
+                                              setDeliveredSaleIds(prev => prev.filter(id => !route.saleIds.includes(id)));
                                             }
-                                            return item;
-                                          });
-                                          saveDeliveryRoutes(updated);
-                                        }}
-                                        className="py-2 px-3 bg-cyan-600 hover:bg-cyan-500 text-white font-extrabold rounded-xl text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer shadow-md transition-all active:scale-95"
-                                      >
-                                        <Truck size={14} /> Despachar c/ Entregador
-                                      </button>
-                                    )}
+                                          }}
+                                          className="py-2 px-3 bg-amber-500/10 hover:bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+                                        >
+                                          ↩️ Reabrir Rota
+                                        </button>
+                                      </div>
 
-                                    {/* Botão de Imprimir Romaneio da Rota */}
-                                    {routeSales.length > 0 && (
-                                      <button
-                                        type="button"
-                                        onClick={() => setSelectedRouteToPrint(route)}
-                                        className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer transition-all"
-                                      >
-                                        <Printer size={14} /> Romaneio
-                                      </button>
-                                    )}
-                                  </div>
-
-                                  <div className="flex items-center gap-2">
-                                    {route.status === 'em_rota' && (
                                       <button
                                         type="button"
                                         onClick={() => {
-                                          const updated = deliveryRoutes.map(item => {
-                                            if (item.id === route.id) {
-                                              return { ...item, status: 'entregue' as const };
-                                            }
-                                            return item;
-                                          });
-                                          saveDeliveryRoutes(updated);
+                                          if (confirm(`Excluir esta rota concluída do histórico? Os pedidos continuarão registrados como entregues no histórico de vendas e NUNCA voltarão para o delivery sem rota.`)) {
+                                            saveDeliveryRoutes(deliveryRoutes.filter(item => item.id !== route.id));
+                                          }
                                         }}
-                                        className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-xl text-xs uppercase tracking-wider flex items-center gap-1.5 cursor-pointer transition-all"
+                                        className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer"
+                                        title="Excluir este bloco concluído do histórico"
                                       >
-                                        <Check size={14} /> Concluir Rota
+                                        <Trash2 size={15} />
                                       </button>
-                                    )}
-
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        if (confirm(`Desfazer bloco do entregador "${route.courierName}"? Os pedidos retornarão para a fila de disponíveis.`)) {
-                                          saveDeliveryRoutes(deliveryRoutes.filter(item => item.id !== route.id));
-                                        }
-                                      }}
-                                      className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer"
-                                      title="Desfazer este bloco"
-                                    >
-                                      <Trash2 size={15} />
-                                    </button>
+                                    </div>
                                   </div>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </>
                       )}
                     </div>
 
