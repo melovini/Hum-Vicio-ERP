@@ -130,50 +130,7 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
 
   return (
     <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      {/* Folha de Estilo Térmica Estrita ESC/POS (80mm contínuo) */}
-      <style jsx global>{`
-        @media print {
-          @page {
-            margin: 0 !important;
-            size: auto !important;
-          }
-          html, body {
-            margin: 0 !important;
-            padding: 0 !important;
-            width: 72mm !important;
-            min-width: 72mm !important;
-            max-width: 72mm !important;
-            background: #ffffff !important;
-            color: #000000 !important;
-            font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
-            font-weight: 800 !important;
-          }
-          body * {
-            visibility: hidden !important;
-          }
-          #thermal-receipt-printable, #thermal-receipt-printable * {
-            visibility: visible !important;
-            color: #000000 !important;
-          }
-          #thermal-receipt-printable {
-            position: absolute !important;
-            left: 0 !important;
-            top: 0 !important;
-            width: 72mm !important;
-            max-width: 72mm !important;
-            margin: 0 !important;
-            padding: 2mm 1mm 4mm 1mm !important;
-            color: #000000 !important;
-            background: #ffffff !important;
-            font-family: Arial, "Helvetica Neue", Helvetica, sans-serif !important;
-            font-weight: 800 !important;
-            box-sizing: border-box !important;
-          }
-          .no-print {
-            display: none !important;
-          }
-        }
-      `}</style>
+      {/* O motor global de 1 página é gerenciado por thermal-print-mount em thermal-printer.ts */}
 
       <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl animate-fade-in flex flex-col max-h-[90vh]">
         {/* Cabeçalho do Modal */}
