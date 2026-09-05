@@ -255,33 +255,34 @@ export function printThermalElement(elementIdOrHtml: string, title = 'Comprovant
           }
         </style>
         <script>
-          var isPrintingInProgress = false;
+          var hasTriggeredPrint = false;
           function executePrint() {
-            if (isPrintingInProgress) return;
-            isPrintingInProgress = true;
+            if (hasTriggeredPrint) return;
+            hasTriggeredPrint = true;
+            var btn = document.getElementById('btn-print-action');
+            if (btn) {
+              btn.disabled = true;
+              btn.style.opacity = '0.5';
+              btn.innerText = 'IMPRIMINDO (1 VIA)...';
+            }
             window.print();
-            setTimeout(function() {
-              isPrintingInProgress = false;
-            }, 3000);
           }
 
-          // Auto-fecha a popup após a conclusão ou cancelamento da impressão
+          // Fecha automaticamente a janela logo após a impressão ou cancelamento
           window.onafterprint = function() {
             setTimeout(function() {
-              window.close();
-            }, 600);
+              try { window.close(); } catch(e) {}
+            }, 300);
           };
         </script>
       </head>
       <body>
         <div class="print-toolbar no-print">
           <div class="print-actions">
-            <button class="btn-print" onclick="executePrint()">🖨️ Imprimir Cupom</button>
+            <button id="btn-print-action" class="btn-print" onclick="executePrint()">🖨️ Imprimir Cupom (1 Via)</button>
             <button class="btn-close" onclick="window.close()">✕ Fechar</button>
           </div>
-          <div class="print-tip">
-            ⚡ Se a caixa do Chrome travar, pressione <b>Ctrl + Shift + P</b> para imprimir direto na Tanca!
-          </div>
+          
         </div>
         <div style="padding: 2px 0;">
           ${contentHtml}

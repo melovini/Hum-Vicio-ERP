@@ -435,9 +435,9 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
           </div>
         </div>
 
-        {/* Dica de contingência do Chrome */}
-        <div className="mt-2 text-[10px] text-amber-300/80 bg-amber-950/30 border border-amber-500/20 px-3 py-1.5 rounded-xl text-center no-print">
-          💡 <b>Dica PDV:</b> Se a visualização do Chrome falhar, aperte <b>Ctrl + Shift + P</b> para imprimir direto pelo Windows!
+        {/* Dica de Impressão Segura */}
+        <div className="mt-2 text-[11px] text-emerald-300/90 bg-emerald-950/40 border border-emerald-500/20 px-3 py-1.5 rounded-xl text-center no-print">
+          ⚡ <b>Dica PDV:</b> Clique apenas <b>1 vez</b> em "Imprimir Cupom". A comanda é enviada para a impressora e a janela fecha automaticamente.
         </div>
 
         {/* Botões de Ação */}
