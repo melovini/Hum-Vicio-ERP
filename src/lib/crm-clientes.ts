@@ -27,7 +27,38 @@ export interface CustomerProfile {
   frequentNotes: string[];
 }
 
+export interface ImportedCustomer {
+  id: string;
+  name: string;
+  phone?: string;
+  address?: string;
+  number?: string;
+  neighborhood?: string;
+  city?: string;
+  complement?: string;
+  fullAddress?: string;
+  totalOrders: number;
+  lastOrderDate?: string;
+  source: 'cardapio_web' | 'planilha' | 'manual';
+  importedAt: string;
+}
+
+export interface CustomerSearchResult {
+  id: string;
+  name: string;
+  rawFullName: string;
+  totalOrders: number;
+  lastOrderSummary?: string;
+  frequentNotes?: string[];
+  phone?: string;
+  fullAddress?: string;
+  source: 'erp' | 'cardapio_web';
+  profile?: CustomerProfile;
+  importedCustomer?: ImportedCustomer;
+}
+
 const STORAGE_CRM_KEY = 'hum_vicio_crm_cache';
+const STORAGE_IMPORTED_KEY = 'hum_vicio_imported_customers';
 
 // Normalizar texto para busca (sem acentos, minúsculo)
 export function normalizeSearchString(str: string): string {
@@ -59,7 +90,36 @@ export function cleanCustomerName(rawName: string): { cleanName: string; address
   return { cleanName: text };
 }
 
-// Extrai perfis consolidados de clientes a partir do histórico de vendas
+// Obter clientes importados salvos localmente
+export function getStoredImportedCustomers(): ImportedCustomer[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_IMPORTED_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+// Salvar clientes importados
+export function saveImportedCustomers(customers: ImportedCustomer[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(customers));
+  } catch (err) {
+    console.error('Erro ao salvar clientes importados:', err);
+  }
+}
+
+// Limpar clientes importados
+export function clearImportedCustomers(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(STORAGE_IMPORTED_KEY);
+  } catch {}
+}
+
+// Extrai perfis consolidados de clientes a partir do histórico de vendas do ERP
 export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
   const profileMap = new Map<string, {
     cleanName: string;
@@ -69,7 +129,6 @@ export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
     orderTypes: ('mesa' | 'retirada' | 'delivery')[];
   }>();
 
-  // Processa as vendas válidas
   sales.forEach(sale => {
     if (sale.status === 'cancelled') return;
     const candidateName = sale.customerName || sale.creditCustomerName;
@@ -78,7 +137,6 @@ export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
     const { cleanName, addressPart } = cleanCustomerName(candidateName);
     if (!cleanName || cleanName.length < 2) return;
 
-    // Ignora nomes genéricos de sistema
     const norm = normalizeSearchString(cleanName);
     if (norm === 'cliente' || norm === 'cliente balcao' || norm === 'balcao' || norm === 'consumidor' || norm.startsWith('mesa ')) {
       return;
@@ -112,7 +170,6 @@ export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
       existing.orders.push(orderData);
       existing.notesList.push(...notesFromItems);
       existing.orderTypes.push(orderData.orderType);
-      // Mantém o nome com melhor capitalização
       if (cleanName.length > existing.cleanName.length) {
         existing.cleanName = cleanName;
       }
@@ -122,24 +179,20 @@ export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
   const result: CustomerProfile[] = [];
 
   profileMap.forEach((val, normKey) => {
-    // Ordena pedidos do mais recente para o mais antigo
     const sortedOrders = [...val.orders].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     const totalOrders = sortedOrders.length;
     const totalSpent = sortedOrders.reduce((acc, o) => acc + o.total, 0);
     const averageTicket = totalOrders > 0 ? totalSpent / totalOrders : 0;
 
-    // Resumo dos itens do último pedido (ex: "1x Hum Bacon + 1x Batata + 1x Coca Zero")
     const latestOrder = sortedOrders[0];
     const itemsSummary = latestOrder?.items && latestOrder.items.length > 0
       ? latestOrder.items.map(i => `${i.quantity}x ${i.productName}`).slice(0, 3).join(', ') + (latestOrder.items.length > 3 ? '...' : '')
       : 'Itens diversos';
 
-    // Determina modalidade mais frequente
     const typeCounts: Record<string, number> = {};
     val.orderTypes.forEach(t => { typeCounts[t] = (typeCounts[t] || 0) + 1; });
     const preferredOrderType = (Object.keys(typeCounts).sort((a, b) => typeCounts[b] - typeCounts[a])[0] || 'mesa') as 'mesa' | 'retirada' | 'delivery';
 
-    // Observações frequentes únicas
     const uniqueNotes = Array.from(new Set(val.notesList.map(n => n.toUpperCase()))).slice(0, 3);
 
     result.push({
@@ -158,10 +211,8 @@ export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
     });
   });
 
-  // Ordena por clientes mais recorrentes e recentes
   result.sort((a, b) => b.totalOrders - a.totalOrders || new Date(b.lastOrderDate).getTime() - new Date(a.lastOrderDate).getTime());
 
-  // Salva no cache local para resiliência offline
   if (typeof window !== 'undefined' && result.length > 0) {
     try {
       localStorage.setItem(STORAGE_CRM_KEY, JSON.stringify(result.slice(0, 100)));
@@ -171,16 +222,165 @@ export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
   return result;
 }
 
-// Filtra clientes pelo termo digitado (a partir de 2 caracteres)
-export function searchRecurringCustomers(query: string, customers: CustomerProfile[]): CustomerProfile[] {
+// Filtra clientes pelo termo digitado (Unifica ERP com base importada do Cardápio Web)
+export function searchRecurringCustomers(
+  query: string,
+  erpProfiles: CustomerProfile[],
+  importedCustomers: ImportedCustomer[] = []
+): CustomerSearchResult[] {
   const normQuery = normalizeSearchString(query);
   if (!normQuery || normQuery.length < 2) return [];
 
-  return customers.filter(c => {
-    const matchName = normalizeSearchString(c.name).includes(normQuery);
-    const matchRaw = normalizeSearchString(c.rawFullName).includes(normQuery);
-    return matchName || matchRaw;
-  }).slice(0, 5); // Limite de 5 sugestões para visual limpo
+  const results: CustomerSearchResult[] = [];
+  const seenNames = new Set<string>();
+
+  // 1. Prioridade para clientes do histórico do ERP (possuem itens e observações detalhadas)
+  erpProfiles.forEach(p => {
+    const matchName = normalizeSearchString(p.name).includes(normQuery);
+    const matchRaw = normalizeSearchString(p.rawFullName).includes(normQuery);
+    if (matchName || matchRaw) {
+      seenNames.add(normalizeSearchString(p.name));
+      results.push({
+        id: p.id,
+        name: p.name,
+        rawFullName: p.rawFullName,
+        totalOrders: p.totalOrders,
+        lastOrderSummary: p.lastOrderItemsSummary,
+        frequentNotes: p.frequentNotes,
+        source: 'erp',
+        profile: p
+      });
+    }
+  });
+
+  // 2. Busca na base importada do Cardápio Web
+  importedCustomers.forEach(imp => {
+    const normImpName = normalizeSearchString(imp.name);
+    if (seenNames.has(normImpName)) return;
+
+    const matchName = normImpName.includes(normQuery);
+    const matchPhone = imp.phone ? imp.phone.replace(/\D/g, '').includes(normQuery.replace(/\D/g, '')) : false;
+    const matchAddress = imp.fullAddress ? normalizeSearchString(imp.fullAddress).includes(normQuery) : false;
+
+    if (matchName || matchPhone || matchAddress) {
+      seenNames.add(normImpName);
+      results.push({
+        id: imp.id,
+        name: imp.name,
+        rawFullName: imp.fullAddress 
+          ? `${imp.name} - ${imp.fullAddress}${imp.phone ? ` (${imp.phone})` : ''}` 
+          : imp.phone ? `${imp.name} - Tel: ${imp.phone}` : imp.name,
+        totalOrders: imp.totalOrders || 1,
+        lastOrderSummary: imp.fullAddress ? `Endereço: ${imp.fullAddress}` : imp.phone ? `Telefone: ${imp.phone}` : undefined,
+        phone: imp.phone,
+        fullAddress: imp.fullAddress,
+        source: 'cardapio_web',
+        importedCustomer: imp
+      });
+    }
+  });
+
+  return results.slice(0, 6);
+}
+
+// Parser Inteligente para Planilhas XLSX / XLS / CSV do Cardápio Web
+export async function parseCardapioWebXlsx(file: File): Promise<{
+  customers: ImportedCustomer[];
+  totalRows: number;
+  detectedColumns: {
+    nameCol?: string;
+    phoneCol?: string;
+    addressCol?: string;
+    numberCol?: string;
+    neighborhoodCol?: string;
+    cityCol?: string;
+    complementCol?: string;
+    ordersCol?: string;
+    dateCol?: string;
+  };
+}> {
+  const XLSX = await import('xlsx');
+  const buffer = await file.arrayBuffer();
+  const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+  const firstSheetName = workbook.SheetNames[0];
+  const worksheet = workbook.Sheets[firstSheetName];
+  const rawRows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet, { defval: '' });
+
+  if (!rawRows || rawRows.length === 0) {
+    return { customers: [], totalRows: 0, detectedColumns: {} };
+  }
+
+  const sampleRow = rawRows[0];
+  const colKeys = Object.keys(sampleRow);
+
+  const findCol = (regexes: RegExp[]) => {
+    for (const regex of regexes) {
+      const match = colKeys.find(k => regex.test(k.trim()));
+      if (match) return match;
+    }
+    return undefined;
+  };
+
+  const nameCol = findCol([/^nome/i, /^cliente/i, /nome.*cliente/i, /destinatario/i, /^name/i]);
+  const phoneCol = findCol([/telefone/i, /celular/i, /whatsapp/i, /fone/i, /contato/i, /^phone/i, /^tel/i]);
+  const addressCol = findCol([/^endere[cç]o/i, /^rua/i, /^logradouro/i, /^address/i]);
+  const numberCol = findCol([/^n[uú]mero/i, /^n[ºo]/i, /^num/i, /^number/i]);
+  const neighborhoodCol = findCol([/^bairro/i, /^distrito/i, /bairro/i]);
+  const cityCol = findCol([/^cidade/i, /^munic[ií]pio/i, /cidade/i]);
+  const complementCol = findCol([/^complemento/i, /^refer[eê]ncia/i, /ponto.*refer/i]);
+  const ordersCol = findCol([/qtd.*pedido/i, /total.*pedido/i, /^pedidos/i, /quantidade.*pedido/i, /compras/i]);
+  const dateCol = findCol([/[uú]ltimo.*pedido/i, /data.*pedido/i, /^data/i, /cadastro/i]);
+
+  const detectedColumns = {
+    nameCol, phoneCol, addressCol, numberCol, neighborhoodCol, cityCol, complementCol, ordersCol, dateCol
+  };
+
+  const now = new Date().toISOString();
+  const customers: ImportedCustomer[] = [];
+
+  rawRows.forEach((row, idx) => {
+    const rawName = nameCol ? String(row[nameCol] || '').trim() : '';
+    if (!rawName || rawName.length < 2) return;
+
+    const phone = phoneCol ? String(row[phoneCol] || '').trim() : undefined;
+    const street = addressCol ? String(row[addressCol] || '').trim() : '';
+    const num = numberCol ? String(row[numberCol] || '').trim() : '';
+    const neighborhood = neighborhoodCol ? String(row[neighborhoodCol] || '').trim() : '';
+    const city = cityCol ? String(row[cityCol] || '').trim() : '';
+    const complement = complementCol ? String(row[complementCol] || '').trim() : '';
+    const totalOrdersRaw = ordersCol ? Number(row[ordersCol]) : 1;
+    const totalOrders = isNaN(totalOrdersRaw) || totalOrdersRaw < 1 ? 1 : totalOrdersRaw;
+    const lastOrderDate = dateCol ? String(row[dateCol] || '').trim() : undefined;
+
+    const addressParts: string[] = [];
+    if (street) {
+      addressParts.push(num ? `${street}, ${num}` : street);
+    }
+    if (neighborhood) addressParts.push(neighborhood);
+    if (complement) addressParts.push(`(${complement})`);
+    if (city) addressParts.push(city);
+    const fullAddress = addressParts.join(' - ');
+
+    const id = 'cw_' + normalizeSearchString(rawName) + '_' + (phone ? phone.replace(/\D/g, '') : idx);
+
+    customers.push({
+      id,
+      name: rawName,
+      phone,
+      address: street,
+      number: num,
+      neighborhood,
+      city,
+      complement,
+      fullAddress: fullAddress || undefined,
+      totalOrders,
+      lastOrderDate,
+      source: 'cardapio_web',
+      importedAt: now
+    });
+  });
+
+  return { customers, totalRows: rawRows.length, detectedColumns };
 }
 
 // Clona os itens de um pedido anterior e atualiza preços com o cardápio vigente (Antifraude & Integridade)
@@ -199,18 +399,15 @@ export function cloneOrderItemsToCart(
     let unitPrice = item.unitPrice;
     let comboPrice = item.comboPrice || 0;
 
-    // Se o produto foi encontrado no cardápio ativo, recalcula com os preços de hoje
     if (currentProduct) {
       const basePrice = channel === 'ifood' ? currentProduct.priceIfood : currentProduct.priceBalcao;
       
-      // Se continha combo, aplica valor padrão do combo
       if (item.combo?.toLowerCase().includes('anéis') || item.combo?.toLowerCase().includes('aneis')) {
         comboPrice = 16;
       } else if (item.combo?.toLowerCase().includes('batata')) {
         comboPrice = 14;
       }
 
-      // Soma adicionais registrados no item
       const additionsTotal = (item.additionals || []).reduce((acc, a) => acc + (a.price || 0), 0);
       unitPrice = basePrice + comboPrice + additionsTotal;
     }

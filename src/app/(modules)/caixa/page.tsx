@@ -8,12 +8,13 @@ import {
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
   Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid,
   Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck, RotateCcw,
-  Repeat, Star, ChevronDown
+  Repeat, Star, ChevronDown, Globe, FileSpreadsheet, MapPin, Phone
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
 import RouteManifestModal from '@/components/RouteManifestModal';
 import SlidingSheet from '@/components/ui/SlidingSheet';
+import ImportarClientesModal from '@/components/ImportarClientesModal';
 import { playOrderReadyChime } from '@/lib/audio';
 import MapaMesasCanvas from '@/components/MapaMesasCanvas';
 import { 
@@ -23,8 +24,9 @@ import {
   resetarMesaParaNovoCliente, sincronizarMesasComCaixa
 } from '@/lib/mesas';
 import { 
-  CustomerProfile, CustomerPreviousOrder,
-  extractCustomerProfiles, searchRecurringCustomers, cloneOrderItemsToCart 
+  CustomerProfile, CustomerPreviousOrder, ImportedCustomer, CustomerSearchResult,
+  extractCustomerProfiles, searchRecurringCustomers, cloneOrderItemsToCart,
+  getStoredImportedCustomers
 } from '@/lib/crm-clientes';
 import { sendOwnerSecurityAlert } from '@/lib/notifications';
 import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
@@ -314,17 +316,19 @@ export default function CaixaPage() {
   const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_espera');
   const [pendingRemovalFromGrill, setPendingRemovalFromGrill] = useState<{ sale: Sale; action: 'pause' | 'cancel' } | null>(null);
 
-  // Estados de CRM & Clientes Fiéis (Autocomplete & Histórico)
+  // Estados de CRM & Clientes Fiéis (Autocomplete, Histórico & Importação Cardápio Web)
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
   const [selectedCustomerForHistory, setSelectedCustomerForHistory] = useState<CustomerProfile | null>(null);
   const [crmFeedbackToast, setCrmFeedbackToast] = useState<string | null>(null);
+  const [showImportModal, setShowImportModal] = useState(false);
+  const [importedCustomers, setImportedCustomers] = useState<ImportedCustomer[]>(() => getStoredImportedCustomers());
 
   const customerProfiles = useMemo(() => extractCustomerProfiles(sales), [sales]);
 
   const matchingCustomers = useMemo(() => {
     if (!customerName || customerName.trim().length < 2) return [];
-    return searchRecurringCustomers(customerName, customerProfiles);
-  }, [customerName, customerProfiles]);
+    return searchRecurringCustomers(customerName, customerProfiles, importedCustomers);
+  }, [customerName, customerProfiles, importedCustomers]);
 
   // Estados de Brindes / Cortesias
   const [giftModalItemIndex, setGiftModalItemIndex] = useState<number | null>(null);
@@ -2066,18 +2070,28 @@ export default function CaixaPage() {
                         </div>
                       )}
 
-                      {/* Nome do Cliente Solicitado com CRM de Clientes Fiéis */}
+                      {/* Nome do Cliente Solicitado com CRM de Clientes Fiéis & Cardápio Web */}
                       <div className="mb-4 relative">
                         <div className="flex items-center justify-between mb-1">
                           <label className="block text-xs font-bold text-slate-300 flex items-center gap-1.5">
                             <User size={14} className="text-emerald-400" /> 
                             {orderType === 'mesa' ? 'Nome do Cliente na Mesa (Opcional):' : orderType === 'retirada' ? 'Nome para Retirada:' : 'Nome e Endereço do Cliente:'}
                           </label>
-                          {matchingCustomers.length > 0 && (
-                            <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1">
-                              <Star size={11} className="fill-amber-400" /> {matchingCustomers.length} cliente(s) fiel(is)
-                            </span>
-                          )}
+                          <div className="flex items-center gap-2">
+                            {matchingCustomers.length > 0 && (
+                              <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1">
+                                <Star size={11} className="fill-amber-400" /> {matchingCustomers.length} encontrado(s)
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setShowImportModal(true)}
+                              className="text-[10px] text-amber-400 hover:text-amber-300 font-extrabold flex items-center gap-1 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded-lg border border-amber-500/30 transition-all cursor-pointer shadow-xs"
+                              title="Carregar planilha .xlsx exportada do Cardápio Web"
+                            >
+                              <FileSpreadsheet size={11} /> Importar Cardápio Web (.xlsx)
+                            </button>
+                          </div>
                         </div>
 
                         <div className="relative">
@@ -2112,7 +2126,7 @@ export default function CaixaPage() {
                           <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-slate-900/98 backdrop-blur-md border border-amber-500/40 rounded-2xl shadow-2xl overflow-hidden divide-y divide-slate-800 animate-in fade-in slide-in-from-top-2 duration-150">
                             <div className="bg-slate-950/90 px-3.5 py-2 flex items-center justify-between text-[11px] font-extrabold text-amber-400">
                               <span className="flex items-center gap-1.5">
-                                <Sparkles size={13} className="text-amber-400" /> Clientes Recorrentes / Pedidos Anteriores
+                                <Sparkles size={13} className="text-amber-400" /> Clientes Encontrados (ERP & Cardápio Web)
                               </span>
                               <button
                                 type="button"
@@ -2137,11 +2151,15 @@ export default function CaixaPage() {
                                         setShowCustomerSuggestions(false);
                                       }}
                                     >
-                                      <div className="flex items-center gap-2">
+                                      <div className="flex items-center gap-2 flex-wrap">
                                         <span className="text-xs font-black text-white group-hover:text-amber-300 transition-colors">
                                           {cust.name}
                                         </span>
-                                        {cust.totalOrders >= 3 ? (
+                                        {cust.source === 'cardapio_web' ? (
+                                          <span className="px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px] font-black border border-cyan-500/30 flex items-center gap-1">
+                                            <Globe size={9} /> Cardápio Web ({cust.totalOrders}x)
+                                          </span>
+                                        ) : cust.totalOrders >= 3 ? (
                                           <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-black border border-amber-500/40 flex items-center gap-1">
                                             <Star size={9} className="fill-amber-400 text-amber-400" /> Fiel ({cust.totalOrders}x)
                                           </span>
@@ -2152,11 +2170,23 @@ export default function CaixaPage() {
                                         )}
                                       </div>
 
-                                      <p className="text-[11px] text-slate-300 mt-1 line-clamp-1">
-                                        Último: <span className="font-semibold text-white">{cust.lastOrderItemsSummary}</span>
-                                      </p>
+                                      {cust.lastOrderSummary && (
+                                        <p className="text-[11px] text-slate-300 mt-1 line-clamp-1">
+                                          {cust.source === 'cardapio_web' ? (
+                                            <span className="text-cyan-300 flex items-center gap-1"><MapPin size={10} /> {cust.lastOrderSummary}</span>
+                                          ) : (
+                                            <>Último: <span className="font-semibold text-white">{cust.lastOrderSummary}</span></>
+                                          )}
+                                        </p>
+                                      )}
 
-                                      {cust.frequentNotes.length > 0 && (
+                                      {cust.phone && (
+                                        <p className="text-[10px] text-emerald-400/90 mt-0.5 flex items-center gap-1 font-mono">
+                                          <Phone size={10} /> {cust.phone}
+                                        </p>
+                                      )}
+
+                                      {cust.frequentNotes && cust.frequentNotes.length > 0 && (
                                         <p className="text-[10px] text-amber-300/80 mt-0.5 italic">
                                           Preferência: "{cust.frequentNotes[0]}"
                                         </p>
@@ -2165,25 +2195,41 @@ export default function CaixaPage() {
 
                                     {/* Ações Rápidas de 1 Clique */}
                                     <div className="flex items-center gap-1.5 shrink-0">
-                                      <button
-                                        type="button"
-                                        onClick={() => handleRepeatCustomerOrder(cust)}
-                                        className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md hover:shadow-emerald-600/30 transition-all cursor-pointer"
-                                        title="Carrega exatamente os mesmos itens do último pedido no carrinho com preços atualizados"
-                                      >
-                                        <Repeat size={13} /> Repetir Pedido
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => {
-                                          setSelectedCustomerForHistory(cust);
-                                          setShowCustomerSuggestions(false);
-                                        }}
-                                        className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-700 transition-all cursor-pointer"
-                                        title="Ver todos os pedidos anteriores deste cliente"
-                                      >
-                                        <History size={14} />
-                                      </button>
+                                      {cust.profile && cust.profile.orders.length > 0 ? (
+                                        <>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleRepeatCustomerOrder(cust.profile!)}
+                                            className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md hover:shadow-emerald-600/30 transition-all cursor-pointer"
+                                            title="Carrega exatamente os mesmos itens do último pedido no carrinho com preços atualizados"
+                                          >
+                                            <Repeat size={13} /> Repetir Pedido
+                                          </button>
+                                          <button
+                                            type="button"
+                                            onClick={() => {
+                                              setSelectedCustomerForHistory(cust.profile!);
+                                              setShowCustomerSuggestions(false);
+                                            }}
+                                            className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-700 transition-all cursor-pointer"
+                                            title="Ver todos os pedidos anteriores deste cliente"
+                                          >
+                                            <History size={14} />
+                                          </button>
+                                        </>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            setCustomerName(cust.rawFullName || cust.name);
+                                            setShowCustomerSuggestions(false);
+                                          }}
+                                          className="py-1.5 px-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md hover:shadow-cyan-600/30 transition-all cursor-pointer"
+                                          title="Preenche nome e endereço completo de entrega do cliente"
+                                        >
+                                          <Check size={13} /> Selecionar
+                                        </button>
+                                      )}
                                     </div>
                                   </div>
                                 </div>
@@ -4971,6 +5017,17 @@ export default function CaixaPage() {
             </div>
           )}
         </SlidingSheet>
+
+        {/* MODAL DE IMPORTAÇÃO CARDÁPIO WEB (.xlsx) */}
+        <ImportarClientesModal
+          isOpen={showImportModal}
+          onClose={() => setShowImportModal(false)}
+          onImportSuccess={(newImported) => {
+            setImportedCustomers(newImported);
+            setCrmFeedbackToast(`${newImported.length} clientes do Cardápio Web sincronizados com sucesso!`);
+            setTimeout(() => setCrmFeedbackToast(null), 5000);
+          }}
+        />
 
         {/* TOAST DE FEEDBACK CRM */}
         {crmFeedbackToast && (
