@@ -222,7 +222,7 @@ export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
   return result;
 }
 
-// Filtra clientes pelo termo digitado (Unifica ERP com base importada do Cardápio Web)
+// Filtra clientes pelo termo digitado (Unifica ERP com base importada do Cardápio Web com relevância e ranking)
 export function searchRecurringCustomers(
   query: string,
   erpProfiles: CustomerProfile[],
@@ -231,56 +231,121 @@ export function searchRecurringCustomers(
   const normQuery = normalizeSearchString(query);
   if (!normQuery || normQuery.length < 2) return [];
 
-  const results: CustomerSearchResult[] = [];
-  const seenNames = new Set<string>();
+  const queryDigits = query.replace(/\D/g, '');
+  // Busca por telefone só ativa se houver pelo menos 3 dígitos consecutivos ou consulta predominantemente numérica
+  const isNumericQuery = /^\d+$/.test(normQuery);
+  const hasValidPhoneQuery = isNumericQuery ? queryDigits.length >= 3 : queryDigits.length >= 4;
 
-  // 1. Prioridade para clientes do histórico do ERP (possuem itens e observações detalhadas)
+  interface ScoredResult {
+    score: number;
+    result: CustomerSearchResult;
+  }
+
+  const scoredResults: ScoredResult[] = [];
+  const seenKeys = new Set<string>();
+
+  const calculateScore = (
+    name: string,
+    phone?: string,
+    address?: string
+  ): number => {
+    const normName = normalizeSearchString(name);
+    let score = 0;
+
+    // 1. Match exato de nome
+    if (normName === normQuery) {
+      score = Math.max(score, 1000);
+    }
+    // 2. Início do nome bate exatamente
+    else if (normName.startsWith(normQuery)) {
+      score = Math.max(score, 600);
+    }
+    // 3. Qualquer palavra do nome começa com o termo (ex: "fat" -> "vitor fatureto")
+    else {
+      const words = normName.split(/\s+/);
+      if (words.some(w => w.startsWith(normQuery))) {
+        score = Math.max(score, 500);
+      } else if (normName.includes(normQuery)) {
+        score = Math.max(score, 300);
+      }
+    }
+
+    // 4. Busca por telefone (CRÍTICO: nunca comparar string vazia!)
+    if (hasValidPhoneQuery && phone) {
+      const phoneDigits = phone.replace(/\D/g, '');
+      if (phoneDigits && queryDigits) {
+        if (phoneDigits.startsWith(queryDigits)) {
+          score = Math.max(score, 450);
+        } else if (phoneDigits.includes(queryDigits)) {
+          score = Math.max(score, 350);
+        }
+      }
+    }
+
+    // 5. Busca por endereço
+    if (address && !isNumericQuery) {
+      const normAddr = normalizeSearchString(address);
+      if (normAddr.startsWith(normQuery)) {
+        score = Math.max(score, 250);
+      } else if (normAddr.includes(normQuery)) {
+        score = Math.max(score, 200);
+      }
+    }
+
+    return score;
+  };
+
+  // 1. Clientes recorrentes do ERP (prioridade de catálogo e reordenação)
   erpProfiles.forEach(p => {
-    const matchName = normalizeSearchString(p.name).includes(normQuery);
-    const matchRaw = normalizeSearchString(p.rawFullName).includes(normQuery);
-    if (matchName || matchRaw) {
-      seenNames.add(normalizeSearchString(p.name));
-      results.push({
-        id: p.id,
-        name: p.name,
-        rawFullName: p.rawFullName,
-        totalOrders: p.totalOrders,
-        lastOrderSummary: p.lastOrderItemsSummary,
-        frequentNotes: p.frequentNotes,
-        source: 'erp',
-        profile: p
+    const score = calculateScore(p.name, undefined, p.rawFullName);
+    if (score > 0) {
+      const key = normalizeSearchString(p.name);
+      seenKeys.add(key);
+      scoredResults.push({
+        score: score + Math.min(p.totalOrders * 2, 20) + 15, // Bônus ERP
+        result: {
+          id: p.id,
+          name: p.name,
+          rawFullName: p.rawFullName,
+          totalOrders: p.totalOrders,
+          lastOrderSummary: p.lastOrderItemsSummary,
+          frequentNotes: p.frequentNotes,
+          source: 'erp',
+          profile: p
+        }
       });
     }
   });
 
-  // 2. Busca na base importada do Cardápio Web
+  // 2. Clientes importados do Cardápio Web
   importedCustomers.forEach(imp => {
-    const normImpName = normalizeSearchString(imp.name);
-    if (seenNames.has(normImpName)) return;
+    const key = normalizeSearchString(imp.name);
+    if (seenKeys.has(key)) return;
 
-    const matchName = normImpName.includes(normQuery);
-    const matchPhone = imp.phone ? imp.phone.replace(/\D/g, '').includes(normQuery.replace(/\D/g, '')) : false;
-    const matchAddress = imp.fullAddress ? normalizeSearchString(imp.fullAddress).includes(normQuery) : false;
-
-    if (matchName || matchPhone || matchAddress) {
-      seenNames.add(normImpName);
-      results.push({
-        id: imp.id,
-        name: imp.name,
-        rawFullName: imp.fullAddress 
-          ? `${imp.name} - ${imp.fullAddress}${imp.phone ? ` (${imp.phone})` : ''}` 
-          : imp.phone ? `${imp.name} - Tel: ${imp.phone}` : imp.name,
-        totalOrders: imp.totalOrders || 1,
-        lastOrderSummary: imp.fullAddress ? `Endereço: ${imp.fullAddress}` : imp.phone ? `Telefone: ${imp.phone}` : undefined,
-        phone: imp.phone,
-        fullAddress: imp.fullAddress,
-        source: 'cardapio_web',
-        importedCustomer: imp
+    const score = calculateScore(imp.name, imp.phone, imp.fullAddress);
+    if (score > 0) {
+      seenKeys.add(key);
+      scoredResults.push({
+        score: score + Math.min((imp.totalOrders || 1) * 2, 20),
+        result: {
+          id: imp.id,
+          name: imp.name,
+          rawFullName: imp.fullAddress ? `${imp.name} - ${imp.fullAddress}` : imp.name,
+          totalOrders: imp.totalOrders || 1,
+          lastOrderSummary: imp.fullAddress ? imp.fullAddress : undefined,
+          phone: imp.phone,
+          fullAddress: imp.fullAddress,
+          source: 'cardapio_web',
+          importedCustomer: imp
+        }
       });
     }
   });
 
-  return results.slice(0, 6);
+  // Ordena por maior pontuação de relevância
+  scoredResults.sort((a, b) => b.score - a.score);
+
+  return scoredResults.slice(0, 6).map(s => s.result);
 }
 
 // Parser Inteligente para Planilhas XLSX / XLS / CSV do Cardápio Web

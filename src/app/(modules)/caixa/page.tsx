@@ -2147,7 +2147,11 @@ export default function CaixaPage() {
                                     <div 
                                       className="cursor-pointer flex-1" 
                                       onClick={() => {
-                                        setCustomerName(cust.rawFullName || cust.name);
+                                        if (orderType === 'delivery' && cust.fullAddress) {
+                                          setCustomerName(`${cust.name} - ${cust.fullAddress}`);
+                                        } else {
+                                          setCustomerName(cust.name);
+                                        }
                                         setShowCustomerSuggestions(false);
                                       }}
                                     >
@@ -2170,19 +2174,23 @@ export default function CaixaPage() {
                                         )}
                                       </div>
 
-                                      {cust.lastOrderSummary && (
-                                        <p className="text-[11px] text-slate-300 mt-1 line-clamp-1">
-                                          {cust.source === 'cardapio_web' ? (
-                                            <span className="text-cyan-300 flex items-center gap-1"><MapPin size={10} /> {cust.lastOrderSummary}</span>
-                                          ) : (
-                                            <>Último: <span className="font-semibold text-white">{cust.lastOrderSummary}</span></>
-                                          )}
+                                      {/* Endereço real (nunca duplica telefone com ícone de pin) */}
+                                      {cust.fullAddress ? (
+                                        <p className="text-[11px] text-cyan-300 mt-1 flex items-center gap-1 line-clamp-1">
+                                          <MapPin size={10} className="shrink-0" />
+                                          <span>{cust.fullAddress}</span>
                                         </p>
-                                      )}
+                                      ) : cust.source === 'erp' && cust.lastOrderSummary ? (
+                                        <p className="text-[11px] text-slate-300 mt-1 line-clamp-1">
+                                          Último: <span className="font-semibold text-white">{cust.lastOrderSummary}</span>
+                                        </p>
+                                      ) : null}
 
+                                      {/* Telefone / WhatsApp */}
                                       {cust.phone && (
                                         <p className="text-[10px] text-emerald-400/90 mt-0.5 flex items-center gap-1 font-mono">
-                                          <Phone size={10} /> {cust.phone}
+                                          <Phone size={10} className="shrink-0" />
+                                          <span>{cust.phone}</span>
                                         </p>
                                       )}
 
@@ -2221,11 +2229,15 @@ export default function CaixaPage() {
                                         <button
                                           type="button"
                                           onClick={() => {
-                                            setCustomerName(cust.rawFullName || cust.name);
+                                            if (orderType === 'delivery' && cust.fullAddress) {
+                                              setCustomerName(`${cust.name} - ${cust.fullAddress}`);
+                                            } else {
+                                              setCustomerName(cust.name);
+                                            }
                                             setShowCustomerSuggestions(false);
                                           }}
                                           className="py-1.5 px-3 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md hover:shadow-cyan-600/30 transition-all cursor-pointer"
-                                          title="Preenche nome e endereço completo de entrega do cliente"
+                                          title="Preenche dados do cliente"
                                         >
                                           <Check size={13} /> Selecionar
                                         </button>
