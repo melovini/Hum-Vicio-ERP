@@ -147,6 +147,14 @@ export default async function Home() {
               >
                 👥 Clientes & CRM
               </Link>
+
+              <Link 
+                href="/admin/fiscal" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-cyan-500/30 rounded-lg p-2 truncate transition-colors"
+                title="Gestão Fiscal, Certificado Digital A1, SEFAZ, Token de API e NFC-e"
+              >
+                ⚖️ Gestão Fiscal & NFC-e
+              </Link>
               
               {/* Colaboradores: Exclusivo Administrador Geral */}
               {isAdmin && (

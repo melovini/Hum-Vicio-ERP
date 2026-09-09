@@ -49,6 +49,13 @@ export interface Product {
   priceIfood: number;
   recipe: RecipeIngredient[];
   isActive?: boolean;
+  // Parâmetros Tributários Fiscais (NFC-e / NF-e)
+  ncm?: string;
+  cest?: string;
+  cfop?: string;
+  csosn?: string;
+  origem?: number;
+  unidadeComercial?: string;
 }
 
 // === VENDAS ===
@@ -129,6 +136,17 @@ export interface Sale {
   creditStatus?: 'pendente' | 'quitado';
   creditPaidAt?: string;
   creditPaidMethod?: string;
+  // Integração Fiscal (NFC-e):
+  fiscalCpfCnpj?: string;
+  fiscalStatus?: 'nao_emitida' | 'autorizada' | 'emitida' | 'rejeitada' | 'cancelada' | 'simulada' | 'contingencia';
+  fiscalNfceNumber?: number;
+  fiscalNfceSeries?: number;
+  fiscalAccessKey?: string;
+  fiscalXmlUrl?: string;
+  fiscalDanfeUrl?: string;
+  fiscalQrCode?: string;
+  fiscalIssuedAt?: string;
+  fiscalProtocol?: string;
 }
 
 // === CUSTOS FIXOS MENSAIS ESTRUTURADOS (DRE & PONTO DE EQUILÍBRIO) ===

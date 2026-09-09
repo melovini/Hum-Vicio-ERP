@@ -3,9 +3,11 @@ import { useState, useMemo } from 'react';
 import { useInventory, Product, RecipeIngredient, InventoryItem } from '@/lib/store';
 import { 
   ChefHat, ArrowLeft, Plus, Trash2, Edit2, Check, X, 
-  FlaskConical, Sparkles, Layers, DollarSign, Store, Smartphone, Search, ChevronRight, Copy 
+  FlaskConical, Sparkles, Layers, DollarSign, Store, Smartphone, Search, ChevronRight, Copy,
+  Landmark
 } from 'lucide-react';
 import Link from 'next/link';
+import { FISCAL_CATEGORY_PRESETS } from '@/lib/fiscal';
 
 export default function EngenhariaCardapioPage() {
   const { 
@@ -26,6 +28,12 @@ export default function EngenhariaCardapioPage() {
   const [category, setCategory] = useState<'lanche'|'bebida'|'porcao'|'combo'>('lanche');
   const [priceBalcao, setPriceBalcao] = useState('');
   const [priceIfood, setPriceIfood] = useState('');
+
+  // Parâmetros Tributários Fiscais (NFC-e)
+  const [ncm, setNcm] = useState('');
+  const [cfop, setCfop] = useState('');
+  const [csosn, setCsosn] = useState('');
+  const [cest, setCest] = useState('');
   
   // Recipe State & Typeahead
   const [recipe, setRecipe] = useState<RecipeIngredient[]>([]);
@@ -93,8 +101,19 @@ export default function EngenhariaCardapioPage() {
 
   const resetForm = () => {
     setName(''); setCategory('lanche'); setPriceBalcao(''); setPriceIfood('');
+    setNcm(''); setCfop(''); setCsosn(''); setCest('');
     setRecipe([]); setSelectedIngId(''); setIngQuantity(''); setIngSearch('');
     setIsIngDropdownOpen(false); setIsAdding(false); setEditingId(null);
+  };
+
+  const applyFiscalPreset = (presetKey: string) => {
+    const preset = FISCAL_CATEGORY_PRESETS[presetKey];
+    if (preset) {
+      setNcm(preset.ncm);
+      setCfop(preset.cfop);
+      setCsosn(preset.csosn);
+      setCest(preset.cest || '');
+    }
   };
 
   const handleSave = () => {
@@ -104,7 +123,11 @@ export default function EngenhariaCardapioPage() {
       name, category, 
       priceBalcao: Number(priceBalcao), 
       priceIfood: Number(priceIfood),
-      recipe
+      recipe,
+      ncm: ncm.trim() || undefined,
+      cfop: cfop.trim() || undefined,
+      csosn: csosn.trim() || undefined,
+      cest: cest.trim() || undefined
     };
 
     if (editingId) {
@@ -120,6 +143,10 @@ export default function EngenhariaCardapioPage() {
     setCategory(p.category);
     setPriceBalcao(p.priceBalcao.toString());
     setPriceIfood(p.priceIfood.toString());
+    setNcm(p.ncm || '');
+    setCfop(p.cfop || '');
+    setCsosn(p.csosn || '');
+    setCest(p.cest || '');
     setRecipe([...p.recipe]);
     setEditingId(p.id);
     setIsAdding(true);
@@ -131,6 +158,10 @@ export default function EngenhariaCardapioPage() {
     setCategory(p.category);
     setPriceBalcao(p.priceBalcao.toString());
     setPriceIfood(p.priceIfood.toString());
+    setNcm(p.ncm || '');
+    setCfop(p.cfop || '');
+    setCsosn(p.csosn || '');
+    setCest(p.cest || '');
     setRecipe(p.recipe.map(r => ({ ...r })));
     setEditingId(null);
     setIsAdding(true);
@@ -323,6 +354,95 @@ export default function EngenhariaCardapioPage() {
                         placeholder="R$ 0,00" 
                         className="w-full bg-slate-950/80 border border-slate-700/60 rounded-xl p-3 text-white font-mono outline-none focus:border-blue-500 text-sm"
                       />
+                    </div>
+                  </div>
+
+                  {/* Parâmetros Tributários Fiscais (NFC-e / SEFAZ) */}
+                  <div className="mt-4 pt-4 border-t border-slate-800">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                      <div>
+                        <label className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                          <Landmark size={14} className="text-cyan-400" /> Parâmetros Fiscais (NFC-e / SEFAZ)
+                        </label>
+                        <p className="text-[11px] text-slate-500 mt-0.5">
+                          Classificação tributária exigida na emissão da nota fiscal ao consumidor.
+                        </p>
+                      </div>
+                      {/* Botões de Preenchimento Rápido */}
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-[10px] text-slate-400 font-bold">Auto-preencher:</span>
+                        <button
+                          type="button"
+                          onClick={() => applyFiscalPreset('lanche')}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg text-[10px] font-bold border border-slate-700 cursor-pointer"
+                        >
+                          🍔 Lanche
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyFiscalPreset('bebida')}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg text-[10px] font-bold border border-slate-700 cursor-pointer"
+                        >
+                          🥤 Bebida c/ ST
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyFiscalPreset('porcao')}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg text-[10px] font-bold border border-slate-700 cursor-pointer"
+                        >
+                          🍟 Porção
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => applyFiscalPreset('sobremesa')}
+                          className="px-2 py-1 bg-slate-800 hover:bg-slate-700 text-cyan-300 rounded-lg text-[10px] font-bold border border-slate-700 cursor-pointer"
+                        >
+                          🍰 Doce
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                      <div>
+                        <label className="block text-[11px] text-slate-400 font-bold mb-1">NCM (8 dígitos):</label>
+                        <input
+                          type="text"
+                          value={ncm}
+                          onChange={e => setNcm(e.target.value)}
+                          placeholder="Ex: 2106.90.90"
+                          className="w-full bg-slate-950/80 border border-slate-700/60 rounded-xl p-2.5 text-white font-mono outline-none focus:border-cyan-500 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-400 font-bold mb-1">CFOP (4 dígitos):</label>
+                        <input
+                          type="text"
+                          value={cfop}
+                          onChange={e => setCfop(e.target.value)}
+                          placeholder="Ex: 5102 ou 5405"
+                          className="w-full bg-slate-950/80 border border-slate-700/60 rounded-xl p-2.5 text-white font-mono outline-none focus:border-cyan-500 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-400 font-bold mb-1">CSOSN (Simples):</label>
+                        <input
+                          type="text"
+                          value={csosn}
+                          onChange={e => setCsosn(e.target.value)}
+                          placeholder="Ex: 102 ou 500"
+                          className="w-full bg-slate-950/80 border border-slate-700/60 rounded-xl p-2.5 text-white font-mono outline-none focus:border-cyan-500 text-xs"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-slate-400 font-bold mb-1">CEST (Bebidas ST):</label>
+                        <input
+                          type="text"
+                          value={cest}
+                          onChange={e => setCest(e.target.value)}
+                          placeholder="Ex: 03.010.00"
+                          className="w-full bg-slate-950/80 border border-slate-700/60 rounded-xl p-2.5 text-white font-mono outline-none focus:border-cyan-500 text-xs"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -8,7 +8,7 @@ import {
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
   Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid,
   Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck, RotateCcw,
-  Repeat, Star, ChevronDown, Globe, MapPin, Phone
+  Repeat, Star, ChevronDown, Globe, MapPin, Phone, Landmark
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -27,6 +27,9 @@ import {
   extractCustomerProfiles, searchRecurringCustomers, cloneOrderItemsToCart,
   getStoredImportedCustomers
 } from '@/lib/crm-clientes';
+import { 
+  getStoredFiscalConfig, simulateNfceIssue, formatCpfCnpj 
+} from '@/lib/fiscal';
 import { sendOwnerSecurityAlert } from '@/lib/notifications';
 import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
 import { printThermalElement } from '@/lib/thermal-printer';
@@ -314,6 +317,9 @@ export default function CaixaPage() {
   const [saleMethod, setSaleMethod] = useState('credito');
   const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_espera');
   const [pendingRemovalFromGrill, setPendingRemovalFromGrill] = useState<{ sale: Sale; action: 'pause' | 'cancel' } | null>(null);
+
+  // Integração Fiscal (NFC-e): CPF na Nota
+  const [fiscalCpfInput, setFiscalCpfInput] = useState('');
 
   // Estados de CRM & Clientes Fiéis (Autocomplete, Histórico & Importação Cardápio Web)
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
@@ -867,6 +873,49 @@ export default function CaixaPage() {
       if (!finalCustomerName) finalCustomerName = 'Delivery';
     }
 
+    // Emissão / Registro Fiscal (NFC-e):
+    const fiscalConfig = getStoredFiscalConfig();
+    let fiscalDataToAttach: {
+      fiscalCpfCnpj?: string;
+      fiscalStatus?: 'nao_emitida' | 'autorizada' | 'emitida' | 'rejeitada' | 'cancelada' | 'simulada' | 'contingencia';
+      fiscalNfceNumber?: number;
+      fiscalNfceSeries?: number;
+      fiscalAccessKey?: string;
+      fiscalIssuedAt?: string;
+      fiscalProtocol?: string;
+    } = {};
+
+    if (fiscalCpfInput.trim() || fiscalConfig.cnpj) {
+      try {
+        const tempSale: Sale = {
+          id: 'temp_' + Date.now(),
+          customerName: finalCustomerName,
+          orderType,
+          channel: orderType === 'mesa' ? 'balcao' : saleChannel,
+          subtotal: cartSubtotal,
+          discount: discountAmount,
+          deliveryFee: orderType === 'delivery' ? deliveryFeeAmount : 0,
+          total: cartTotal,
+          paymentMethod: saleMethod,
+          items: normalizedCart,
+          date: new Date().toISOString(),
+          status: 'completed'
+        };
+        const simulated = simulateNfceIssue(tempSale, fiscalConfig, products, fiscalCpfInput.trim() || undefined);
+        fiscalDataToAttach = {
+          fiscalCpfCnpj: fiscalCpfInput.trim() || undefined,
+          fiscalStatus: simulated.status,
+          fiscalNfceNumber: simulated.numero,
+          fiscalNfceSeries: simulated.serie,
+          fiscalAccessKey: simulated.chaveAcesso,
+          fiscalIssuedAt: simulated.dataEmissao,
+          fiscalProtocol: simulated.protocolo
+        };
+      } catch (err) {
+        console.error('Erro na emissão fiscal:', err);
+      }
+    }
+
     addSale({
       customerName: finalCustomerName,
       orderType,
@@ -885,7 +934,8 @@ export default function CaixaPage() {
       creditCustomerName: saleMethod === 'fiado_vip' ? (finalCreditCustomer || customerName) : undefined,
       creditDueDate: saleMethod === 'fiado_vip' ? (creditDueDateInput || undefined) : undefined,
       creditNotes: saleMethod === 'fiado_vip' ? (creditNotesInput || undefined) : undefined,
-      creditStatus: (saleMethod === 'consumo_funcionario' || saleMethod === 'fiado_vip') ? 'pendente' : undefined
+      creditStatus: (saleMethod === 'consumo_funcionario' || saleMethod === 'fiado_vip') ? 'pendente' : undefined,
+      ...fiscalDataToAttach
     });
 
     // Se o pedido for de mesa, lança o consumo e vincula o cliente na instância da mesa
@@ -907,6 +957,7 @@ export default function CaixaPage() {
     setSelectedTable(null);
     setCart([]);
     setCustomerName('');
+    setFiscalCpfInput('');
     setDiscountInput('');
     setDeliveryFeeInput('');
     setHasStoreCoupon(false);
@@ -2715,6 +2766,23 @@ export default function CaixaPage() {
                             </div>
                           </div>
                         )}
+
+                        {/* CPF / CNPJ na Nota Fiscal (NFC-e) */}
+                        <div className="pt-2 border-t border-slate-800/80 mt-2">
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
+                              <Landmark size={12} className="text-cyan-400" /> CPF / CNPJ na Nota (NFC-e):
+                            </label>
+                            <span className="text-[10px] text-slate-500 font-medium">Opcional</span>
+                          </div>
+                          <input
+                            type="text"
+                            value={fiscalCpfInput}
+                            onChange={e => setFiscalCpfInput(formatCpfCnpj(e.target.value))}
+                            placeholder="000.000.000-00 (Opcional)"
+                            className="w-full bg-slate-950 border border-slate-700/80 rounded-xl px-3 py-2 text-xs text-white font-mono outline-none focus:border-cyan-500 placeholder:text-slate-600"
+                          />
+                        </div>
                       </div>
 
                       <button 
