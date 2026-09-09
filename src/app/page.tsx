@@ -139,6 +139,14 @@ export default async function Home() {
               >
                 📊 DRE & Dashboard
               </Link>
+
+              <Link 
+                href="/admin/clientes" 
+                className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-amber-500/30 rounded-lg p-2 truncate transition-colors"
+                title="Inteligência de Clientes, Lucro, Margens, Horários Ociosos e Importação de Planilhas"
+              >
+                👥 Clientes & CRM
+              </Link>
               
               {/* Colaboradores: Exclusivo Administrador Geral */}
               {isAdmin && (

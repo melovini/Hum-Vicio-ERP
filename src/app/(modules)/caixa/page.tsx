@@ -8,13 +8,12 @@ import {
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
   Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid,
   Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck, RotateCcw,
-  Repeat, Star, ChevronDown, Globe, FileSpreadsheet, MapPin, Phone
+  Repeat, Star, ChevronDown, Globe, MapPin, Phone
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
 import RouteManifestModal from '@/components/RouteManifestModal';
 import SlidingSheet from '@/components/ui/SlidingSheet';
-import ImportarClientesModal from '@/components/ImportarClientesModal';
 import { playOrderReadyChime } from '@/lib/audio';
 import MapaMesasCanvas from '@/components/MapaMesasCanvas';
 import { 
@@ -320,8 +319,20 @@ export default function CaixaPage() {
   const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
   const [selectedCustomerForHistory, setSelectedCustomerForHistory] = useState<CustomerProfile | null>(null);
   const [crmFeedbackToast, setCrmFeedbackToast] = useState<string | null>(null);
-  const [showImportModal, setShowImportModal] = useState(false);
   const [importedCustomers, setImportedCustomers] = useState<ImportedCustomer[]>(() => getStoredImportedCustomers());
+
+  // Sincroniza automaticamente se o gestor atualizar a base de clientes no painel administrativo
+  useEffect(() => {
+    const handleSync = () => {
+      setImportedCustomers(getStoredImportedCustomers());
+    };
+    window.addEventListener('storage', handleSync);
+    window.addEventListener('focus', handleSync);
+    return () => {
+      window.removeEventListener('storage', handleSync);
+      window.removeEventListener('focus', handleSync);
+    };
+  }, []);
 
   const customerProfiles = useMemo(() => extractCustomerProfiles(sales), [sales]);
 
@@ -2077,21 +2088,11 @@ export default function CaixaPage() {
                             <User size={14} className="text-emerald-400" /> 
                             {orderType === 'mesa' ? 'Nome do Cliente na Mesa (Opcional):' : orderType === 'retirada' ? 'Nome para Retirada:' : 'Nome e Endereço do Cliente:'}
                           </label>
-                          <div className="flex items-center gap-2">
-                            {matchingCustomers.length > 0 && (
-                              <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1">
-                                <Star size={11} className="fill-amber-400" /> {matchingCustomers.length} encontrado(s)
-                              </span>
-                            )}
-                            <button
-                              type="button"
-                              onClick={() => setShowImportModal(true)}
-                              className="text-[10px] text-amber-400 hover:text-amber-300 font-extrabold flex items-center gap-1 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-0.5 rounded-lg border border-amber-500/30 transition-all cursor-pointer shadow-xs"
-                              title="Carregar planilha .xlsx exportada do Cardápio Web"
-                            >
-                              <FileSpreadsheet size={11} /> Importar Cardápio Web (.xlsx)
-                            </button>
-                          </div>
+                          {matchingCustomers.length > 0 && (
+                            <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1">
+                              <Star size={11} className="fill-amber-400" /> {matchingCustomers.length} encontrado(s)
+                            </span>
+                          )}
                         </div>
 
                         <div className="relative">
@@ -5029,17 +5030,6 @@ export default function CaixaPage() {
             </div>
           )}
         </SlidingSheet>
-
-        {/* MODAL DE IMPORTAÇÃO CARDÁPIO WEB (.xlsx) */}
-        <ImportarClientesModal
-          isOpen={showImportModal}
-          onClose={() => setShowImportModal(false)}
-          onImportSuccess={(newImported) => {
-            setImportedCustomers(newImported);
-            setCrmFeedbackToast(`${newImported.length} clientes do Cardápio Web sincronizados com sucesso!`);
-            setTimeout(() => setCrmFeedbackToast(null), 5000);
-          }}
-        />
 
         {/* TOAST DE FEEDBACK CRM */}
         {crmFeedbackToast && (
