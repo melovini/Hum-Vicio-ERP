@@ -7,11 +7,13 @@ import {
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
   Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid,
-  Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck, RotateCcw
+  Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck, RotateCcw,
+  Repeat, Star, ChevronDown
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
 import RouteManifestModal from '@/components/RouteManifestModal';
+import SlidingSheet from '@/components/ui/SlidingSheet';
 import { playOrderReadyChime } from '@/lib/audio';
 import MapaMesasCanvas from '@/components/MapaMesasCanvas';
 import { 
@@ -20,6 +22,10 @@ import {
   lancarConsumoNaMesa, getStoredLayoutTemplates,
   resetarMesaParaNovoCliente, sincronizarMesasComCaixa
 } from '@/lib/mesas';
+import { 
+  CustomerProfile, CustomerPreviousOrder,
+  extractCustomerProfiles, searchRecurringCustomers, cloneOrderItemsToCart 
+} from '@/lib/crm-clientes';
 import { sendOwnerSecurityAlert } from '@/lib/notifications';
 import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
 import { printThermalElement } from '@/lib/thermal-printer';
@@ -307,6 +313,18 @@ export default function CaixaPage() {
   const [saleMethod, setSaleMethod] = useState('credito');
   const [orderProductionStatus, setOrderProductionStatus] = useState<ProductionStatus>('em_espera');
   const [pendingRemovalFromGrill, setPendingRemovalFromGrill] = useState<{ sale: Sale; action: 'pause' | 'cancel' } | null>(null);
+
+  // Estados de CRM & Clientes Fiéis (Autocomplete & Histórico)
+  const [showCustomerSuggestions, setShowCustomerSuggestions] = useState(false);
+  const [selectedCustomerForHistory, setSelectedCustomerForHistory] = useState<CustomerProfile | null>(null);
+  const [crmFeedbackToast, setCrmFeedbackToast] = useState<string | null>(null);
+
+  const customerProfiles = useMemo(() => extractCustomerProfiles(sales), [sales]);
+
+  const matchingCustomers = useMemo(() => {
+    if (!customerName || customerName.trim().length < 2) return [];
+    return searchRecurringCustomers(customerName, customerProfiles);
+  }, [customerName, customerProfiles]);
 
   // Estados de Brindes / Cortesias
   const [giftModalItemIndex, setGiftModalItemIndex] = useState<number | null>(null);
@@ -616,6 +634,39 @@ export default function CaixaPage() {
       return item;
     }));
     setGiftModalItemIndex(null);
+  };
+
+  // Função para repetir pedido de cliente recorrente (Carregamento Ágil no Carrinho)
+  const handleRepeatCustomerOrder = (customer: CustomerProfile, order?: CustomerPreviousOrder) => {
+    const targetOrder = order || customer.orders[0];
+    if (!targetOrder || !targetOrder.items || targetOrder.items.length === 0) {
+      alert('Nenhum item válido encontrado no histórico desse cliente para repetir.');
+      return;
+    }
+
+    // 1. Atualiza o nome do cliente
+    setCustomerName(customer.rawFullName || customer.name);
+
+    // 2. Ajusta modalidade e canais se aplicável
+    if (targetOrder.orderType) {
+      setOrderType(targetOrder.orderType);
+    }
+    if (targetOrder.channel) {
+      setSaleChannel(targetOrder.channel);
+    }
+    if (targetOrder.deliveryFee && targetOrder.orderType === 'delivery') {
+      setDeliveryFeeInput(targetOrder.deliveryFee.toFixed(2));
+    }
+
+    // 3. Clona itens com preços atualizados do cardápio vigente (Antifraude)
+    const clonedItems = cloneOrderItemsToCart(targetOrder.items, products, saleChannel);
+    setCart(clonedItems);
+
+    setShowCustomerSuggestions(false);
+    setSelectedCustomerForHistory(null);
+
+    setCrmFeedbackToast(`Pedido anterior de ${customer.name} carregado no carrinho (${clonedItems.length} itens)!`);
+    setTimeout(() => setCrmFeedbackToast(null), 4000);
   };
 
   // Cálculos Financeiros da Comanda (Subtotal, Desconto, Taxa de Entrega e Total)
@@ -2015,19 +2066,131 @@ export default function CaixaPage() {
                         </div>
                       )}
 
-                      {/* Nome do Cliente Solicitado */}
-                      <div className="mb-4">
-                        <label className="block text-xs font-bold text-slate-300 mb-1 flex items-center gap-1.5">
-                          <User size={14} className="text-emerald-400" /> 
-                          {orderType === 'mesa' ? 'Nome do Cliente na Mesa (Opcional):' : orderType === 'retirada' ? 'Nome para Retirada:' : 'Nome e Endereço do Cliente:'}
-                        </label>
-                        <input 
-                          type="text" 
-                          value={customerName}
-                          onChange={e => setCustomerName(e.target.value)}
-                          placeholder={orderType === 'mesa' ? (selectedTable ? `Ex: Carlos Silva (será vinculado à ${selectedTable.numero})` : 'Ex: Carlos Silva') : orderType === 'retirada' ? 'Ex: Lucas' : 'Ex: Carlos - Rua das Flores, 123'}
-                          className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-white text-sm outline-none focus:border-emerald-500 font-medium placeholder:text-slate-600"
-                        />
+                      {/* Nome do Cliente Solicitado com CRM de Clientes Fiéis */}
+                      <div className="mb-4 relative">
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs font-bold text-slate-300 flex items-center gap-1.5">
+                            <User size={14} className="text-emerald-400" /> 
+                            {orderType === 'mesa' ? 'Nome do Cliente na Mesa (Opcional):' : orderType === 'retirada' ? 'Nome para Retirada:' : 'Nome e Endereço do Cliente:'}
+                          </label>
+                          {matchingCustomers.length > 0 && (
+                            <span className="text-[10px] font-bold text-amber-400 flex items-center gap-1">
+                              <Star size={11} className="fill-amber-400" /> {matchingCustomers.length} cliente(s) fiel(is)
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="relative">
+                          <input 
+                            type="text" 
+                            value={customerName}
+                            onChange={e => {
+                              setCustomerName(e.target.value);
+                              setShowCustomerSuggestions(true);
+                            }}
+                            onFocus={() => setShowCustomerSuggestions(true)}
+                            placeholder={orderType === 'mesa' ? (selectedTable ? `Ex: Carlos Silva (será vinculado à ${selectedTable.numero})` : 'Ex: Carlos Silva') : orderType === 'retirada' ? 'Ex: Lucas' : 'Ex: Carlos - Rua das Flores, 123'}
+                            className="w-full bg-slate-950 border border-slate-700/80 rounded-xl p-3 text-white text-sm outline-none focus:border-emerald-500 font-medium placeholder:text-slate-600 pr-10"
+                          />
+                          {customerName && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCustomerName('');
+                                setShowCustomerSuggestions(false);
+                              }}
+                              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 p-1 cursor-pointer"
+                              title="Limpar campo"
+                            >
+                              <X size={14} />
+                            </button>
+                          )}
+                        </div>
+
+                        {/* Dropdown Flutuante de Sugestão de Clientes Recorrentes */}
+                        {showCustomerSuggestions && matchingCustomers.length > 0 && (
+                          <div className="absolute left-0 right-0 top-full mt-1.5 z-40 bg-slate-900/98 backdrop-blur-md border border-amber-500/40 rounded-2xl shadow-2xl overflow-hidden divide-y divide-slate-800 animate-in fade-in slide-in-from-top-2 duration-150">
+                            <div className="bg-slate-950/90 px-3.5 py-2 flex items-center justify-between text-[11px] font-extrabold text-amber-400">
+                              <span className="flex items-center gap-1.5">
+                                <Sparkles size={13} className="text-amber-400" /> Clientes Recorrentes / Pedidos Anteriores
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setShowCustomerSuggestions(false)}
+                                className="text-slate-400 hover:text-white p-0.5 cursor-pointer"
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
+
+                            <div className="max-h-72 overflow-y-auto divide-y divide-slate-800/80">
+                              {matchingCustomers.map(cust => (
+                                <div 
+                                  key={cust.id} 
+                                  className="p-3 hover:bg-slate-800/70 transition-colors flex flex-col gap-2 group"
+                                >
+                                  <div className="flex items-start justify-between gap-2">
+                                    <div 
+                                      className="cursor-pointer flex-1" 
+                                      onClick={() => {
+                                        setCustomerName(cust.rawFullName || cust.name);
+                                        setShowCustomerSuggestions(false);
+                                      }}
+                                    >
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-xs font-black text-white group-hover:text-amber-300 transition-colors">
+                                          {cust.name}
+                                        </span>
+                                        {cust.totalOrders >= 3 ? (
+                                          <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-black border border-amber-500/40 flex items-center gap-1">
+                                            <Star size={9} className="fill-amber-400 text-amber-400" /> Fiel ({cust.totalOrders}x)
+                                          </span>
+                                        ) : (
+                                          <span className="px-1.5 py-0.5 rounded-md bg-slate-800 text-slate-300 text-[10px] font-bold">
+                                            {cust.totalOrders} pedido{cust.totalOrders > 1 ? 's' : ''}
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      <p className="text-[11px] text-slate-300 mt-1 line-clamp-1">
+                                        Último: <span className="font-semibold text-white">{cust.lastOrderItemsSummary}</span>
+                                      </p>
+
+                                      {cust.frequentNotes.length > 0 && (
+                                        <p className="text-[10px] text-amber-300/80 mt-0.5 italic">
+                                          Preferência: "{cust.frequentNotes[0]}"
+                                        </p>
+                                      )}
+                                    </div>
+
+                                    {/* Ações Rápidas de 1 Clique */}
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleRepeatCustomerOrder(cust)}
+                                        className="py-1.5 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md hover:shadow-emerald-600/30 transition-all cursor-pointer"
+                                        title="Carrega exatamente os mesmos itens do último pedido no carrinho com preços atualizados"
+                                      >
+                                        <Repeat size={13} /> Repetir Pedido
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSelectedCustomerForHistory(cust);
+                                          setShowCustomerSuggestions(false);
+                                        }}
+                                        className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-bold border border-slate-700 transition-all cursor-pointer"
+                                        title="Ver todos os pedidos anteriores deste cliente"
+                                      >
+                                        <History size={14} />
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
 
                       {/* Direcionamento da Produção Solicitado */}
@@ -4709,6 +4872,111 @@ export default function CaixaPage() {
                 </button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* GAVETA LATERAL (SLIDING SHEET): HISTÓRICO DE PEDIDOS DO CLIENTE FIEL */}
+        <SlidingSheet
+          isOpen={!!selectedCustomerForHistory}
+          onClose={() => setSelectedCustomerForHistory(null)}
+          title={
+            <div className="flex items-center gap-2">
+              <Star className="text-amber-400 fill-amber-400" size={18} />
+              <span>Histórico: {selectedCustomerForHistory?.name}</span>
+            </div>
+          }
+          description={`Cliente recorrente com ${selectedCustomerForHistory?.totalOrders} pedido(s) registrado(s). Escolha um pedido abaixo para carregar no carrinho.`}
+          width="lg"
+        >
+          {selectedCustomerForHistory && (
+            <div className="space-y-4">
+              {/* Resumo do Cliente */}
+              <div className="grid grid-cols-3 gap-2 bg-surface-ground p-3 rounded-xl border border-surface-border text-xs">
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Total Pedidos</span>
+                  <strong className="text-white font-mono text-base">{selectedCustomerForHistory.totalOrders}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Total Gasto</span>
+                  <strong className="text-emerald-400 font-mono text-base">R$ {selectedCustomerForHistory.totalSpent.toFixed(2)}</strong>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px] uppercase font-bold">Ticket Médio</span>
+                  <strong className="text-amber-300 font-mono text-base">R$ {selectedCustomerForHistory.averageTicket.toFixed(2)}</strong>
+                </div>
+              </div>
+
+              {/* Lista dos Pedidos Anteriores */}
+              <div className="space-y-3">
+                <span className="text-xs font-bold text-slate-300 uppercase tracking-wider block">
+                  Pedidos Anteriores ({selectedCustomerForHistory.orders.length})
+                </span>
+
+                {selectedCustomerForHistory.orders.map((ord, idx) => (
+                  <div 
+                    key={ord.saleId || idx}
+                    className="p-3.5 bg-surface-ground hover:bg-surface-elevated rounded-xl border border-surface-border transition-all space-y-2.5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="px-2 py-0.5 rounded-md bg-slate-800 text-slate-300 text-[10px] font-mono font-bold">
+                          {new Date(ord.date).toLocaleDateString('pt-BR')} às {new Date(ord.date).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300 text-[10px] font-bold uppercase">
+                          {ord.orderType === 'delivery' ? '🛵 Delivery' : ord.orderType === 'retirada' ? '🥡 Retirada' : '🍽️ Mesa'}
+                        </span>
+                      </div>
+
+                      <strong className="font-mono text-emerald-400 font-extrabold text-sm">
+                        R$ {ord.total.toFixed(2)}
+                      </strong>
+                    </div>
+
+                    {/* Itens do Pedido */}
+                    <div className="bg-surface-card p-2.5 rounded-lg border border-surface-border/80 text-xs space-y-1.5">
+                      {ord.items.map((it, itIdx) => (
+                        <div key={itIdx} className="flex flex-col text-slate-300">
+                          <div className="flex justify-between font-bold">
+                            <span>{it.quantity}x {it.productName}</span>
+                            <span className="font-mono text-slate-400">R$ {(it.unitPrice * it.quantity).toFixed(2)}</span>
+                          </div>
+                          {it.combo && (
+                            <span className="text-[11px] text-amber-400 pl-2">🍟 {it.combo}</span>
+                          )}
+                          {it.additionals && it.additionals.length > 0 && (
+                            <span className="text-[11px] text-emerald-400 pl-2">
+                              + {it.additionals.map(a => a.name).join(', ')}
+                            </span>
+                          )}
+                          {it.notes && (
+                            <span className="text-[10px] text-rose-300 pl-2 italic">
+                              Obs: {it.notes}
+                            </span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Botão de Repetição deste Pedido */}
+                    <button
+                      type="button"
+                      onClick={() => handleRepeatCustomerOrder(selectedCustomerForHistory, ord)}
+                      className="w-full py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black flex items-center justify-center gap-1.5 shadow-md transition-all cursor-pointer"
+                    >
+                      <Repeat size={14} /> Carregar este Pedido no Carrinho
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </SlidingSheet>
+
+        {/* TOAST DE FEEDBACK CRM */}
+        {crmFeedbackToast && (
+          <div className="fixed bottom-6 right-6 z-50 px-4 py-3 bg-emerald-600 text-white rounded-2xl shadow-2xl font-bold text-xs flex items-center gap-2 animate-in slide-in-from-bottom-4 duration-200">
+            <CheckCircle2 size={16} />
+            <span>{crmFeedbackToast}</span>
           </div>
         )}
       </div>
