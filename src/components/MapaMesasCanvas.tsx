@@ -15,7 +15,8 @@ import {
   getStoredLayoutTemplates, createInitialSessionFromTemplate,
   atualizarPosicaoMesaInstancia, adicionarMesaExtraInstancia,
   guardarMesaInstancia, juntarMesasInstancias, separarMesaInstancia,
-  lancarPagamentoMesa, liberarMesaInstancia, restaurarPosicoesPadraoInstancias
+  lancarPagamentoMesa, liberarMesaInstancia, restaurarPosicoesPadraoInstancias,
+  resetarMesaParaNovoCliente, sincronizarMesasComCaixa
 } from '@/lib/mesas';
 
 interface MapaMesasCanvasProps {
@@ -230,6 +231,24 @@ export default function MapaMesasCanvas({
     showFeedback('Mesa liberada e pronta para o próximo cliente!');
   };
 
+  // Zerar Mesa para Novo Cliente (1-clique)
+  const handleZerarMesa = (mesa: SalaoMesaInstancia) => {
+    if (confirm(`Deseja zerar o consumo da ${mesa.numeroIdentificador} (R$ ${(mesa.totalConsumo || 0).toFixed(2)}) e liberar a mesa para um novo atendimento?`)) {
+      const updated = resetarMesaParaNovoCliente(floorSession, mesa.id, operatorName);
+      onUpdateSession(updated);
+      showFeedback(`Mesa ${mesa.numeroIdentificador} zerada com sucesso para novo cliente!`);
+    }
+  };
+
+  // Sincronizar Todas as Mesas com o Turno de Caixa
+  const handleSincronizarComCaixa = () => {
+    if (confirm('Deseja sincronizar o salão com o turno de caixa atual? Todas as comandas e saldos anteriores serão zerados (R$ 0,00), mantendo as posições físicas das mesas no mapa.')) {
+      const updated = sincronizarMesasComCaixa(floorSession, floorSession.sessaoCaixaId, operatorName);
+      onUpdateSession(updated);
+      showFeedback('Salão sincronizado! Todas as mesas foram zeradas para o novo turno.');
+    }
+  };
+
   // Juntar Mesas (Merge)
   const handleConfirmMerge = () => {
     if (!mesaParaJuntar || !mesaMasterAlvoId) return;
@@ -365,6 +384,16 @@ export default function MapaMesasCanvas({
             title="Reposiciona mesas livres para o layout mestre"
           >
             <RotateCcw size={13} /> Restaurar
+          </button>
+
+          {/* Sincronizar Mesas com o Caixa Atual */}
+          <button
+            type="button"
+            onClick={handleSincronizarComCaixa}
+            className="py-1.5 px-3 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 hover:text-amber-200 border border-amber-500/40 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
+            title="Zera comandas de turnos anteriores e sincroniza o salão com o turno de caixa ativo"
+          >
+            <RotateCcw size={13} className="text-amber-400" /> Sincronizar c/ Caixa
           </button>
 
           {/* Trocar Template de Salão */}
@@ -562,6 +591,17 @@ export default function MapaMesasCanvas({
                       type="button"
                       onClick={e => {
                         e.stopPropagation();
+                        handleZerarMesa(mesa);
+                      }}
+                      className="px-1.5 py-1 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 rounded-md text-[10px] font-semibold cursor-pointer transition-colors"
+                      title="Zerar conta para novo atendimento"
+                    >
+                      Zerar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
                         setMesaParaJuntar(mesa);
                       }}
                       className="p-1 text-purple-400 hover:bg-purple-950/40 rounded-md cursor-pointer transition-colors"
@@ -573,16 +613,29 @@ export default function MapaMesasCanvas({
                 )}
 
                 {mesa.statusConsumo === 'PARCIALMENTE_PAGA' && !isMerged && (
-                  <button
-                    type="button"
-                    onClick={e => {
-                      e.stopPropagation();
-                      handleOpenPaymentModal(mesa);
-                    }}
-                    className="px-2 py-1 bg-status-partial/20 hover:bg-status-partial/30 text-status-partial border border-status-partial/30 rounded-md text-[10px] font-semibold cursor-pointer transition-colors"
-                  >
-                    Quitar
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        handleOpenPaymentModal(mesa);
+                      }}
+                      className="px-2 py-1 bg-status-partial/20 hover:bg-status-partial/30 text-status-partial border border-status-partial/30 rounded-md text-[10px] font-semibold cursor-pointer transition-colors"
+                    >
+                      Quitar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        handleZerarMesa(mesa);
+                      }}
+                      className="px-1.5 py-1 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 rounded-md text-[10px] font-semibold cursor-pointer transition-colors"
+                      title="Zerar conta para novo atendimento"
+                    >
+                      Zerar
+                    </button>
+                  </>
                 )}
 
                 {mesa.statusConsumo === 'PAGA_AGUARDANDO' && !isMerged && (
@@ -645,21 +698,37 @@ export default function MapaMesasCanvas({
         }
         description="Amortização parcial ou quitação total da conta da mesa."
         footer={
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => setMesaParaPagamento(null)}
-              className="flex-1 py-2.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg text-xs font-semibold cursor-pointer transition-colors"
-            >
-              Cancelar
-            </button>
-            <button
-              type="button"
-              onClick={handleConfirmPayment}
-              className="flex-1 py-2.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
-            >
-              Confirmar Pagamento
-            </button>
+          <div className="flex flex-col gap-2 w-full">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setMesaParaPagamento(null)}
+                className="flex-1 py-2.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmPayment}
+                className="flex-1 py-2.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+              >
+                Confirmar Pagamento
+              </button>
+            </div>
+            {mesaParaPagamento && mesaParaPagamento.totalConsumo > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const m = mesaParaPagamento;
+                  setMesaParaPagamento(null);
+                  handleZerarMesa(m);
+                }}
+                className="w-full py-2 bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+                title="Zera a comanda sem exigir pagamento (ideal para comandas fantasmas ou cancelamentos)"
+              >
+                <RotateCcw size={13} /> Zerar Mesa sem Cobrança (Novo Atendimento)
+              </button>
+            )}
           </div>
         }
       >

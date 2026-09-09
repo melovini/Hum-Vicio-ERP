@@ -248,6 +248,11 @@ export function getActiveFloorSession(caixaSessionId: string = 'sessao_padrao'):
     if (raw) {
       const sessao: SessaoCaixaSalao = JSON.parse(raw);
       if (sessao && Array.isArray(sessao.mesas) && sessao.mesas.length > 0) {
+        // Se foi fornecido um caixaSessionId real e for diferente do registrado na sessão salva,
+        // sincroniza/reseta as comandas para o novo turno sem perder a planta/posições das mesas
+        if (caixaSessionId && caixaSessionId !== 'sessao_padrao' && sessao.sessaoCaixaId && sessao.sessaoCaixaId !== caixaSessionId) {
+          return sincronizarMesasComCaixa(sessao, caixaSessionId);
+        }
         return sessao;
       }
     }
@@ -300,6 +305,7 @@ export function createInitialSessionFromTemplate(caixaSessionId: string, templat
     mesas: mesasInstancias
   };
 
+  saveFloorSession(novaSessao);
   return novaSessao;
 }
 
@@ -724,5 +730,102 @@ export function restaurarPosicoesPadraoInstancias(
 
   const updatedSessao = { ...sessao, mesas: updatedMesas };
   saveFloorSession(updatedSessao);
+  return updatedSessao;
+}
+
+// Resetar / Zerar Mesa para Novo Cliente (1-clique sem necessidade de registrar pagamento fictício)
+export function resetarMesaParaNovoCliente(
+  sessao: SessaoCaixaSalao,
+  mesaId: string,
+  operador: string = 'Operador'
+): SessaoCaixaSalao {
+  const mesa = sessao.mesas.find(m => m.id === mesaId);
+  if (!mesa) return sessao;
+
+  // Se a mesa tinha algum consumo, arquiva no histórico do turno
+  const historicoItem: HistoricoMesaOcupacao = {
+    id: 'hist_' + Date.now().toString(36),
+    mesaNumero: mesa.numeroIdentificador,
+    clienteNome: mesa.clienteNome || 'Atendimento Zerado',
+    abertaEm: mesa.abertaEm || new Date().toISOString(),
+    fechadaEm: new Date().toISOString(),
+    totalConsumo: mesa.totalConsumo || 0,
+    totalPago: mesa.totalPago || 0,
+    garcomOuOperador: operador,
+    itensConsumidos: [],
+    pagamentos: mesa.pagamentosParciais || []
+  };
+
+  const updatedMesas = sessao.mesas.map(m => {
+    if (m.id === mesaId) {
+      return {
+        ...m,
+        statusConsumo: 'LIVRE' as MesaStatusConsumo,
+        totalConsumo: 0,
+        totalPago: 0,
+        clienteNome: null,
+        garcom: null,
+        abertaEm: null,
+        fechadaEm: null,
+        mesaPaiId: null,
+        pagamentosParciais: [],
+        historicoTurno: (mesa.totalConsumo > 0 || (mesa.pagamentosParciais && mesa.pagamentosParciais.length > 0))
+          ? [historicoItem, ...(m.historicoTurno || [])]
+          : (m.historicoTurno || []),
+        updatedAt: new Date().toISOString()
+      };
+    }
+    return m;
+  });
+
+  const updatedSessao = { ...sessao, mesas: updatedMesas };
+  saveFloorSession(updatedSessao);
+  logSalaoAudit(
+    sessao.id,
+    'MESA_LIBERADA',
+    mesa.numeroIdentificador,
+    { motivo: 'Mesa zerada para novo atendimento', totalAnterior: mesa.totalConsumo },
+    operador
+  );
+
+  return updatedSessao;
+}
+
+// Sincronizar Mesas com o Turno de Caixa Ativo (Limpa saldos de turnos anteriores e preserva layout físico)
+export function sincronizarMesasComCaixa(
+  sessao: SessaoCaixaSalao,
+  caixaSessionId: string,
+  operador: string = 'Sistema/Caixa'
+): SessaoCaixaSalao {
+  const updatedMesas = sessao.mesas.map(m => ({
+    ...m,
+    sessaoCaixaSalaoId: sessao.id,
+    statusConsumo: 'LIVRE' as MesaStatusConsumo,
+    totalConsumo: 0,
+    totalPago: 0,
+    clienteNome: null,
+    garcom: null,
+    abertaEm: null,
+    fechadaEm: null,
+    mesaPaiId: null,
+    pagamentosParciais: [],
+    updatedAt: new Date().toISOString()
+  }));
+
+  const updatedSessao: SessaoCaixaSalao = {
+    ...sessao,
+    sessaoCaixaId: caixaSessionId,
+    mesas: updatedMesas
+  };
+
+  saveFloorSession(updatedSessao);
+  logSalaoAudit(
+    sessao.id,
+    'CANCELAMENTO_MESA',
+    'Todas as Mesas',
+    { acao: 'Sincronização de salão com turno de caixa ativo', caixaSessionId },
+    operador
+  );
+
   return updatedSessao;
 }

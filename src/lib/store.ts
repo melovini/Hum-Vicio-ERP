@@ -1555,12 +1555,13 @@ export function useInventory() {
 
   // --- CAIXA ACTIONS (EM NUVEM) ---
   const openCaixa = async (initialAmount: number, operatorName: string) => {
-    // 1. Ao iniciar um novo turno de caixa, limpamos as rotas e estados de entrega de turnos anteriores
+    // 1. Ao iniciar um novo turno de caixa, limpamos as rotas e estados de entrega e salão de turnos anteriores
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem('hum_vicio_delivery_routes');
         localStorage.removeItem('hum_vicio_delivered_sales');
         localStorage.removeItem('hum_vicio_prod_status_map');
+        localStorage.removeItem('hum_vicio_sessao_salao_ativa');
       } catch {}
     }
 
@@ -1629,12 +1630,13 @@ export function useInventory() {
     const variance = finalAmount - (expectedAmount || 0);
     const now = new Date().toISOString();
 
-    // Limpar rotas e estados de entrega locais ao encerrar o caixa
+    // Limpar rotas, estados de entrega e salão locais ao encerrar o caixa
     if (typeof window !== 'undefined') {
       try {
         localStorage.removeItem('hum_vicio_delivery_routes');
         localStorage.removeItem('hum_vicio_delivered_sales');
         localStorage.removeItem('hum_vicio_prod_status_map');
+        localStorage.removeItem('hum_vicio_sessao_salao_ativa');
       } catch {}
     }
 

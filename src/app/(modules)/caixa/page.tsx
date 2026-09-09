@@ -7,7 +7,7 @@ import {
   Wallet, TrendingDown, TrendingUp, AlertCircle, CheckCircle2, User, Printer,
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
   Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid,
-  Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck
+  Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck, RotateCcw
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -17,7 +17,8 @@ import MapaMesasCanvas from '@/components/MapaMesasCanvas';
 import { 
   SessaoCaixaSalao, SalaoMesaInstancia, LayoutTemplate,
   getActiveFloorSession, createInitialSessionFromTemplate,
-  lancarConsumoNaMesa, getStoredLayoutTemplates 
+  lancarConsumoNaMesa, getStoredLayoutTemplates,
+  resetarMesaParaNovoCliente, sincronizarMesasComCaixa
 } from '@/lib/mesas';
 import { sendOwnerSecurityAlert } from '@/lib/notifications';
 import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
@@ -201,6 +202,19 @@ export default function CaixaPage() {
   const [floorSession, setFloorSession] = useState<SessaoCaixaSalao>(() => getActiveFloorSession());
   const [selectedInitialLayoutId, setSelectedInitialLayoutId] = useState<string>('tpl_padrao_6');
   const [floorTemplates, setFloorTemplates] = useState<LayoutTemplate[]>(() => getStoredLayoutTemplates());
+
+  // Sincronização e Blindagem Automática do Salão com o Turno de Caixa Ativo
+  useEffect(() => {
+    if (!activeCashSession?.id) return;
+    if (floorSession.sessaoCaixaId !== activeCashSession.id) {
+      const synced = sincronizarMesasComCaixa(
+        floorSession, 
+        activeCashSession.id, 
+        activeCashSession.openedBy || 'Sistema'
+      );
+      setFloorSession(synced);
+    }
+  }, [activeCashSession?.id, floorSession.sessaoCaixaId]);
   
   // Modais de Abertura e Fechamento
   const [showOpenModal, setShowOpenModal] = useState(false);
@@ -1951,10 +1965,53 @@ export default function CaixaPage() {
                             <option value="">-- {selectedTable ? 'Alterar Mesa do Salão' : 'Escolha a Mesa no Salão'} --</option>
                             {floorSession.mesas.filter(m => m.statusVisual !== 'GUARDADA').map(m => (
                               <option key={m.id} value={m.id}>
-                                {m.numeroIdentificador} {m.clienteNome ? `(${m.clienteNome})` : ''} - {m.statusConsumo === 'LIVRE' ? '🟢 Livre' : '🟡 Ocupada'}
+                                {m.numeroIdentificador} {m.clienteNome ? `(${m.clienteNome})` : ''} - {m.statusConsumo === 'LIVRE' ? '🟢 Livre' : `🟡 Ocupada (R$ ${(m.totalConsumo || 0).toFixed(2)})`}
                               </option>
                             ))}
                           </select>
+
+                          {/* Alerta de Saldo Existente & Botão 1-Clique para Zerar / Liberar para Novo Atendimento */}
+                          {(() => {
+                            const mesaAtual = selectedTable ? floorSession.mesas.find(m => m.id === selectedTable.id) : null;
+                            if (!mesaAtual || (mesaAtual.totalConsumo <= 0 && mesaAtual.statusConsumo === 'LIVRE')) return null;
+
+                            return (
+                              <div className="p-2.5 bg-amber-500/15 border border-amber-500/40 rounded-xl space-y-2 mt-2">
+                                <div className="flex items-center justify-between text-xs">
+                                  <span className="font-bold text-amber-200 flex items-center gap-1.5">
+                                    <AlertCircle size={14} className="text-amber-400 shrink-0" />
+                                    Saldo anterior: <strong className="font-mono text-amber-300">R$ {mesaAtual.totalConsumo.toFixed(2)}</strong>
+                                  </span>
+                                  <span className="text-[10px] text-amber-300/80 font-mono">
+                                    {mesaAtual.totalPago > 0 ? `(R$ ${mesaAtual.totalPago.toFixed(2)} pago)` : 'Não quitado'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      if (confirm(`Deseja zerar a conta da ${mesaAtual.numeroIdentificador} (R$ ${mesaAtual.totalConsumo.toFixed(2)}) para iniciar um novo cliente?`)) {
+                                        const updated = resetarMesaParaNovoCliente(
+                                          floorSession, 
+                                          mesaAtual.id, 
+                                          activeCashSession?.openedBy || 'Operador'
+                                        );
+                                        setFloorSession(updated);
+                                        setCustomerName('');
+                                      }
+                                    }}
+                                    className="flex-1 py-1.5 px-2 bg-rose-600/30 hover:bg-rose-600/45 text-rose-200 border border-rose-500/50 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-xs"
+                                    title="Zera os valores antigos e prepara a mesa para um novo cliente"
+                                  >
+                                    <RotateCcw size={13} /> Zerar p/ Novo Cliente
+                                  </button>
+                                  <span className="text-[10px] text-slate-400 shrink-0">
+                                    ou adicione itens p/ somar
+                                  </span>
+                                </div>
+                              </div>
+                            );
+                          })()}
                         </div>
                       )}
 
@@ -2475,7 +2532,7 @@ export default function CaixaPage() {
                       setCustomerName(mesa.clienteNome || '');
                       setActiveTab('pdv');
                     }}
-                    operatorName="Operador"
+                    operatorName={activeCashSession?.openedBy || 'Operador'}
                   />
                 </div>
               )}
