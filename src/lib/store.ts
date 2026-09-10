@@ -224,6 +224,7 @@ export type AuditAction =
   | 'LIQUIDACAO_FIADO'
   | 'LIQUIDACAO_RETIRADA'
   | 'CUSTOS_FIXOS_CONFIG'
+  | 'VINCULO_LOTE_RECEITAS'
   | 'BAIXA_ESTOQUE_VENDA';
 
 export interface AuditLog {
@@ -1326,11 +1327,12 @@ export function useInventory() {
         saveMinStockItem(newId, item.minStock);
       }
       const finalStation = item.station || getDefaultStationForIngredient(item.name);
-      saveStationItem(newId, finalStation);
-
-      setItems([...items, { ...item, id: newId, station: finalStation }]);
+      const createdItem = { ...item, id: newId, station: finalStation };
+      setItems([...items, createdItem]);
+      return createdItem;
     } catch (err: any) {
       alert(`Erro inesperado: ${err.message}`);
+      return undefined;
     }
   };
   
@@ -1665,6 +1667,83 @@ export function useInventory() {
       `Produto "${prod?.name || id}" desativado do cardápio.`,
       'Admin'
     );
+  };
+
+  // Vínculo em lote de um insumo/adicional à ficha técnica de múltiplos produtos (hambúrgueres)
+  const batchAddIngredientToProducts = async (
+    ingredientId: string, 
+    targets: { productId: string; quantity: number }[]
+  ) => {
+    if (!ingredientId || !targets || targets.length === 0) return { success: false, error: 'Dados insuficientes' };
+
+    try {
+      const targetProductIds = targets.map(t => t.productId);
+      
+      // 1. Remover registros anteriores desse ingrediente nos produtos selecionados no Supabase
+      try {
+        await supabase
+          .from('recipes')
+          .delete()
+          .in('product_id', targetProductIds)
+          .eq('ingredient_id', ingredientId);
+      } catch (delErr) {
+        console.warn('Aviso ao deletar linhas antigas de receitas:', delErr);
+      }
+
+      // 2. Inserir novas linhas com as quantidades atualizadas (apenas > 0)
+      const rowsToInsert = targets
+        .filter(t => t.quantity > 0)
+        .map(t => ({
+          product_id: t.productId,
+          ingredient_id: ingredientId,
+          quantity: t.quantity
+        }));
+
+      if (rowsToInsert.length > 0) {
+        const { error: insErr } = await supabase.from('recipes').insert(rowsToInsert);
+        if (insErr) {
+          console.error('Erro ao inserir novas receitas em lote no Supabase:', insErr);
+        }
+      }
+
+      // 3. Atualizar o estado local dos produtos
+      setProducts(prevProducts => prevProducts.map(p => {
+        const target = targets.find(t => t.productId === p.id);
+        if (!target) return p;
+
+        const currentRecipe = Array.isArray(p.recipe) ? p.recipe : [];
+        const existingIndex = currentRecipe.findIndex(r => r.ingredientId === ingredientId);
+        let updatedRecipe: RecipeIngredient[];
+
+        if (existingIndex >= 0) {
+          if (target.quantity > 0) {
+            updatedRecipe = currentRecipe.map((r, i) => i === existingIndex ? { ...r, quantity: target.quantity } : r);
+          } else {
+            updatedRecipe = currentRecipe.filter((_, i) => i !== existingIndex);
+          }
+        } else if (target.quantity > 0) {
+          updatedRecipe = [...currentRecipe, { ingredientId, quantity: target.quantity }];
+        } else {
+          updatedRecipe = currentRecipe;
+        }
+
+        return { ...p, recipe: updatedRecipe };
+      }));
+
+      // 4. Log de auditoria
+      const ing = items.find(i => i.id === ingredientId);
+      const ingName = ing ? ing.name : 'Insumo';
+      addAuditLog(
+        'VINCULO_LOTE_RECEITAS',
+        `Insumo "${ingName}" vinculado/atualizado na ficha técnica de ${targets.filter(t => t.quantity > 0).length} produto(s).`,
+        'Admin'
+      );
+
+      return { success: true };
+    } catch (err: any) {
+      console.error('Erro ao vincular ingredientes em lote:', err);
+      return { success: false, error: err.message };
+    }
   };
 
   // Cálculo de custo real do insumo (com suporte a sub-receitas de maioneses e molhos)
@@ -3004,6 +3083,7 @@ export function useInventory() {
   return { 
     items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
     products, addProduct, updateProduct, removeProduct, getProductCmv, getRealSalesCmv,
+    batchAddIngredientToProducts,
     isLoaded, isOpen, activeCashSession, allCashSessions, openCaixa, closeCaixa, toggleCaixa, deleteCashSession, deleteTestSales,
     sales, addSale, cancelSale, reopenOrderForEdit, updateReopenedOrder, acknowledgeOrderModification,
     movements, addMovement,

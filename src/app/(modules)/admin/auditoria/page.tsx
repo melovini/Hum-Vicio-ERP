@@ -6,7 +6,7 @@ import {
   Lock, Unlock, AlertTriangle, Search, Filter, 
   Download, Printer, RefreshCw, FileText, User, 
   Tag, Clock, History, Flame, Package, Gift, Heart, Calendar, HelpCircle,
-  BellRing, Check, Send, ExternalLink
+  BellRing, Check, Send, ExternalLink, Layers
 } from 'lucide-react';
 import Link from 'next/link';
 import { getOwnerWebhookUrl, saveOwnerWebhookUrl, testOwnerWebhook } from '@/lib/notifications';
@@ -245,6 +245,8 @@ export default function AuditoriaPage() {
         return { label: 'Desconto no Pedido', bg: 'bg-amber-500/20 text-amber-300 border-amber-500/30', icon: Tag };
       case 'CUPOM_HITS_IFOOD':
         return { label: 'Cupom Loja (Hits)', bg: 'bg-red-500/20 text-red-300 border-red-500/30', icon: Flame };
+      case 'VINCULO_LOTE_RECEITAS':
+        return { label: 'Vínculo em Lote Ficha Técnica', bg: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30', icon: Layers };
       default:
         return { label: action, bg: 'bg-slate-700 text-slate-300 border-slate-600', icon: FileText };
     }
