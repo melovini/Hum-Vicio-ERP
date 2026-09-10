@@ -77,6 +77,12 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
       if (sale.orderType) text += `MODALIDADE: [${sale.orderType.toUpperCase()}]\n`;
       if (sale.customerName) text += `CLIENTE: ${sale.customerName.toUpperCase()}\n`;
       text += `HORA: ${formattedDate} - ${formattedTime}\n`;
+      if (sale.paymentStatus === 'pendente_retirada') {
+        text += '****************************************\n';
+        text += '*** ATENCAO: PAGAR NA RETIRADA       ***\n';
+        text += `*** COBRAR DO CLIENTE: R$ ${sale.total.toFixed(2)} ***\n`;
+        text += '****************************************\n';
+      }
       text += subDivider;
       text += 'ITENS PARA PREPARO:\n';
       sale.items.forEach(item => {
@@ -108,7 +114,12 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
       if (sale.discount) text += `DESCONTO:                   -R$ ${sale.discount.toFixed(2)}\n`;
       if (sale.deliveryFee) text += `TAXA DE ENTREGA:            +R$ ${sale.deliveryFee.toFixed(2)}\n`;
       text += `TOTAL A PAGAR:               R$ ${sale.total.toFixed(2)}\n`;
-      text += `FORMA DE PAGAMENTO: ${sale.paymentMethod.toUpperCase()}\n`;
+      if (sale.paymentStatus === 'pendente_retirada') {
+        text += 'STATUS:                     PAGAR NA RETIRADA\n';
+        text += `*** ATENCAO: COBRAR R$ ${sale.total.toFixed(2)} NA ENTREGA ***\n`;
+      } else {
+        text += `FORMA DE PAGAMENTO: ${sale.paymentMethod.toUpperCase()}\n`;
+      }
       text += divider;
       text += '          OBRIGADO PELA PREFERENCIA!    \n';
       text += '             VOLTE SEMPRE! 🍔           \n';
@@ -277,6 +288,12 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                       {sale.orderType ? `${sale.orderType.toUpperCase()}: ` : 'CLIENTE: '}{sale.customerName}
                     </p>
                   )}
+                  {sale.paymentStatus === 'pendente_retirada' && (
+                    <div className="bg-black text-white p-1.5 mt-1.5 text-center border border-black">
+                      <p className="font-black text-xs uppercase tracking-wider">⚠️ ATENÇÃO: PAGAR NA RETIRADA</p>
+                      <p className="text-[11px] font-extrabold uppercase">COBRAR NO BALCÃO: R$ {sale.total.toFixed(2)}</p>
+                    </div>
+                  )}
                   <p className="text-[10px] mt-1">{formattedDate} - {formattedTime}</p>
                 </div>
 
@@ -369,16 +386,23 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                     <span>TOTAL:</span>
                     <span>R$ {sale.total.toFixed(2)}</span>
                   </div>
-                  <div className="flex justify-between text-[11px] pt-1 text-black font-extrabold">
-                    <span>FORMA DE PAGAMENTO:</span>
-                    <span className="uppercase font-bold">
-                      {sale.paymentMethod === 'ifood_online' 
-                        ? 'iFood Online (App)' 
-                        : sale.paymentMethod === 'ifood_entrega' 
-                          ? 'iFood na Entrega' 
-                          : sale.paymentMethod}
-                    </span>
-                  </div>
+                  {sale.paymentStatus === 'pendente_retirada' ? (
+                    <div className="bg-black text-white p-1.5 my-1 text-center border border-black">
+                      <p className="font-black text-xs uppercase tracking-wider">*** PAGAMENTO NA RETIRADA ***</p>
+                      <p className="text-[11px] font-extrabold uppercase">A COBRAR: R$ {sale.total.toFixed(2)}</p>
+                    </div>
+                  ) : (
+                    <div className="flex justify-between text-[11px] pt-1 text-black font-extrabold">
+                      <span>FORMA DE PAGAMENTO:</span>
+                      <span className="uppercase font-bold">
+                        {sale.paymentMethod === 'ifood_online' 
+                          ? 'iFood Online (App)' 
+                          : sale.paymentMethod === 'ifood_entrega' 
+                            ? 'iFood na Entrega' 
+                            : sale.paymentMethod}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="text-center text-[10px] pt-2 border-t border-dashed border-black mt-2 space-y-0.5">

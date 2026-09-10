@@ -53,7 +53,8 @@ export default function CaixaPage() {
     reopenOrderForEdit, updateReopenedOrder,
     movements, addMovement,
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus,
-    settleCreditSale 
+    settleCreditSale,
+    settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow
   } = useInventory();
 
   const [activeTab, setActiveTab] = useState<'pdv' | 'mesas' | 'producao' | 'rotas' | 'historico' | 'sangria' | 'contas_receber'>('pdv');
@@ -265,32 +266,64 @@ export default function CaixaPage() {
     date: string;
   } | null>(null);
 
+  // Armazenamento persistente de IDs já alertados para NUNCA disparar bipe falso de pedidos antigos ou já retirados
+  const getAlertedReadySales = (): Set<string> => {
+    if (typeof window === 'undefined') return new Set();
+    try {
+      const raw = localStorage.getItem('hum_vicio_alerted_ready_sales');
+      return raw ? new Set(JSON.parse(raw)) : new Set();
+    } catch {
+      return new Set();
+    }
+  };
+
+  const markReadySaleAsAlerted = (id: string) => {
+    if (typeof window === 'undefined') return;
+    try {
+      const set = getAlertedReadySales();
+      set.add(id);
+      const arr = Array.from(set).slice(-250);
+      localStorage.setItem('hum_vicio_alerted_ready_sales', JSON.stringify(arr));
+    } catch {}
+  };
+
   // Alerta sonoro e visual de Pedido Pronto para o Balcão
   const [caixaReadyAlert, setCaixaReadyAlert] = useState<Sale | null>(null);
   const prevCompletedIdsRef = useRef<Set<string>>(new Set());
   const isInitialCaixaMount = useRef(true);
 
   useEffect(() => {
-    const currentCompletedIds = new Set(
-      sales
-        .filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido')
-        .map(s => s.id)
-    );
+    const alertedSet = getAlertedReadySales();
+    const now = Date.now();
+
+    const currentCompleted = sales.filter(s => {
+      if (s.status === 'cancelled') return false;
+      if (s.productionStatus !== 'concluido') return false;
+      return true;
+    });
+
+    const currentCompletedIds = new Set(currentCompleted.map(s => s.id));
 
     if (isInitialCaixaMount.current) {
       isInitialCaixaMount.current = false;
       prevCompletedIdsRef.current = currentCompletedIds;
+      // Marca todos os concluídos já existentes na carga inicial como alertados para nunca tocar bipe fantasma
+      currentCompleted.forEach(s => markReadySaleAsAlerted(s.id));
       return;
     }
 
     let newlyDoneSale: Sale | undefined;
-    currentCompletedIds.forEach(id => {
-      if (!prevCompletedIdsRef.current.has(id)) {
-        newlyDoneSale = sales.find(s => s.id === id);
+    for (const s of currentCompleted) {
+      const createdTime = new Date(s.date).getTime();
+      const isFresh = (now - createdTime) < (45 * 60 * 1000); // Apenas pedidos recentes (menos de 45 min)
+      if (!prevCompletedIdsRef.current.has(s.id) && !alertedSet.has(s.id) && isFresh) {
+        newlyDoneSale = s;
+        break;
       }
-    });
+    }
 
     if (newlyDoneSale) {
+      markReadySaleAsAlerted(newlyDoneSale.id);
       playOrderReadyChime();
       setCaixaReadyAlert(newlyDoneSale);
       setTimeout(() => setCaixaReadyAlert(null), 14000);
@@ -310,6 +343,27 @@ export default function CaixaPage() {
   // PDV State
   const [customerName, setCustomerName] = useState('');
   const [orderType, setOrderType] = useState<'mesa' | 'retirada' | 'delivery'>('mesa');
+  const [pickupPaymentTiming, setPickupPaymentTiming] = useState<'imediato' | 'retirada'>('imediato');
+  const [saleToSettlePickup, setSaleToSettlePickup] = useState<Sale | null>(null);
+  const [pickupSettleMethod, setPickupSettleMethod] = useState<string>('pix');
+  const [pickupSettleOperator, setPickupSettleOperator] = useState<string>('');
+  const [isSettlingPickup, setIsSettlingPickup] = useState(false);
+
+  // Ordenação dos Produtos: Mais Vendidos vs Ordem Alfabética (A-Z)
+  const [productSortOrder, setProductSortOrder] = useState<'vendas' | 'alfabetica'>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('hum_vicio_product_sort_order') as 'vendas' | 'alfabetica') || 'vendas';
+    }
+    return 'vendas';
+  });
+
+  const handleSetProductSortOrder = (order: 'vendas' | 'alfabetica') => {
+    setProductSortOrder(order);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('hum_vicio_product_sort_order', order);
+    }
+  };
+
   const [selectedTable, setSelectedTable] = useState<{ id: string; numero: string; clienteNome?: string } | null>(null);
   const [posCategory, setPosCategory] = useState<'mais_pedidos' | 'hamburgueres' | 'duplos' | 'bebidas' | 'porcoes'>('mais_pedidos');
   const [cart, setCart] = useState<SaleItem[]>([]);
@@ -561,23 +615,42 @@ export default function CaixaPage() {
     return sorted.slice(0, 9);
   }, [activeProducts, sales]);
 
-  // Produtos exibidos por categoria
+  // Produtos exibidos por categoria e ordenação escolhida pelo operador (Mais Vendidos ou Alfabética)
   const displayedProducts = useMemo(() => {
+    let list: Product[] = [];
     switch (posCategory) {
       case 'mais_pedidos':
-        return top9Products;
+        list = top9Products;
+        break;
       case 'hamburgueres':
-        return activeProducts.filter(p => p.category === 'lanche' && !p.name.toLowerCase().includes('duplo'));
+        list = activeProducts.filter(p => p.category === 'lanche' && !p.name.toLowerCase().includes('duplo'));
+        break;
       case 'duplos':
-        return activeProducts.filter(p => p.category === 'lanche' && p.name.toLowerCase().includes('duplo'));
+        list = activeProducts.filter(p => p.category === 'lanche' && p.name.toLowerCase().includes('duplo'));
+        break;
       case 'bebidas':
-        return activeProducts.filter(p => p.category === 'bebida');
+        list = activeProducts.filter(p => p.category === 'bebida');
+        break;
       case 'porcoes':
-        return activeProducts.filter(p => p.category === 'porcao' && !p.name.startsWith('Adicional:') && !p.name.startsWith('Pote Maionese'));
+        list = activeProducts.filter(p => p.category === 'porcao' && !p.name.startsWith('Adicional:') && !p.name.startsWith('Pote Maionese'));
+        break;
       default:
-        return activeProducts;
+        list = activeProducts;
+        break;
     }
-  }, [posCategory, activeProducts, top9Products]);
+
+    if (productSortOrder === 'alfabetica') {
+      return [...list].sort((a, b) => a.name.localeCompare(b.name, 'pt-BR'));
+    } else {
+      const counts: Record<string, number> = {};
+      sales.filter(s => s.status === 'completed').forEach(s => {
+        s.items?.forEach(i => {
+          counts[i.productId] = (counts[i.productId] || 0) + i.quantity;
+        });
+      });
+      return [...list].sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0));
+    }
+  }, [posCategory, activeProducts, top9Products, productSortOrder, sales]);
 
   // Listagem e Métricas de Contas a Receber (Fiado VIP & Consumo de Equipe)
   const creditMetrics = useMemo(() => {
@@ -1019,6 +1092,11 @@ export default function CaixaPage() {
       }
     }
 
+    const isPickupPending = orderType === 'retirada' && pickupPaymentTiming === 'retirada' && saleChannel !== 'ifood';
+    const finalPaymentStatus: 'pago' | 'pendente_retirada' = (isPickupPending || saleMethod === 'consumo_funcionario' || saleMethod === 'fiado_vip') 
+      ? 'pendente_retirada' 
+      : 'pago';
+
     addSale({
       customerName: finalCustomerName,
       orderType,
@@ -1028,7 +1106,10 @@ export default function CaixaPage() {
       deliveryFee: orderType === 'delivery' ? deliveryFeeAmount : 0,
       storeCouponSubsidy: storeCouponSubsidyAmount,
       total: cartTotal,
-      paymentMethod: saleMethod,
+      paymentMethod: isPickupPending ? 'retirada' : saleMethod,
+      paymentStatus: finalPaymentStatus,
+      paidAt: finalPaymentStatus === 'pago' ? new Date().toISOString() : undefined,
+      paidMethod: finalPaymentStatus === 'pago' ? saleMethod : undefined,
       items: normalizedCart,
       productionStatus: orderProductionStatus,
       targetPrepMinutes,
@@ -1065,6 +1146,7 @@ export default function CaixaPage() {
     setDeliveryFeeInput('');
     setHasStoreCoupon(false);
     setOrderProductionStatus('em_espera');
+    setPickupPaymentTiming('imediato');
     setSelectedCollaboratorId('');
     setCreditCustomerInput('');
     setCreditDueDateInput('');
@@ -1249,6 +1331,29 @@ export default function CaixaPage() {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Indicador de Resiliência Offline & Fila Supabase */}
+            {offlineQueueCount > 0 ? (
+              <button
+                type="button"
+                onClick={async () => {
+                  const res = await syncOfflineQueueNow();
+                  alert(`Sincronização concluída: ${res.syncedCount} pedido(s) sincronizados com sucesso.`);
+                }}
+                className="px-3.5 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/50 rounded-2xl font-bold flex items-center gap-2 text-xs animate-pulse cursor-pointer shadow-lg"
+                title="Clique para enviar os pedidos pendentes para o banco de dados agora"
+              >
+                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
+                <span>🟡 Modo Offline ({offlineQueueCount} na fila) - Sincronizar</span>
+              </button>
+            ) : (
+              <div 
+                className="px-3.5 py-2.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-2xl font-bold flex items-center gap-2 text-xs"
+                title="Sistema conectado ao Supabase com proteção offline ativa"
+              >
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
+                <span>🟢 Online</span>
+              </div>
+            )}
             <button 
               type="button"
               onClick={() => {
@@ -1983,6 +2088,34 @@ export default function CaixaPage() {
                       >
                         🍟 Porções
                       </button>
+
+                      {/* Seletor de Ordenação: Mais Vendidos vs Ordem Alfabética */}
+                      <div className="flex items-center gap-1.5 ml-auto bg-slate-950/80 p-1 rounded-xl border border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => handleSetProductSortOrder('vendas')}
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                            productSortOrder === 'vendas'
+                              ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 shadow-sm'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                          title="Ordenar produtos por mais vendidos"
+                        >
+                          🔥 Mais Vendidos
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSetProductSortOrder('alfabetica')}
+                          className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer ${
+                            productSortOrder === 'alfabetica'
+                              ? 'bg-blue-500/20 text-blue-300 border border-blue-500/40 shadow-sm'
+                              : 'text-slate-400 hover:text-slate-200'
+                          }`}
+                          title="Ordenar produtos em ordem alfabética de A a Z"
+                        >
+                          🔤 Ordem Alfabética (A-Z)
+                        </button>
+                      </div>
                     </div>
 
                     {/* Grid de Cards dos Produtos */}
@@ -2222,6 +2355,54 @@ export default function CaixaPage() {
                               </div>
                             );
                           })()}
+                        </div>
+                      )}
+
+                      {/* Opção de Pagamento para Retirada (Pagar Agora vs Pagar ao Retirar) */}
+                      {orderType === 'retirada' && saleChannel !== 'ifood' && (
+                        <div className="mb-3 p-3 rounded-2xl bg-blue-950/40 border border-blue-500/30 space-y-2">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-bold text-blue-200 flex items-center gap-1.5">
+                              🥡 Momento do Pagamento:
+                            </span>
+                            <span className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                              pickupPaymentTiming === 'retirada'
+                                ? 'bg-amber-500 text-slate-950 animate-pulse'
+                                : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
+                            }`}>
+                              {pickupPaymentTiming === 'retirada' ? '⚠️ Pagar na Retirada' : '✅ Pago no Balcão'}
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setPickupPaymentTiming('imediato')}
+                              className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 border ${
+                                pickupPaymentTiming === 'imediato'
+                                  ? 'bg-emerald-600 text-white border-emerald-500 shadow-md font-extrabold'
+                                  : 'bg-slate-900 text-slate-400 border-slate-800 hover:text-white'
+                              }`}
+                            >
+                              💳 Pago no Balcão
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setPickupPaymentTiming('retirada')}
+                              className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 border ${
+                                pickupPaymentTiming === 'retirada'
+                                  ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md font-black'
+                                  : 'bg-slate-900 text-amber-400/80 border-slate-800 hover:text-amber-300'
+                              }`}
+                            >
+                              ⏳ Pagar na Retirada
+                            </button>
+                          </div>
+                          {pickupPaymentTiming === 'retirada' && (
+                            <p className="text-[10.5px] text-amber-300/90 font-medium leading-relaxed">
+                              O pedido será enviado para a chapa normalmente, mas a comanda e o sistema indicarão com destaque que o valor deve ser cobrado na entrega do pedido ao cliente.
+                            </p>
+                          )}
                         </div>
                       )}
 
@@ -2881,11 +3062,19 @@ export default function CaixaPage() {
                         className={`w-full py-3.5 ${
                           editingReopenedSale 
                             ? 'bg-amber-600 hover:bg-amber-500 shadow-amber-600/30 ring-2 ring-amber-400' 
-                            : 'bg-brand-primary hover:bg-brand-primaryHover shadow-xs'
-                        } disabled:bg-surface-elevated disabled:text-slate-600 text-white rounded-xl font-bold transition-all flex items-center justify-center gap-2 cursor-pointer text-sm`}
+                            : orderType === 'retirada' && pickupPaymentTiming === 'retirada'
+                              ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 font-black shadow-lg shadow-amber-500/20'
+                              : 'bg-brand-primary hover:bg-brand-primaryHover shadow-xs'
+                        } disabled:bg-surface-elevated disabled:text-slate-600 ${orderType === 'retirada' && pickupPaymentTiming === 'retirada' ? 'text-slate-950' : 'text-white'} rounded-xl font-bold transition-all flex items-center justify-center gap-2 cursor-pointer text-sm`}
                       >
                         {editingReopenedSale ? <GitCompare size={16} /> : <Send size={16} />}
-                        <span>{editingReopenedSale ? 'Salvar Alterações & Emitir Delta (Diff)' : 'Finalizar Pedido'}</span>
+                        <span>
+                          {editingReopenedSale 
+                            ? 'Salvar Alterações & Emitir Delta (Diff)' 
+                            : orderType === 'retirada' && pickupPaymentTiming === 'retirada'
+                              ? `Enviar Pedido (Pagar R$ ${cartTotal.toFixed(2)} na Retirada ⏳)`
+                              : 'Finalizar Pedido'}
+                        </span>
                       </button>
                     </div>
                   </div>
@@ -3074,6 +3263,15 @@ export default function CaixaPage() {
                                       }`}>
                                         {isCooking ? '🔥 NA CHAPA' : isWaiting ? (status === 'agendado' ? '📅 AGENDADO' : '⏳ EM ESPERA') : '✅ CONCLUÍDO'}
                                       </span>
+                                      {sale.orderType === 'retirada' && (
+                                        <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                                          sale.paymentStatus === 'pendente_retirada'
+                                            ? 'bg-amber-500 text-slate-950 animate-pulse border border-amber-400'
+                                            : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                        }`}>
+                                          {sale.paymentStatus === 'pendente_retirada' ? '⚠️ NÃO PAGO' : '✅ PAGO'}
+                                        </span>
+                                      )}
                                     </div>
                                     <p className="text-sm font-black text-amber-300 mt-1 uppercase">
                                       {sale.customerName || 'Cliente'}
@@ -3163,8 +3361,23 @@ export default function CaixaPage() {
                                 )}
 
                                 {isDone && (
-                                  <div className="w-full text-center py-2 text-xs font-bold text-emerald-400 bg-emerald-950/40 rounded-xl border border-emerald-500/20">
-                                    Pronto para Servir / Rota do Entregador
+                                  <div className="w-full flex flex-col gap-2">
+                                    <div className="w-full text-center py-2 text-xs font-bold text-emerald-400 bg-emerald-950/40 rounded-xl border border-emerald-500/20">
+                                      {sale.orderType === 'retirada' ? '🥡 Pronto no Balcão para Retirada' : 'Pronto para Servir / Rota do Entregador'}
+                                    </div>
+                                    {sale.orderType === 'retirada' && sale.paymentStatus === 'pendente_retirada' && (
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setSaleToSettlePickup(sale);
+                                          setPickupSettleMethod('pix');
+                                          setPickupSettleOperator(activeCashSession?.openedBy || '');
+                                        }}
+                                        className="w-full py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-xs uppercase flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-all animate-pulse"
+                                      >
+                                        <DollarSign size={15} /> Receber Pagamento (R$ {sale.total.toFixed(2)})
+                                      </button>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -3943,6 +4156,20 @@ export default function CaixaPage() {
                                   {sale.orderType === 'delivery' ? '🛵 Delivery' : sale.orderType === 'retirada' ? '🥡 Retirada' : '🍽️ Mesa'}
                                 </span>
                               )}
+                              {sale.orderType === 'retirada' && (
+                                <span className={`px-2.5 py-1 rounded-lg text-xs font-black uppercase flex items-center gap-1 ${
+                                  sale.paymentStatus === 'pendente_retirada'
+                                    ? 'bg-amber-500 text-slate-950 animate-pulse border border-amber-400 shadow-md'
+                                    : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                }`}>
+                                  {sale.paymentStatus === 'pendente_retirada' ? '⚠️ NÃO PAGO (Cobrar na Retirada)' : `✅ PAGO (${sale.paidMethod || sale.paymentMethod})`}
+                                </span>
+                              )}
+                              {!sale.isOfflineSynced && (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40" title="Venda gravada localmente. Sincronização pendente.">
+                                  ⏳ Offline
+                                </span>
+                              )}
                               {sale.customerName && (
                                 <span className="px-2.5 py-1 rounded-lg text-xs font-extrabold bg-slate-800 text-slate-200 uppercase border border-slate-700">
                                   {sale.customerName}
@@ -3954,6 +4181,20 @@ export default function CaixaPage() {
                             </div>
                             
                             <div className="flex items-center gap-4">
+                              {sale.orderType === 'retirada' && sale.paymentStatus === 'pendente_retirada' && sale.status !== 'cancelled' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSaleToSettlePickup(sale);
+                                    setPickupSettleMethod('pix');
+                                    setPickupSettleOperator(activeCashSession?.openedBy || '');
+                                  }}
+                                  className="px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-xs uppercase flex items-center gap-1.5 shadow-md cursor-pointer transition-all animate-pulse"
+                                  title="Confirmar pagamento do cliente que veio retirar"
+                                >
+                                  <DollarSign size={14} /> Receber Pagamento
+                                </button>
+                              )}
                               <span className={`font-mono text-xl font-bold ${sale.status === 'cancelled' ? 'text-slate-600 line-through' : 'text-emerald-400'}`}>
                                 R$ {sale.total.toFixed(2)}
                               </span>
@@ -5089,6 +5330,125 @@ export default function CaixaPage() {
                   className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 cursor-pointer transition-all disabled:opacity-50"
                 >
                   {settling ? 'Liquidando...' : 'Confirmar Quitação'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL DE LIQUIDAÇÃO DE PAGAMENTO NA RETIRADA */}
+        {saleToSettlePickup && (
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-amber-500/40 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl animate-fade-in space-y-5">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-amber-500/10 text-amber-400 rounded-2xl border border-amber-500/20">
+                    <Banknote size={24} />
+                  </div>
+                  <div>
+                    <h3 className="text-xl font-black text-white">Receber Pedido na Retirada</h3>
+                    <p className="text-xs text-slate-400">Comanda #{saleToSettlePickup.id.slice(0, 5).toUpperCase()}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSaleToSettlePickup(null)}
+                  className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Informações da Cobrança */}
+              <div className="bg-slate-950/70 p-4 rounded-2xl border border-slate-800 space-y-2 text-xs">
+                <div className="flex justify-between items-center text-slate-400">
+                  <span>Cliente:</span>
+                  <strong className="text-white text-sm font-bold">
+                    {saleToSettlePickup.customerName || 'Balcão'}
+                  </strong>
+                </div>
+                <div className="flex justify-between items-center text-slate-400">
+                  <span>Itens:</span>
+                  <span className="text-slate-300 font-medium">
+                    {saleToSettlePickup.items?.map(i => `${i.quantity}x ${i.productName}`).join(', ')}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center text-slate-400 pt-2 border-t border-slate-800/80">
+                  <span className="font-bold text-slate-300">Total a Cobrar:</span>
+                  <span className="text-2xl font-mono font-black text-amber-400">
+                    R$ {saleToSettlePickup.total.toFixed(2)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Método de Pagamento */}
+              <div>
+                <label className="block text-slate-300 font-bold text-xs mb-2 uppercase tracking-wider">
+                  Como o cliente pagou agora?
+                </label>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { id: 'pix', label: 'PIX Direto' },
+                    { id: 'dinheiro', label: 'Dinheiro (Gaveta)' },
+                    { id: 'credito', label: 'Cartão Crédito' },
+                    { id: 'debito', label: 'Cartão Débito' }
+                  ].map(m => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => setPickupSettleMethod(m.id)}
+                      className={`p-3 rounded-xl text-left border cursor-pointer transition-all ${
+                        pickupSettleMethod === m.id
+                          ? 'bg-emerald-600 border-emerald-500 text-white font-extrabold shadow-md'
+                          : 'bg-slate-950 text-slate-300 border-slate-800 hover:bg-slate-800'
+                      }`}
+                    >
+                      <span className="text-xs font-bold">{m.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Operador */}
+              <div>
+                <label className="block text-slate-300 font-bold text-xs mb-1">Operador Responsável</label>
+                <input
+                  type="text"
+                  value={pickupSettleOperator}
+                  onChange={e => setPickupSettleOperator(e.target.value)}
+                  placeholder="Seu nome"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white text-xs outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              {/* Botões */}
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setSaleToSettlePickup(null)}
+                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer transition-all"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  disabled={isSettlingPickup}
+                  onClick={async () => {
+                    setIsSettlingPickup(true);
+                    try {
+                      await settlePickupPayment(
+                        saleToSettlePickup.id,
+                        pickupSettleMethod,
+                        pickupSettleOperator.trim() || activeCashSession?.openedBy || 'Operador'
+                      );
+                      setSaleToSettlePickup(null);
+                    } finally {
+                      setIsSettlingPickup(false);
+                    }
+                  }}
+                  className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 cursor-pointer transition-all disabled:opacity-50"
+                >
+                  {isSettlingPickup ? 'Gravando...' : 'Confirmar Recebimento'}
                 </button>
               </div>
             </div>

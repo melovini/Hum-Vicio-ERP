@@ -147,6 +147,11 @@ export interface Sale {
   fiscalQrCode?: string;
   fiscalIssuedAt?: string;
   fiscalProtocol?: string;
+  // Controle de Pagamento na Retirada (Pago no Caixa vs Pagar na Retirada):
+  paymentStatus?: 'pago' | 'pendente_retirada';
+  paidAt?: string;
+  paidMethod?: string;
+  isOfflineSynced?: boolean;
 }
 
 // === CUSTOS FIXOS MENSAIS ESTRUTURADOS (DRE & PONTO DE EQUILÍBRIO) ===
@@ -217,6 +222,7 @@ export type AuditAction =
   | 'ALTERACAO_PEDIDO'
   | 'CHECKLIST_TAREFA'
   | 'LIQUIDACAO_FIADO'
+  | 'LIQUIDACAO_RETIRADA'
   | 'CUSTOS_FIXOS_CONFIG'
   | 'BAIXA_ESTOQUE_VENDA';
 
@@ -445,6 +451,135 @@ function saveCreditSaleOverride(saleId: string, creditData: any) {
   } catch {}
 }
 
+// === CONTROLE DE PAGAMENTO NA RETIRADA (PERSISTÊNCIA LOCAL) ===
+const STORAGE_PICKUP_PENDING_KEY = 'hum_vicio_pickup_pending_map';
+
+export function getSavedPickupPendingSalesMap(): Record<string, {
+  paymentStatus?: 'pago' | 'pendente_retirada';
+  paidAt?: string;
+  paidMethod?: string;
+}> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_PICKUP_PENDING_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+export function savePickupPendingOverride(saleId: string, pickupData: any): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedPickupPendingSalesMap();
+    map[saleId] = { ...(map[saleId] || {}), ...pickupData };
+    localStorage.setItem(STORAGE_PICKUP_PENDING_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+// === FILA DE SINCRONIZAÇÃO OFFLINE RESILIENTE (QUANDO O BANCO DE DADOS CAI) ===
+const STORAGE_OFFLINE_SALES_KEY = 'hum_vicio_offline_sales_outbox';
+
+export function getOfflineSalesQueue(): Sale[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(STORAGE_OFFLINE_SALES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveOfflineSalesQueue(queue: Sale[]): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_OFFLINE_SALES_KEY, JSON.stringify(queue));
+  } catch (err) {
+    console.error('Erro ao salvar fila offline:', err);
+  }
+}
+
+export function enqueueOfflineSale(sale: Sale): void {
+  const current = getOfflineSalesQueue();
+  const exists = current.some(s => s.id === sale.id);
+  if (!exists) {
+    current.push(sale);
+    saveOfflineSalesQueue(current);
+  }
+}
+
+export function removeOfflineSaleFromQueue(saleId: string): void {
+  const current = getOfflineSalesQueue();
+  const filtered = current.filter(s => s.id !== saleId);
+  saveOfflineSalesQueue(filtered);
+}
+
+// Drena e sincroniza as vendas offline para o Supabase quando a conexão estiver restabelecida
+export async function syncOfflineSalesQueue(supabaseClient: any): Promise<{ syncedCount: number; errorsCount: number }> {
+  const queue = getOfflineSalesQueue();
+  if (!Array.isArray(queue) || queue.length === 0) return { syncedCount: 0, errorsCount: 0 };
+
+  let syncedCount = 0;
+  let errorsCount = 0;
+
+  for (const sale of queue) {
+    try {
+      // 1. Upsert da venda garantindo o ID da comanda
+      const { error: saleErr } = await supabaseClient.from('sales').upsert({
+        id: sale.id,
+        channel: sale.channel,
+        total: sale.total,
+        payment_method: sale.paidMethod || sale.paymentMethod,
+        customer_name: sale.customerName || 'Balcão',
+        order_type: sale.orderType || 'mesa',
+        status: sale.status || 'completed',
+        production_status: sale.productionStatus || 'em_espera',
+        production_started_at: sale.productionStartedAt || sale.date,
+        target_prep_minutes: sale.targetPrepMinutes || 20,
+        subtotal: sale.subtotal,
+        discount: sale.discount,
+        delivery_fee: sale.deliveryFee,
+        created_at: sale.date
+      }, { onConflict: 'id' });
+
+      if (saleErr) {
+        console.warn('Erro ao sincronizar venda offline no Supabase:', sale.id, saleErr);
+        errorsCount++;
+        continue;
+      }
+
+      // 2. Insere os itens da venda
+      if (sale.items && sale.items.length > 0) {
+        const saleItems = sale.items.map(i => {
+          let displayName = i.productName;
+          if (i.combo) displayName += ` (${i.combo})`;
+          if (i.additionals && i.additionals.length > 0) {
+            displayName += ` + [${i.additionals.map((a: any) => a.name).join(', ')}]`;
+          }
+          if (i.notes) displayName += ` *Obs: ${i.notes}*`;
+          return {
+            sale_id: sale.id,
+            product_id: i.productId,
+            product_name: displayName,
+            quantity: i.quantity,
+            unit_price: i.unitPrice
+          };
+        });
+        await supabaseClient.from('sale_items').upsert(saleItems);
+      }
+
+      // Remove da fila se enviado com sucesso
+      removeOfflineSaleFromQueue(sale.id);
+      syncedCount++;
+    } catch (err) {
+      console.warn('Banco offline ou indisponível ao tentar drenar venda:', err);
+      errorsCount++;
+      break; // Interrompe para tentar na próxima rodada
+    }
+  }
+
+  return { syncedCount, errorsCount };
+}
+
 function getSavedFixedExpensesConfig(): FixedExpensesConfig {
   if (typeof window === 'undefined') return DEFAULT_FIXED_EXPENSES;
   try {
@@ -502,8 +637,51 @@ export function useInventory() {
       localStorage.setItem('hum_vicio_target_prep_minutes', mins.toString());
     }
   };
+
   const [sales, setSales] = useState<Sale[]>([]);
   const [movements, setMovements] = useState<CashMovement[]>([]);
+
+  // Resiliência Offline & Fila de Sincronização (Quando o Banco de Dados Cai)
+  const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
+  const [isOnline, setIsOnline] = useState<boolean>(true);
+
+  // Monitor de Auto-Sincronização e Drenagem da Fila Offline
+  const syncOfflineQueueNow = async () => {
+    const res = await syncOfflineSalesQueue(supabase);
+    setOfflineQueueCount(getOfflineSalesQueue().length);
+    if (res.syncedCount > 0) {
+      setIsOnline(true);
+    }
+    return res;
+  };
+
+  useEffect(() => {
+    setOfflineQueueCount(getOfflineSalesQueue().length);
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      syncOfflineQueueNow();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Heartbeat a cada 15 segundos para tentar drenar a fila caso a conexão volte silenciosamente
+    const interval = setInterval(() => {
+      if (getOfflineSalesQueue().length > 0) {
+        syncOfflineQueueNow();
+      }
+    }, 15000);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      clearInterval(interval);
+    };
+  }, []);
 
   // Perdas State (em Nuvem)
   const [wasteRecords, setWasteRecords] = useState<WasteRecord[]>([]);
@@ -614,10 +792,12 @@ export function useInventory() {
         if (salesData && salesData.length > 0) {
           const overrides = getSavedProductionOverrides();
           const creditMap = getSavedCreditSalesMap();
+          const pickupMap = getSavedPickupPendingSalesMap();
           let overridesCleaned = false;
           const mappedSales: Sale[] = salesData.map(s => {
             const override = overrides[s.id];
             const creditInfo = creditMap[s.id] || {};
+            const pickupInfo = pickupMap[s.id] || {};
             // O Supabase é a fonte oficial da verdade sincronizada entre múltiplos dispositivos (PC Caixa e Tablet Cozinha)
             const prodStatus = (s.production_status || override?.status || 'em_producao') as ProductionStatus;
             const prodStarted = s.production_started_at || override?.startedAt || s.created_at;
@@ -640,6 +820,8 @@ export function useInventory() {
               } catch {}
             }
 
+            const paymentStatus = pickupInfo.paymentStatus || s.payment_status || (s.payment_method === 'consumo_funcionario' || s.payment_method === 'fiado_vip' ? 'pendente_retirada' : 'pago');
+
             return {
               id: s.id, 
               customerName: creditInfo.creditCustomerName || s.customer_name || 'Balcão',
@@ -647,6 +829,10 @@ export function useInventory() {
               channel: s.channel, 
               total: Number(s.total) || 0, 
               paymentMethod: s.payment_method, 
+              paymentStatus,
+              paidAt: pickupInfo.paidAt || s.paid_at || undefined,
+              paidMethod: pickupInfo.paidMethod || s.paid_method || undefined,
+              isOfflineSynced: true,
               date: s.created_at, 
               status: s.status,
               productionStatus: prodStatus,
@@ -678,7 +864,12 @@ export function useInventory() {
               }))
             };
           });
-          setSales(mappedSales);
+
+          // Mergir vendas locais da fila offline que ainda não subiram para o Supabase
+          const offlineQueue = getOfflineSalesQueue();
+          const unpersisted = offlineQueue.filter(oq => !mappedSales.some(ms => ms.id === oq.id));
+          const allSales = [...unpersisted, ...mappedSales];
+          setSales(allSales);
           if (typeof window !== 'undefined') {
             try { 
               localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(mappedSales.slice(0, 100))); 
@@ -1918,68 +2109,65 @@ export function useInventory() {
     const initialProductionStatus = sale.productionStatus || 'em_espera';
     const initialProductionStarted = sale.productionStartedAt || new Date().toISOString();
     const initialTargetPrep = sale.targetPrepMinutes || targetPrepMinutes;
+
+    // ID gerado antecipadamente no client para permitir operação resiliente mesmo se o banco de dados cair
+    const clientGeneratedId = 'sale_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
     let sData: any = null;
+    let isOffline = false;
 
-    // 1. Tentar inserção completa com colunas novas e status completed
+    // Tentativa com timeout de 2.2 segundos para nunca travar a tela do caixa se o Supabase cair
     try {
-      const { data, error } = await supabase.from('sales').insert({
-        channel: sale.channel, 
-        total: sale.total, 
-        payment_method: sale.paymentMethod,
-        customer_name: sale.customerName || 'Balcão',
-        order_type: sale.orderType || 'mesa',
-        status: 'completed',
-        production_status: initialProductionStatus,
-        production_started_at: initialProductionStarted,
-        target_prep_minutes: initialTargetPrep
-      }).select().single();
+      const insertOnline = async () => {
+        try {
+          const { data, error } = await supabase.from('sales').insert({
+            id: clientGeneratedId,
+            channel: sale.channel, 
+            total: sale.total, 
+            payment_method: sale.paidMethod || sale.paymentMethod,
+            customer_name: sale.customerName || 'Balcão',
+            order_type: sale.orderType || 'mesa',
+            status: 'completed',
+            production_status: initialProductionStatus,
+            production_started_at: initialProductionStarted,
+            target_prep_minutes: initialTargetPrep,
+            subtotal: sale.subtotal,
+            discount: sale.discount,
+            delivery_fee: sale.deliveryFee
+          }).select().single();
 
-      if (!error && data) {
-        sData = data;
-      }
-    } catch (e) {
-      console.warn('Tentativa 1 de inserção falhou:', e);
-    }
-
-    // 2. Fallback intermediário caso colunas novas de KDS não existam
-    if (!sData) {
-      try {
-        const { data: retryData, error: retryErr } = await supabase.from('sales').insert({
-          channel: sale.channel, 
-          total: sale.total, 
-          payment_method: sale.paymentMethod,
-          customer_name: sale.customerName || 'Balcão',
-          order_type: sale.orderType || 'mesa',
-          status: 'completed'
-        }).select().single();
-
-        if (!retryErr && retryData) {
-          sData = retryData;
+          if (!error && data) return data;
+        } catch (e) {
+          console.warn('Tentativa 1 online falhou:', e);
         }
-      } catch (e) {
-        console.warn('Tentativa 2 de inserção falhou:', e);
-      }
-    }
 
-    // 3. Fallback mínimo com colunas base
-    if (!sData) {
-      try {
-        const { data: minData } = await supabase.from('sales').insert({
-          channel: sale.channel, 
-          total: sale.total, 
-          payment_method: sale.paymentMethod
-        }).select().single();
-
-        if (minData) {
-          sData = minData;
+        // Fallback mínimo caso colunas adicionais não existam
+        try {
+          const { data: minData } = await supabase.from('sales').insert({
+            id: clientGeneratedId,
+            channel: sale.channel, 
+            total: sale.total, 
+            payment_method: sale.paidMethod || sale.paymentMethod
+          }).select().single();
+          if (minData) return minData;
+        } catch (e) {
+          console.warn('Tentativa mínima online falhou:', e);
         }
-      } catch (e) {
-        console.warn('Tentativa 3 de inserção falhou:', e);
-      }
+
+        return null;
+      };
+
+      const timeoutRace = new Promise(resolve => setTimeout(() => resolve(null), 2200));
+      sData = await Promise.race([insertOnline(), timeoutRace]);
+    } catch {
+      sData = null;
     }
 
-    // Gerar ID seguro
-    const saleId = sData?.id || ('local_' + Math.random().toString(36).substring(2, 10) + Date.now().toString(36));
+    if (!sData) {
+      isOffline = true;
+      setIsOnline(false);
+    }
+
+    const saleId = sData?.id || clientGeneratedId;
 
     // Salvar itens se houver conexão com o banco
     if (sData && sale.items && sale.items.length > 0) {
@@ -1993,7 +2181,7 @@ export function useInventory() {
           if (i.notes) displayName += ` *Obs: ${i.notes}*`;
 
           return {
-            sale_id: sData.id, 
+            sale_id: saleId, 
             product_id: i.productId, 
             product_name: displayName,
             quantity: i.quantity, 
@@ -2116,6 +2304,12 @@ export function useInventory() {
     const isCreditSale = sale.paymentMethod === 'consumo_funcionario' || sale.paymentMethod === 'fiado_vip';
     const creditStatus = isCreditSale ? (sale.creditStatus || 'pendente') : undefined;
 
+    // Status de pagamento da Retirada
+    const paymentStatus: 'pago' | 'pendente_retirada' = sale.paymentStatus || (
+      sale.orderType === 'retirada' && sale.paymentMethod === 'retirada' ? 'pendente_retirada' :
+      isCreditSale ? 'pendente_retirada' : 'pago'
+    );
+
     // O pedido É SEMPRE INCLUÍDO E NUNCA SE PERDE!
     const newSaleLocal: Sale = {
       ...sale,
@@ -2128,6 +2322,10 @@ export function useInventory() {
       storeCouponSubsidy: sale.storeCouponSubsidy || 0,
       hasGifts,
       giftsTotalValue,
+      paymentStatus,
+      paidAt: paymentStatus === 'pago' ? (sale.paidAt || new Date().toISOString()) : undefined,
+      paidMethod: paymentStatus === 'pago' ? (sale.paidMethod || sale.paymentMethod) : undefined,
+      isOfflineSynced: !isOffline,
       productionStatus: initialProductionStatus,
       productionStartedAt: initialProductionStarted,
       targetPrepMinutes: initialTargetPrep,
@@ -2143,8 +2341,20 @@ export function useInventory() {
       status: 'completed'
     };
 
+    // Se salvou offline (banco de dados caiu ou não respondeu em 2s), adiciona na fila outbox
+    if (isOffline) {
+      enqueueOfflineSale(newSaleLocal);
+      setOfflineQueueCount(getOfflineSalesQueue().length);
+    }
+
     // Salvar override do pedido para persistir localmente e nunca voltar para espera
     saveProductionOverrides([{ id: saleId, status: initialProductionStatus, startedAt: initialProductionStarted }]);
+
+    if (paymentStatus === 'pendente_retirada') {
+      savePickupPendingOverride(saleId, {
+        paymentStatus: 'pendente_retirada'
+      });
+    }
 
     if (isCreditSale) {
       saveCreditSaleOverride(saleId, {
@@ -2166,6 +2376,72 @@ export function useInventory() {
       }
       return updated;
     });
+
+    return newSaleLocal;
+  };
+
+  // Liquidação de Pagamento na Retirada (Pagar ao Retirar Pedido)
+  const settlePickupPayment = async (saleId: string, paymentMethod: string, operatorName: string) => {
+    const target = sales.find(s => s.id === saleId);
+    if (!target) return { success: false, message: 'Pedido não encontrado' };
+
+    const paidAt = new Date().toISOString();
+    const updatedSale: Sale = {
+      ...target,
+      paymentStatus: 'pago',
+      paidAt,
+      paidMethod: paymentMethod,
+      paymentMethod: paymentMethod
+    };
+
+    savePickupPendingOverride(saleId, {
+      paymentStatus: 'pago',
+      paidAt,
+      paidMethod: paymentMethod
+    });
+
+    // Se estiver na fila offline outbox, atualiza o item da fila
+    const queue = getOfflineSalesQueue();
+    const qIdx = queue.findIndex(s => s.id === saleId);
+    if (qIdx > -1) {
+      queue[qIdx] = updatedSale;
+      saveOfflineSalesQueue(queue);
+    }
+
+    try {
+      await supabase.from('sales').update({
+        payment_method: paymentMethod
+      }).eq('id', saleId);
+    } catch (err) {
+      console.warn('Erro ao atualizar quitação de retirada no Supabase:', err);
+    }
+
+    setSales(prev => {
+      const updated = prev.map(s => s.id === saleId ? updatedSale : s);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      }
+      return updated;
+    });
+
+    // Se recebido em dinheiro físico, insere suprimento na gaveta do caixa ativo
+    if (paymentMethod === 'dinheiro') {
+      await addMovement({
+        type: 'suprimento',
+        amount: target.total,
+        description: `Recebimento Retirada #${saleId.slice(0, 5).toUpperCase()} (${target.customerName || 'Cliente'})`
+      });
+    }
+
+    addAuditLog(
+      'LIQUIDACAO_RETIRADA',
+      `Pagamento do pedido para retirada #${saleId.slice(0, 6).toUpperCase()} confirmado no valor de R$ ${target.total.toFixed(2)} via ${paymentMethod.toUpperCase()} (${target.customerName || 'Cliente'}).`,
+      operatorName || 'Operador',
+      'pendente_retirada',
+      'pago'
+    );
+
+    return { success: true, sale: updatedSale };
   };
 
   // Liquidação de Contas a Receber (Fiado VIP e Consumo de Funcionários)
@@ -2739,6 +3015,7 @@ export function useInventory() {
     subRecipes, saveSubRecipe, removeSubRecipe, getIngredientTrueCost,
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus, completeOrderProduction,
     auditLogs, addAuditLog,
-    fixedExpensesConfig, saveFixedExpensesConfig, settleCreditSale
+    fixedExpensesConfig, saveFixedExpensesConfig, settleCreditSale,
+    settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow
   };
 }
