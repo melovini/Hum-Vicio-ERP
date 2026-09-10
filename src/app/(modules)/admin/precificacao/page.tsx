@@ -14,7 +14,7 @@ export default function PrecificacaoPage() {
 
   // Estados de Filtro
   const [searchTerm, setSearchTerm] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<'todos' | 'lanche' | 'duplo' | 'porcao' | 'bebida'>('todos');
+  const [categoryFilter, setCategoryFilter] = useState<'todos' | 'lanche' | 'duplo' | 'combo' | 'porcao' | 'bebida'>('todos');
   
   // Taxas do iFood (configuráveis)
   const [ifoodCommissionPct, setIfoodCommissionPct] = useState<number>(23); // 23%
@@ -41,6 +41,8 @@ export default function PrecificacaoPage() {
         if (!p.name.toLowerCase().includes('duplo')) return false;
       } else if (categoryFilter === 'lanche') {
         if (p.category !== 'lanche' || p.name.toLowerCase().includes('duplo')) return false;
+      } else if (categoryFilter === 'combo') {
+        if (p.category !== 'combo' && !p.name.toLowerCase().includes('combo')) return false;
       } else if (categoryFilter !== 'todos' && p.category !== categoryFilter) {
         return false;
       }
@@ -424,6 +426,7 @@ export default function PrecificacaoPage() {
               { id: 'todos', label: 'Todos' },
               { id: 'lanche', label: '🍔 Burgers Simples' },
               { id: 'duplo', label: '🔥 Linha Duplos' },
+              { id: 'combo', label: '🍟 Combos & Upsell' },
               { id: 'porcao', label: '🍟 Porções' },
               { id: 'bebida', label: '🥤 Bebidas' },
             ].map(tab => (

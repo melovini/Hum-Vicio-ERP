@@ -13,6 +13,7 @@ import { useInventory, Sale, Product } from '@/lib/store';
 import { 
   CustomerAnalyticsProfile, extractCustomerAnalytics, 
   generateCustomerWhatsAppMessage, getStoredImportedCustomers, 
+  fetchImportedCustomersAsync,
   ImportedCustomer, saveImportedCustomers, clearImportedCustomers
 } from '@/lib/crm-clientes';
 import ImportarClientesModal from '@/components/ImportarClientesModal';
@@ -37,9 +38,24 @@ export default function ClientesAdminPage() {
   // Cliente Selecionado para Gaveta de Detalhes
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerAnalyticsProfile | null>(null);
 
-  // Carrega a base importada do localStorage
+  // Carrega a base importada do localStorage e sincroniza com a API/Nuvem
   useEffect(() => {
     setImportedCustomers(getStoredImportedCustomers());
+    fetchImportedCustomersAsync().then(customers => {
+      if (customers && customers.length > 0) {
+        setImportedCustomers(customers);
+      }
+    });
+
+    const handleUpdate = () => {
+      setImportedCustomers(getStoredImportedCustomers());
+    };
+    window.addEventListener('crm_customers_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    return () => {
+      window.removeEventListener('crm_customers_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
   }, []);
 
   // Extração analítica dos perfis de clientes do ERP enriquecidos com custo e horários

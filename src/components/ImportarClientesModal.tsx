@@ -93,7 +93,7 @@ export default function ImportarClientesModal({
       finalCustomers = Array.from(map.values());
     }
 
-    saveImportedCustomers(finalCustomers);
+    saveImportedCustomers(finalCustomers, importMode);
     onImportSuccess(finalCustomers);
     onClose();
   };

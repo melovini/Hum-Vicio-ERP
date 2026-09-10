@@ -90,7 +90,7 @@ export function cleanCustomerName(rawName: string): { cleanName: string; address
   return { cleanName: text };
 }
 
-// Obter clientes importados salvos localmente
+// Obter clientes importados salvos localmente (instantâneo)
 export function getStoredImportedCustomers(): ImportedCustomer[] {
   if (typeof window === 'undefined') return [];
   try {
@@ -101,21 +101,60 @@ export function getStoredImportedCustomers(): ImportedCustomer[] {
   }
 }
 
-// Salvar clientes importados
-export function saveImportedCustomers(customers: ImportedCustomer[]): void {
-  if (typeof window === 'undefined') return;
+// Sincronizar clientes importados a partir do servidor / Supabase
+export async function fetchImportedCustomersAsync(): Promise<ImportedCustomer[]> {
   try {
-    localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(customers));
+    const res = await fetch('/api/crm/customers', { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && Array.isArray(data.customers) && data.customers.length > 0) {
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(data.customers));
+            window.dispatchEvent(new Event('crm_customers_updated'));
+          } catch {}
+        }
+        return data.customers;
+      }
+    }
   } catch (err) {
-    console.error('Erro ao salvar clientes importados:', err);
+    console.warn('Aviso: Não foi possível buscar clientes da API:', err);
   }
+  return getStoredImportedCustomers();
+}
+
+// Salvar clientes importados (salva local e sincroniza no servidor/Supabase em background)
+export function saveImportedCustomers(customers: ImportedCustomer[], mode: 'replace' | 'merge' = 'merge'): void {
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(customers));
+      window.dispatchEvent(new Event('crm_customers_updated'));
+    } catch (err) {
+      console.error('Erro ao salvar clientes importados localmente:', err);
+    }
+  }
+
+  // Sincronização em background com a API / Supabase
+  try {
+    fetch('/api/crm/customers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customers, mode })
+    }).catch(e => console.warn('Falha no background sync de clientes:', e));
+  } catch {}
 }
 
 // Limpar clientes importados
 export function clearImportedCustomers(): void {
-  if (typeof window === 'undefined') return;
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem(STORAGE_IMPORTED_KEY);
+      window.dispatchEvent(new Event('crm_customers_updated'));
+    } catch {}
+  }
+
   try {
-    localStorage.removeItem(STORAGE_IMPORTED_KEY);
+    fetch('/api/crm/customers', { method: 'DELETE' }).catch(() => {});
   } catch {}
 }
 
@@ -467,10 +506,13 @@ export function cloneOrderItemsToCart(
     if (currentProduct) {
       const basePrice = channel === 'ifood' ? currentProduct.priceIfood : currentProduct.priceBalcao;
       
+      const batataComboProd = activeProducts.find(p => p.category === 'combo' && p.name.toLowerCase().includes('batata'));
+      const aneisComboProd = activeProducts.find(p => p.category === 'combo' && (p.name.toLowerCase().includes('anéis') || p.name.toLowerCase().includes('aneis')));
+
       if (item.combo?.toLowerCase().includes('anéis') || item.combo?.toLowerCase().includes('aneis')) {
-        comboPrice = 16;
+        comboPrice = channel === 'ifood' ? (aneisComboProd?.priceIfood ?? 18) : (aneisComboProd?.priceBalcao ?? 16);
       } else if (item.combo?.toLowerCase().includes('batata')) {
-        comboPrice = 14;
+        comboPrice = channel === 'ifood' ? (batataComboProd?.priceIfood ?? 16) : (batataComboProd?.priceBalcao ?? 14);
       }
 
       const additionsTotal = (item.additionals || []).reduce((acc, a) => acc + (a.price || 0), 0);

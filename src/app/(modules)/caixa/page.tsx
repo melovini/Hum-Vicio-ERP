@@ -25,7 +25,7 @@ import {
 import { 
   CustomerProfile, CustomerPreviousOrder, ImportedCustomer, CustomerSearchResult,
   extractCustomerProfiles, searchRecurringCustomers, cloneOrderItemsToCart,
-  getStoredImportedCustomers
+  getStoredImportedCustomers, fetchImportedCustomersAsync
 } from '@/lib/crm-clientes';
 import { 
   getStoredFiscalConfig, simulateNfceIssue, formatCpfCnpj 
@@ -327,16 +327,31 @@ export default function CaixaPage() {
   const [crmFeedbackToast, setCrmFeedbackToast] = useState<string | null>(null);
   const [importedCustomers, setImportedCustomers] = useState<ImportedCustomer[]>(() => getStoredImportedCustomers());
 
-  // Sincroniza automaticamente se o gestor atualizar a base de clientes no painel administrativo
+  // Sincroniza automaticamente na montagem e se o gestor atualizar a base de clientes no painel administrativo ou nuvem
   useEffect(() => {
-    const handleSync = () => {
-      setImportedCustomers(getStoredImportedCustomers());
+    const handleSync = async () => {
+      const local = getStoredImportedCustomers();
+      if (local.length > 0) {
+        setImportedCustomers(local);
+      }
+      try {
+        const cloud = await fetchImportedCustomersAsync();
+        if (cloud && cloud.length > 0) {
+          setImportedCustomers(cloud);
+        }
+      } catch {}
     };
+
+    // Dispara imediatamente no carregamento da tela
+    handleSync();
+
     window.addEventListener('storage', handleSync);
     window.addEventListener('focus', handleSync);
+    window.addEventListener('crm_customers_updated', handleSync);
     return () => {
       window.removeEventListener('storage', handleSync);
       window.removeEventListener('focus', handleSync);
+      window.removeEventListener('crm_customers_updated', handleSync);
     };
   }, []);
 
@@ -403,37 +418,124 @@ export default function CaixaPage() {
     };
   }, [activeCashSession, sales, movements, sessionStartTime]);
 
-  // Lista dos 18 adicionais oficiais
+  // Lista dos 18 adicionais oficiais (com preços dinâmicos conforme Balcão vs iFood)
   const availableAdditionals = useMemo(() => {
     const fromDb = products.filter(p => p.name.startsWith('Adicional:') || p.name.startsWith('Pote Maionese'));
     if (fromDb.length > 0) {
       return fromDb.map(p => ({
         name: p.name.replace('Adicional: ', ''),
-        price: p.priceBalcao
+        price: saleChannel === 'ifood' ? p.priceIfood : p.priceBalcao
       }));
     }
     return [
-      { name: 'Bacon Crocante', price: 5 },
-      { name: 'Cebola Caramelizada', price: 5 },
-      { name: 'Geleia de Pimenta', price: 5 },
-      { name: 'Hambúrguer Bovino 180g', price: 13 },
-      { name: 'Hambúrguer Costela 180g', price: 15 },
-      { name: 'Hamb. Frango Empanado', price: 10 },
-      { name: 'Hambúrguer Linguiça 150g', price: 10 },
-      { name: 'Hamb. Queijo Minas Empanado', price: 13 },
-      { name: 'Hamb. Bovino Recheado Mozarela', price: 15 },
-      { name: 'Pote Maionese da Casa 40g', price: 2 },
-      { name: 'Pote Maionese de Chimichurri 40g', price: 2 },
-      { name: 'Pote Maionese de Ervas 40g', price: 2 },
-      { name: 'Onion Rings no Hambúrguer', price: 5 },
-      { name: 'Queijo Cheddar', price: 5 },
-      { name: 'Queijo Minas Padrão', price: 5 },
-      { name: 'Queijo Mozarela', price: 5 },
-      { name: 'Queijo Coalho', price: 10 },
-      { name: 'Salada (Alface, Tomate, Cebola)', price: 3 },
-      { name: 'Sour Cream', price: 5 }
+      { name: 'Bacon Crocante', price: saleChannel === 'ifood' ? 6 : 5 },
+      { name: 'Cebola Caramelizada', price: saleChannel === 'ifood' ? 6 : 5 },
+      { name: 'Geleia de Pimenta', price: saleChannel === 'ifood' ? 6 : 5 },
+      { name: 'Hambúrguer Bovino 180g', price: saleChannel === 'ifood' ? 15 : 13 },
+      { name: 'Hambúrguer Costela 180g', price: saleChannel === 'ifood' ? 18 : 15 },
+      { name: 'Hamb. Frango Empanado', price: saleChannel === 'ifood' ? 12 : 10 },
+      { name: 'Hambúrguer Linguiça 150g', price: saleChannel === 'ifood' ? 12 : 10 },
+      { name: 'Hamb. Queijo Minas Empanado', price: saleChannel === 'ifood' ? 15 : 13 },
+      { name: 'Hamb. Bovino Recheado Mozarela', price: saleChannel === 'ifood' ? 18 : 15 },
+      { name: 'Pote Maionese da Casa 40g', price: saleChannel === 'ifood' ? 3 : 2 },
+      { name: 'Pote Maionese de Chimichurri 40g', price: saleChannel === 'ifood' ? 3 : 2 },
+      { name: 'Pote Maionese de Ervas 40g', price: saleChannel === 'ifood' ? 3 : 2 },
+      { name: 'Onion Rings no Hambúrguer', price: saleChannel === 'ifood' ? 6 : 5 },
+      { name: 'Queijo Cheddar', price: saleChannel === 'ifood' ? 6 : 5 },
+      { name: 'Queijo Minas Padrão', price: saleChannel === 'ifood' ? 6 : 5 },
+      { name: 'Queijo Mozarela', price: saleChannel === 'ifood' ? 6 : 5 },
+      { name: 'Queijo Coalho', price: saleChannel === 'ifood' ? 12 : 10 },
+      { name: 'Salada (Alface, Tomate, Cebola)', price: saleChannel === 'ifood' ? 4 : 3 },
+      { name: 'Sour Cream', price: saleChannel === 'ifood' ? 6 : 5 }
     ];
-  }, [products]);
+  }, [products, saleChannel]);
+
+  // Helper de precificação dinâmica dos combos de acompanhamento (Batata e Anéis) respeitando canal e cadastro oficial
+  const getComboPrice = (comboKey: 'batata_bebida' | 'aneis_bebida' | 'none', channel: 'balcao' | 'ifood') => {
+    if (comboKey === 'none') return 0;
+    const isBatata = comboKey === 'batata_bebida';
+    const prod = products.find(p => p.category === 'combo' && (isBatata ? p.name.toLowerCase().includes('batata') : (p.name.toLowerCase().includes('anéis') || p.name.toLowerCase().includes('aneis'))));
+    if (prod) {
+      return channel === 'ifood' ? prod.priceIfood : prod.priceBalcao;
+    }
+    return isBatata ? (channel === 'ifood' ? 16 : 14) : (channel === 'ifood' ? 18 : 16);
+  };
+
+  // Recálculo inteligente do carrinho ao alternar canal entre Balcão e iFood
+  const recalculateCartPrices = (
+    currentCart: SaleItem[],
+    targetChannel: 'balcao' | 'ifood',
+    productsList: Product[]
+  ): SaleItem[] => {
+    return currentCart.map(item => {
+      const prod = productsList.find(
+        p => p.id === item.productId || p.name.toLowerCase().trim() === item.productName.toLowerCase().trim()
+      );
+      if (!prod) return item;
+
+      // 1. Preço base do produto no novo canal
+      const basePrice = targetChannel === 'ifood' ? prod.priceIfood : prod.priceBalcao;
+
+      // 2. Preço do combo no novo canal
+      let comboPrice = 0;
+      if (item.combo) {
+        if (item.combo.toLowerCase().includes('batata')) {
+          comboPrice = getComboPrice('batata_bebida', targetChannel);
+        } else if (item.combo.toLowerCase().includes('anéis') || item.combo.toLowerCase().includes('aneis')) {
+          comboPrice = getComboPrice('aneis_bebida', targetChannel);
+        }
+      }
+
+      // 3. Preço dos adicionais no novo canal
+      let additionsTotal = 0;
+      const updatedAdditionals = (item.additionals || []).map(add => {
+        const cleanName = add.name.replace(/^\d+x\s*/, '').trim();
+        const matchProd = productsList.find(p => 
+          p.name === `Adicional: ${cleanName}` || 
+          p.name === `Pote Maionese ${cleanName}` || 
+          p.name.toLowerCase().includes(cleanName.toLowerCase())
+        );
+        const unitAddPrice = matchProd 
+          ? (targetChannel === 'ifood' ? matchProd.priceIfood : matchProd.priceBalcao) 
+          : (add.price || 5);
+        
+        const qtyMatch = add.name.match(/^(\d+)x/);
+        const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+        const totalAddPrice = unitAddPrice * qty;
+        additionsTotal += totalAddPrice;
+
+        return {
+          ...add,
+          price: totalAddPrice
+        };
+      });
+
+      const newCalculatedUnitPrice = basePrice + comboPrice + additionsTotal;
+
+      return {
+        ...item,
+        unitPrice: item.isGift ? 0 : newCalculatedUnitPrice,
+        originalPrice: item.isGift ? newCalculatedUnitPrice : item.originalPrice,
+        comboPrice: comboPrice > 0 ? comboPrice : undefined,
+        additionals: updatedAdditionals
+      };
+    });
+  };
+
+  // Alterna o canal de venda e atualiza instantaneamente todos os itens e preços do carrinho
+  const handleSwitchChannel = (newChannel: 'balcao' | 'ifood') => {
+    setSaleChannel(newChannel);
+    setCart(prev => recalculateCartPrices(prev, newChannel, products));
+    if (newChannel === 'ifood') {
+      setSaleMethod('ifood_online');
+      if (orderType === 'mesa') {
+        setOrderType('delivery');
+        setSelectedTable(null);
+      }
+    } else {
+      setSaleMethod('credito');
+    }
+  };
 
   // Filtrar apenas produtos ativos (respeitando soft delete)
   const activeProducts = useMemo(() => {
@@ -565,7 +667,7 @@ export default function CaixaPage() {
       ? selectedBurgerForConfig.priceIfood 
       : selectedBurgerForConfig.priceBalcao;
 
-    const comboPrice = selectedCombo === 'batata_bebida' ? 14 : selectedCombo === 'aneis_bebida' ? 16 : 0;
+    const comboPrice = getComboPrice(selectedCombo, saleChannel);
     const comboName = selectedCombo === 'batata_bebida' 
       ? 'Combo Batata e Bebida' 
       : selectedCombo === 'aneis_bebida' 
@@ -680,7 +782,8 @@ export default function CaixaPage() {
     }
 
     // 3. Clona itens com preços atualizados do cardápio vigente (Antifraude)
-    const clonedItems = cloneOrderItemsToCart(targetOrder.items, products, saleChannel);
+    const activeCh = targetOrder.channel || saleChannel;
+    const clonedItems = cloneOrderItemsToCart(targetOrder.items, products, activeCh);
     setCart(clonedItems);
 
     setShowCustomerSuggestions(false);
@@ -1116,7 +1219,7 @@ export default function CaixaPage() {
   const currentModalPrice = useMemo(() => {
     if (!selectedBurgerForConfig) return 0;
     const base = saleChannel === 'ifood' ? selectedBurgerForConfig.priceIfood : selectedBurgerForConfig.priceBalcao;
-    const combo = selectedCombo === 'batata_bebida' ? 14 : selectedCombo === 'aneis_bebida' ? 16 : 0;
+    const combo = getComboPrice(selectedCombo, saleChannel);
     let adds = 0;
     Object.entries(selectedAdditionals).forEach(([name, qty]) => {
       if (qty > 0) {
@@ -1935,17 +2038,7 @@ export default function CaixaPage() {
                         <select 
                           value={saleChannel} 
                           onChange={e => {
-                            const ch = e.target.value as 'balcao' | 'ifood';
-                            setSaleChannel(ch);
-                            if (ch === 'ifood') {
-                              setSaleMethod('ifood_online');
-                              if (orderType === 'mesa') {
-                                setOrderType('delivery');
-                                setSelectedTable(null);
-                              }
-                            } else {
-                              setSaleMethod('credito');
-                            }
+                            handleSwitchChannel(e.target.value as 'balcao' | 'ifood');
                           }} 
                           className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 font-bold outline-none cursor-pointer"
                         >
@@ -1977,7 +2070,7 @@ export default function CaixaPage() {
                               type="button"
                               onClick={() => {
                                 setOrderType('mesa');
-                                setSaleChannel('balcao');
+                                handleSwitchChannel('balcao');
                                 setDeliveryFeeInput('');
                               }}
                               className={`py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
@@ -2664,11 +2757,7 @@ export default function CaixaPage() {
                               onClick={() => {
                                 setSaleMethod(method.id);
                                 if (method.isIfood && saleChannel !== 'ifood') {
-                                  setSaleChannel('ifood');
-                                  if (orderType === 'mesa') {
-                                    setOrderType('delivery');
-                                    setSelectedTable(null);
-                                  }
+                                  handleSwitchChannel('ifood');
                                 }
                               }}
                               className={`p-2.5 rounded-xl text-left transition-all cursor-pointer border ${
@@ -2817,7 +2906,7 @@ export default function CaixaPage() {
                         clienteNome: mesa.clienteNome || ''
                       });
                       setOrderType('mesa');
-                      setSaleChannel('balcao');
+                      handleSwitchChannel('balcao');
                       setDeliveryFeeInput('');
                       setCustomerName(mesa.clienteNome || '');
                       setActiveTab('pdv');
@@ -4338,7 +4427,9 @@ export default function CaixaPage() {
                       }`}
                     >
                       <span className="block text-xs font-bold">🍟 Batata + Bebida</span>
-                      <span className="text-xs text-amber-400 font-mono font-bold">+ R$ 14,00</span>
+                      <span className="text-xs text-amber-400 font-mono font-bold">
+                        + R$ {getComboPrice('batata_bebida', saleChannel).toFixed(2)}
+                      </span>
                     </button>
 
                     <button
@@ -4351,7 +4442,9 @@ export default function CaixaPage() {
                       }`}
                     >
                       <span className="block text-xs font-bold">🧅 Anéis + Bebida</span>
-                      <span className="text-xs text-amber-400 font-mono font-bold">+ R$ 16,00</span>
+                      <span className="text-xs text-amber-400 font-mono font-bold">
+                        + R$ {getComboPrice('aneis_bebida', saleChannel).toFixed(2)}
+                      </span>
                     </button>
                   </div>
                 </div>
