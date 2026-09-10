@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { 
   ImportedCustomer, parseCardapioWebXlsx, 
-  getStoredImportedCustomers, saveImportedCustomers, clearImportedCustomers 
+  getStoredImportedCustomers, saveImportedCustomers, saveImportedCustomersAsync, clearImportedCustomers 
 } from '@/lib/crm-clientes';
 
 interface ImportarClientesModalProps {
@@ -22,6 +22,8 @@ export default function ImportarClientesModal({
 }: ImportarClientesModalProps) {
   const [file, setFile] = useState<File | null>(null);
   const [parsing, setParsing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveProgressText, setSaveProgressText] = useState<string | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [parsedData, setParsedData] = useState<{
     customers: ImportedCustomer[];
@@ -40,6 +42,8 @@ export default function ImportarClientesModal({
       setFile(null);
       setParsedData(null);
       setParseError(null);
+      setIsSaving(false);
+      setSaveProgressText(null);
     }
   }, [isOpen]);
 
@@ -78,7 +82,7 @@ export default function ImportarClientesModal({
     if (f) handleProcessFile(f);
   };
 
-  const handleConfirmImport = () => {
+  const handleConfirmImport = async () => {
     if (!parsedData || parsedData.customers.length === 0) return;
 
     let finalCustomers: ImportedCustomer[] = [];
@@ -93,9 +97,20 @@ export default function ImportarClientesModal({
       finalCustomers = Array.from(map.values());
     }
 
-    saveImportedCustomers(finalCustomers, importMode);
-    onImportSuccess(finalCustomers);
-    onClose();
+    setIsSaving(true);
+    setSaveProgressText(`Salvando localmente e enviando ${finalCustomers.length} clientes para a nuvem...`);
+
+    try {
+      await saveImportedCustomersAsync(finalCustomers, importMode);
+      onImportSuccess(finalCustomers);
+      onClose();
+    } catch (err: any) {
+      console.error('Erro ao salvar clientes:', err);
+      setParseError(`Erro ao sincronizar com a nuvem: ${err?.message || 'Falha na conexão'}. Os dados foram salvos localmente.`);
+    } finally {
+      setIsSaving(false);
+      setSaveProgressText(null);
+    }
   };
 
   const handleClearDatabase = () => {
@@ -297,22 +312,32 @@ export default function ImportarClientesModal({
         </div>
 
         {/* Rodapé com Botões de Ação */}
-        <div className="flex gap-3 pt-3 border-t border-slate-800">
+        <div className="flex flex-col sm:flex-row gap-3 pt-3 border-t border-slate-800">
           <button
             type="button"
+            disabled={isSaving}
             onClick={onClose}
-            className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer transition-all"
+            className="sm:flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs cursor-pointer transition-all disabled:opacity-50"
           >
             Cancelar
           </button>
           <button
             type="button"
-            disabled={!parsedData || parsedData.customers.length === 0}
+            disabled={!parsedData || parsedData.customers.length === 0 || isSaving}
             onClick={handleConfirmImport}
-            className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            className="sm:flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-emerald-600/30 cursor-pointer transition-all disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
-            <Check size={16} />
-            <span>Confirmar Importação {parsedData ? `(${parsedData.customers.length})` : ''}</span>
+            {isSaving ? (
+              <>
+                <RefreshCw size={15} className="animate-spin" />
+                <span>{saveProgressText || 'Sincronizando Nuvem...'}</span>
+              </>
+            ) : (
+              <>
+                <Check size={16} />
+                <span>Confirmar Importação {parsedData ? `(${parsedData.customers.length})` : ''}</span>
+              </>
+            )}
           </button>
         </div>
 

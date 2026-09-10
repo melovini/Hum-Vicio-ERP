@@ -90,68 +90,376 @@ export function cleanCustomerName(rawName: string): { cleanName: string; address
   return { cleanName: text };
 }
 
-// Obter clientes importados salvos localmente (instantâneo)
-export function getStoredImportedCustomers(): ImportedCustomer[] {
-  if (typeof window === 'undefined') return [];
+const IDB_NAME = 'hum_vicio_crm_db';
+const IDB_STORE = 'imported_customers';
+const IDB_VERSION = 1;
+
+let memoryImportedCustomers: ImportedCustomer[] = [];
+
+function openCustomerDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    if (typeof window === 'undefined' || !window.indexedDB) {
+      return reject(new Error('IndexedDB não suportado'));
+    }
+    const req = window.indexedDB.open(IDB_NAME, IDB_VERSION);
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(IDB_STORE)) {
+        db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function idbSaveImportedCustomers(customers: ImportedCustomer[]): Promise<void> {
   try {
-    const raw = localStorage.getItem(STORAGE_IMPORTED_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const db = await openCustomerDb();
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    const store = tx.objectStore(IDB_STORE);
+    store.clear();
+    for (const c of customers) {
+      store.put(c);
+    }
+    return new Promise((resolve, reject) => {
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  } catch (err) {
+    console.warn('Erro ao salvar no IndexedDB:', err);
+  }
+}
+
+export async function idbGetImportedCustomers(): Promise<ImportedCustomer[]> {
+  try {
+    const db = await openCustomerDb();
+    const tx = db.transaction(IDB_STORE, 'readonly');
+    const store = tx.objectStore(IDB_STORE);
+    const req = store.getAll();
+    return new Promise((resolve, reject) => {
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
   } catch {
     return [];
   }
 }
 
-// Sincronizar clientes importados a partir do servidor / Supabase
-export async function fetchImportedCustomersAsync(): Promise<ImportedCustomer[]> {
+// Inicialização imediata do cache em memória a partir do IndexedDB se disponível
+if (typeof window !== 'undefined') {
+  idbGetImportedCustomers().then(cached => {
+    if (cached && cached.length > 0 && cached.length >= memoryImportedCustomers.length) {
+      memoryImportedCustomers = cached;
+      window.dispatchEvent(new Event('crm_customers_updated'));
+    }
+  }).catch(() => {});
+}
+
+// Obter clientes importados salvos localmente (instantâneo via memória ou fallback)
+export function getStoredImportedCustomers(): ImportedCustomer[] {
+  if (memoryImportedCustomers.length > 0) {
+    return memoryImportedCustomers;
+  }
+  if (typeof window === 'undefined') return [];
   try {
-    const res = await fetch('/api/crm/customers', { cache: 'no-store' });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.success && Array.isArray(data.customers) && data.customers.length > 0) {
-        if (typeof window !== 'undefined') {
-          try {
-            localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(data.customers));
-            window.dispatchEvent(new Event('crm_customers_updated'));
-          } catch {}
-        }
-        return data.customers;
+    const raw = localStorage.getItem(STORAGE_IMPORTED_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        memoryImportedCustomers = parsed;
+        return parsed;
       }
     }
-  } catch (err) {
-    console.warn('Aviso: Não foi possível buscar clientes da API:', err);
+  } catch {}
+  return [];
+}
+
+// Salva clientes importados localmente (Memória + IndexedDB ilimitado + localStorage rápido)
+export function setStoredImportedCustomers(customers: ImportedCustomer[]): void {
+  memoryImportedCustomers = customers;
+  if (typeof window === 'undefined') return;
+
+  // 1. Salva no IndexedDB (suporta 10.000+ contatos sem restrição de 5MB)
+  idbSaveImportedCustomers(customers).catch(() => {});
+
+  // 2. Salva no localStorage com salvaguarda de quota
+  try {
+    localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(customers));
+  } catch {
+    try {
+      localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(customers.slice(0, 1000)));
+    } catch {}
   }
-  return getStoredImportedCustomers();
+
+  // Notifica componentes
+  window.dispatchEvent(new Event('crm_customers_updated'));
+}
+
+// Envia clientes para o Supabase em lote (batch upsert de 100 itens)
+export async function pushCustomersToSupabase(
+  customers: ImportedCustomer[],
+  mode: 'replace' | 'merge' = 'merge'
+): Promise<{ success: boolean; count: number; error?: string }> {
+  if (!customers || customers.length === 0) {
+    return { success: true, count: 0 };
+  }
+
+  let supabaseSuccess = false;
+  try {
+    const { createClient } = await import('./supabase');
+    const supabase = createClient();
+
+    if (mode === 'replace') {
+      await supabase.from('imported_customers').delete().neq('id', 'keep_empty');
+    }
+
+    const rows = customers.map(c => ({
+      id: c.id,
+      name: c.name,
+      phone: c.phone || null,
+      address: c.address || null,
+      number: c.number || null,
+      neighborhood: c.neighborhood || null,
+      city: c.city || null,
+      complement: c.complement || null,
+      full_address: c.fullAddress || null,
+      total_orders: c.totalOrders || 1,
+      last_order_date: c.lastOrderDate || null,
+      source: c.source || 'cardapio_web',
+      imported_at: c.importedAt || new Date().toISOString()
+    }));
+
+    const batchSize = 100;
+    for (let i = 0; i < rows.length; i += batchSize) {
+      const batch = rows.slice(i, i + batchSize);
+      const { error } = await supabase.from('imported_customers').upsert(batch, { onConflict: 'id' });
+      if (error) {
+        console.error('Erro no lote de upsert Supabase:', error);
+      }
+    }
+    supabaseSuccess = true;
+  } catch (err) {
+    console.warn('Aviso: Falha direta no Supabase, tentando via API route:', err);
+  }
+
+  // Backup / Sincronização secundária via API Next.js
+  try {
+    const res = await fetch('/api/crm/customers', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ customers, mode })
+    });
+    if (res.ok) {
+      return { success: true, count: customers.length };
+    }
+  } catch (err: any) {
+    if (!supabaseSuccess) {
+      return { success: false, count: 0, error: err?.message || 'Erro ao sincronizar na nuvem' };
+    }
+  }
+
+  return { success: supabaseSuccess, count: customers.length };
+}
+
+// Recupera todos os clientes do Supabase (com paginação automática para contornar limite de 1000)
+export async function fetchAllSupabaseCustomers(): Promise<ImportedCustomer[]> {
+  try {
+    const { createClient } = await import('./supabase');
+    const supabase = createClient();
+
+    const allRows: any[] = [];
+    let from = 0;
+    const pageSize = 1000;
+    let hasMore = true;
+
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('imported_customers')
+        .select('*')
+        .order('name', { ascending: true })
+        .range(from, from + pageSize - 1);
+
+      if (error) {
+        throw error;
+      }
+
+      if (data && data.length > 0) {
+        allRows.push(...data);
+        if (data.length < pageSize) {
+          hasMore = false;
+        } else {
+          from += pageSize;
+        }
+      } else {
+        hasMore = false;
+      }
+    }
+
+    if (allRows.length > 0) {
+      return allRows.map((c: any) => ({
+        id: c.id,
+        name: c.name,
+        phone: c.phone || undefined,
+        address: c.address || undefined,
+        number: c.number || undefined,
+        neighborhood: c.neighborhood || undefined,
+        city: c.city || undefined,
+        complement: c.complement || undefined,
+        fullAddress: c.full_address || undefined,
+        totalOrders: c.total_orders || 1,
+        lastOrderDate: c.last_order_date || undefined,
+        source: c.source || 'cardapio_web',
+        importedAt: c.imported_at || new Date().toISOString()
+      }));
+    }
+  } catch (err) {
+    // Fallback para API Next.js caso o acesso direto pelo navegador falhe
+    try {
+      const res = await fetch('/api/crm/customers', { cache: 'no-store' });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && Array.isArray(data.customers) && data.customers.length > 0) {
+          return data.customers;
+        }
+      }
+    } catch {}
+  }
+
+  return [];
+}
+
+// Sincronização Bidirecional Inteligente (Auto-Push e Auto-Pull com Nuvem Supabase)
+export async function syncImportedCustomers(options?: {
+  forcePushLocal?: boolean;
+}): Promise<{ customers: ImportedCustomer[]; syncedToCloud: boolean; count: number }> {
+  const local = getStoredImportedCustomers();
+  let cloud: ImportedCustomer[] = [];
+
+  try {
+    cloud = await fetchAllSupabaseCustomers();
+  } catch (err) {
+    console.warn('Erro ao buscar clientes da nuvem:', err);
+  }
+
+  // CENÁRIO 1: A Nuvem tem dados, mas este dispositivo está vazio (Outros Dispositivos / Celular / Tablet)
+  if (cloud.length > 0 && local.length === 0) {
+    setStoredImportedCustomers(cloud);
+    return { customers: cloud, syncedToCloud: true, count: cloud.length };
+  }
+
+  // CENÁRIO 2: O computador local tem clientes (ex: importação anterior), mas a Nuvem está vazia!
+  // CRÍTICO: Sobe automaticamente os clientes locais para a Nuvem Supabase
+  if (local.length > 0 && cloud.length === 0) {
+    console.log(`[CRM Cloud Sync] Detectados ${local.length} clientes locais pendentes de envio. Enviando para o Supabase...`);
+    const pushRes = await pushCustomersToSupabase(local, 'replace');
+    return { customers: local, syncedToCloud: pushRes.success, count: local.length };
+  }
+
+  // CENÁRIO 3: Ambos possuem dados ou forçado - faz a união sem perder nenhum cliente
+  if (cloud.length > 0 && local.length > 0) {
+    const map = new Map<string, ImportedCustomer>();
+    cloud.forEach(c => map.set(c.id, c));
+    let hasLocalOnly = false;
+    local.forEach(c => {
+      if (!map.has(c.id)) {
+        hasLocalOnly = true;
+      }
+      map.set(c.id, c);
+    });
+
+    const merged = Array.from(map.values());
+    setStoredImportedCustomers(merged);
+
+    // Se havia itens no local que não estavam na nuvem, sobe para o Supabase
+    if (hasLocalOnly || options?.forcePushLocal) {
+      await pushCustomersToSupabase(merged, 'merge');
+    }
+
+    return { customers: merged, syncedToCloud: true, count: merged.length };
+  }
+
+  return { customers: local, syncedToCloud: false, count: local.length };
+}
+
+// Sincronizar clientes importados a partir do servidor / Supabase (Retrocompatibilidade)
+export async function fetchImportedCustomersAsync(): Promise<ImportedCustomer[]> {
+  const { customers } = await syncImportedCustomers();
+  return customers;
+}
+
+// Salvar clientes importados assincronamente com garantia de gravação na nuvem
+export async function saveImportedCustomersAsync(
+  customers: ImportedCustomer[],
+  mode: 'replace' | 'merge' = 'merge'
+): Promise<{ success: boolean; count: number }> {
+  setStoredImportedCustomers(customers);
+  const res = await pushCustomersToSupabase(customers, mode);
+  return { success: res.success, count: customers.length };
 }
 
 // Salvar clientes importados (salva local e sincroniza no servidor/Supabase em background)
 export function saveImportedCustomers(customers: ImportedCustomer[], mode: 'replace' | 'merge' = 'merge'): void {
-  if (typeof window !== 'undefined') {
-    try {
-      localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(customers));
-      window.dispatchEvent(new Event('crm_customers_updated'));
-    } catch (err) {
-      console.error('Erro ao salvar clientes importados localmente:', err);
-    }
-  }
+  saveImportedCustomersAsync(customers, mode).catch(e => {
+    console.warn('Falha no background sync de clientes:', e);
+  });
+}
 
-  // Sincronização em background com a API / Supabase
-  try {
-    fetch('/api/crm/customers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customers, mode })
-    }).catch(e => console.warn('Falha no background sync de clientes:', e));
-  } catch {}
+// Assinatura em Tempo Real (Supabase Realtime) para refletir alterações entre múltiplos aparelhos instantaneamente
+export function subscribeToCustomerChanges(onUpdate: (customers: ImportedCustomer[]) => void): () => void {
+  if (typeof window === 'undefined') return () => {};
+
+  let channel: any = null;
+  import('./supabase').then(({ createClient }) => {
+    try {
+      const supabase = createClient();
+      channel = supabase
+        .channel('imported_customers_realtime')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'imported_customers' },
+          async () => {
+            console.log('[CRM Realtime] Atualização de clientes detectada na nuvem!');
+            const { customers } = await syncImportedCustomers();
+            onUpdate(customers);
+          }
+        )
+        .subscribe();
+    } catch (e) {
+      console.warn('Erro ao configurar canal realtime de clientes:', e);
+    }
+  });
+
+  return () => {
+    if (channel) {
+      import('./supabase').then(({ createClient }) => {
+        try {
+          const supabase = createClient();
+          supabase.removeChannel(channel);
+        } catch {}
+      });
+    }
+  };
 }
 
 // Limpar clientes importados
-export function clearImportedCustomers(): void {
+export async function clearImportedCustomers(): Promise<void> {
+  memoryImportedCustomers = [];
   if (typeof window !== 'undefined') {
     try {
       localStorage.removeItem(STORAGE_IMPORTED_KEY);
-      window.dispatchEvent(new Event('crm_customers_updated'));
+      const db = await openCustomerDb();
+      const tx = db.transaction(IDB_STORE, 'readwrite');
+      tx.objectStore(IDB_STORE).clear();
     } catch {}
+    window.dispatchEvent(new Event('crm_customers_updated'));
   }
+
+  try {
+    const { createClient } = await import('./supabase');
+    const supabase = createClient();
+    await supabase.from('imported_customers').delete().neq('id', 'keep_empty');
+  } catch {}
 
   try {
     fetch('/api/crm/customers', { method: 'DELETE' }).catch(() => {});

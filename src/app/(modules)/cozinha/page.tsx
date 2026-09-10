@@ -5,7 +5,7 @@ import {
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
   Eye, Check, ListChecks, MessageSquare, Utensils,
-  Volume2, BellRing, User, X, Play
+  Volume2, BellRing, User, X, Play, ArrowLeft
 } from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
@@ -563,6 +563,13 @@ export default function CozinhaKDSPage() {
       <header className="flex flex-wrap items-center justify-between gap-4 pb-4 mb-6 border-b border-slate-800">
         
         <div className="flex items-center gap-3">
+          <Link
+            href="/"
+            className="p-2.5 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-xl transition-colors cursor-pointer"
+            title="Voltar para a Página Inicial"
+          >
+            <ArrowLeft size={20} />
+          </Link>
           <div className="p-3 bg-amber-500/10 text-amber-400 rounded-2xl border border-amber-500/20 shadow-[0_0_20px_rgba(245,158,11,0.15)]">
             <Flame size={28} className="animate-pulse" />
           </div>

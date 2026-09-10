@@ -43,7 +43,11 @@ export default function ChecklistsReportPage() {
       
       <div className="max-w-6xl mx-auto relative z-10">
         <header className="flex items-center gap-6 mb-12">
-          <Link href="/admin/dashboard" className="p-4 glass-card rounded-2xl hover:bg-slate-800 transition-colors">
+          <Link 
+            href="/" 
+            className="p-4 glass-card rounded-2xl hover:bg-slate-800 transition-colors cursor-pointer"
+            title="Voltar para a Página Inicial"
+          >
             <ArrowLeft size={24} className="text-slate-300" />
           </Link>
           <div>

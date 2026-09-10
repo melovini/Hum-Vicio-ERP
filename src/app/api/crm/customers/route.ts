@@ -45,14 +45,37 @@ export async function GET() {
     const supabase = getSupabaseClient();
     if (supabase) {
       try {
-        const { data, error } = await supabase
-          .from('imported_customers')
-          .select('*')
-          .order('name', { ascending: true })
-          .limit(5000);
+        let allRows: any[] = [];
+        let from = 0;
+        const pageSize = 1000;
+        let hasMore = true;
 
-        if (!error && data && data.length > 0) {
-          const mapped = data.map((c: any) => ({
+        while (hasMore) {
+          const { data, error } = await supabase
+            .from('imported_customers')
+            .select('*')
+            .order('name', { ascending: true })
+            .range(from, from + pageSize - 1);
+
+          if (error) {
+            console.error('Erro ao consultar Supabase imported_customers:', error);
+            break;
+          }
+
+          if (data && data.length > 0) {
+            allRows.push(...data);
+            if (data.length < pageSize) {
+              hasMore = false;
+            } else {
+              from += pageSize;
+            }
+          } else {
+            hasMore = false;
+          }
+        }
+
+        if (allRows.length > 0) {
+          const mapped = allRows.map((c: any) => ({
             id: c.id,
             name: c.name,
             phone: c.phone || undefined,
@@ -71,16 +94,16 @@ export async function GET() {
           // Atualiza cache local do servidor
           writeLocalCustomers(mapped);
 
-          return NextResponse.json({ success: true, source: 'supabase', customers: mapped });
+          return NextResponse.json({ success: true, source: 'supabase', count: mapped.length, customers: mapped });
         }
       } catch (err) {
-        // Fallback silencioso para arquivo local
+        console.warn('Fallback silencioso de Supabase para arquivo local:', err);
       }
     }
 
     // 2. Fallback: Lê do arquivo local do servidor
     const local = readLocalCustomers();
-    return NextResponse.json({ success: true, source: 'local_server', customers: local });
+    return NextResponse.json({ success: true, source: 'local_server', count: local.length, customers: local });
   } catch (err: any) {
     return NextResponse.json({ success: false, error: err.message, customers: [] }, { status: 500 });
   }
@@ -111,8 +134,14 @@ export async function POST(req: Request) {
 
     // 2. Grava no Supabase se disponível (em lotes de 100)
     const supabase = getSupabaseClient();
+    let supabaseSuccess = false;
     if (supabase) {
       try {
+        if (mode === 'replace') {
+          // Se for substituição completa, limpa a tabela antes
+          await supabase.from('imported_customers').delete().neq('id', 'keep_empty');
+        }
+
         const rows = finalCustomers.map((c: any) => ({
           id: c.id,
           name: c.name,
@@ -129,20 +158,25 @@ export async function POST(req: Request) {
           imported_at: c.importedAt || new Date().toISOString()
         }));
 
-        // Batch upsert
+        // Batch upsert com lotes de 100 registros
         const batchSize = 100;
         for (let i = 0; i < rows.length; i += batchSize) {
           const batch = rows.slice(i, i + batchSize);
-          await supabase.from('imported_customers').upsert(batch, { onConflict: 'id' });
+          const { error: batchErr } = await supabase.from('imported_customers').upsert(batch, { onConflict: 'id' });
+          if (batchErr) {
+            console.error('Erro no lote de upsert Supabase:', batchErr);
+          }
         }
+        supabaseSuccess = true;
       } catch (err) {
-        console.warn('Aviso: Supabase imported_customers não pôde ser atualizado (tabela pendente de migração):', err);
+        console.warn('Aviso: Supabase imported_customers não pôde ser atualizado:', err);
       }
     }
 
     return NextResponse.json({
       success: true,
       totalSaved: finalCustomers.length,
+      supabaseSynced: supabaseSuccess,
       mode
     });
   } catch (err: any) {
@@ -158,7 +192,9 @@ export async function DELETE() {
     if (supabase) {
       try {
         await supabase.from('imported_customers').delete().neq('id', 'keep_empty');
-      } catch {}
+      } catch (err) {
+        console.error('Erro ao limpar Supabase imported_customers:', err);
+      }
     }
     return NextResponse.json({ success: true, message: 'Base de clientes importados limpa com sucesso' });
   } catch (err: any) {

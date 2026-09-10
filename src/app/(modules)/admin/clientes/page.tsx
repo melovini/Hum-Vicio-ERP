@@ -13,7 +13,7 @@ import { useInventory, Sale, Product } from '@/lib/store';
 import { 
   CustomerAnalyticsProfile, extractCustomerAnalytics, 
   generateCustomerWhatsAppMessage, getStoredImportedCustomers, 
-  fetchImportedCustomersAsync,
+  fetchImportedCustomersAsync, syncImportedCustomers, subscribeToCustomerChanges,
   ImportedCustomer, saveImportedCustomers, clearImportedCustomers
 } from '@/lib/crm-clientes';
 import ImportarClientesModal from '@/components/ImportarClientesModal';
@@ -34,17 +34,28 @@ export default function ClientesAdminPage() {
   const [importedCustomers, setImportedCustomers] = useState<ImportedCustomer[]>([]);
   const [showImportModal, setShowImportModal] = useState(false);
   const [crmToast, setCrmToast] = useState<string | null>(null);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'idle' | 'syncing' | 'synced' | 'error'>('idle');
 
   // Cliente Selecionado para Gaveta de Detalhes
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerAnalyticsProfile | null>(null);
 
-  // Carrega a base importada do localStorage e sincroniza com a API/Nuvem
+  // Carrega a base importada do localStorage e sincroniza automaticamente com o Supabase/Nuvem
   useEffect(() => {
     setImportedCustomers(getStoredImportedCustomers());
-    fetchImportedCustomersAsync().then(customers => {
-      if (customers && customers.length > 0) {
-        setImportedCustomers(customers);
+    setIsSyncingCloud(true);
+    setCloudSyncStatus('syncing');
+
+    syncImportedCustomers().then(res => {
+      if (res.customers) {
+        setImportedCustomers(res.customers);
+        setCloudSyncStatus(res.syncedToCloud ? 'synced' : 'idle');
       }
+    }).catch(err => {
+      console.warn('Erro ao sincronizar clientes:', err);
+      setCloudSyncStatus('error');
+    }).finally(() => {
+      setIsSyncingCloud(false);
     });
 
     const handleUpdate = () => {
@@ -52,11 +63,39 @@ export default function ClientesAdminPage() {
     };
     window.addEventListener('crm_customers_updated', handleUpdate);
     window.addEventListener('storage', handleUpdate);
+
+    // Escuta alterações em tempo real via Supabase Realtime
+    const unsubscribe = subscribeToCustomerChanges((updated) => {
+      setImportedCustomers(updated);
+      setCloudSyncStatus('synced');
+    });
+
     return () => {
       window.removeEventListener('crm_customers_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
+      unsubscribe();
     };
   }, []);
+
+  // Forçar envio e sincronização com a Nuvem Supabase
+  const handleForceCloudSync = async () => {
+    setIsSyncingCloud(true);
+    setCloudSyncStatus('syncing');
+    try {
+      const res = await syncImportedCustomers({ forcePushLocal: true });
+      setImportedCustomers(res.customers);
+      setCloudSyncStatus('synced');
+      setCrmToast(`✓ Nuvem sincronizada com sucesso! ${res.count} clientes disponíveis em todos os dispositivos.`);
+      setTimeout(() => setCrmToast(null), 5000);
+    } catch (err: any) {
+      console.error('Erro na sincronização manual:', err);
+      setCloudSyncStatus('error');
+      setCrmToast(`Erro ao sincronizar: ${err?.message || 'Falha de conexão com a nuvem'}`);
+      setTimeout(() => setCrmToast(null), 5000);
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
 
   // Extração analítica dos perfis de clientes do ERP enriquecidos com custo e horários
   const customerProfiles = useMemo(() => {
@@ -176,6 +215,16 @@ export default function ClientesAdminPage() {
           </div>
 
           <div className="flex items-center gap-2.5 flex-wrap">
+            <button
+              type="button"
+              disabled={isSyncingCloud}
+              onClick={handleForceCloudSync}
+              className="px-3.5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white text-xs font-bold flex items-center gap-2 transition-colors cursor-pointer shadow-xs disabled:opacity-50"
+              title="Sincronizar base de clientes com o banco em nuvem Supabase"
+            >
+              <RefreshCw size={14} className={isSyncingCloud ? 'animate-spin text-cyan-400' : 'text-slate-400'} />
+              <span>{isSyncingCloud ? 'Sincronizando Nuvem...' : 'Sincronizar Nuvem'}</span>
+            </button>
             <button
               type="button"
               onClick={() => setShowImportModal(true)}
@@ -594,7 +643,17 @@ export default function ClientesAdminPage() {
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2.5">
+                <div className="flex items-center gap-2.5 flex-wrap">
+                  <button
+                    type="button"
+                    disabled={isSyncingCloud}
+                    onClick={handleForceCloudSync}
+                    className="px-3.5 py-2 bg-emerald-950/40 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-800/60 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer disabled:opacity-50"
+                    title="Forçar envio e sincronização de todos os clientes com o banco em nuvem Supabase"
+                  >
+                    <RefreshCw size={13} className={isSyncingCloud ? 'animate-spin text-emerald-400' : ''} />
+                    <span>{isSyncingCloud ? 'Sincronizando Nuvem...' : 'Sincronizar com a Nuvem'}</span>
+                  </button>
                   <button
                     type="button"
                     onClick={() => setShowImportModal(true)}
@@ -623,20 +682,31 @@ export default function ClientesAdminPage() {
                   <p className="text-xs text-slate-400 max-w-md mx-auto">
                     Arraste a planilha de clientes exportada do Cardápio Web (.xlsx) para que o sistema reconheça nomes, telefones e endereços no PDV.
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => setShowImportModal(true)}
-                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-black inline-flex items-center gap-2 shadow-lg cursor-pointer"
-                  >
-                    <FileSpreadsheet size={15} /> Selecionar Arquivo .xlsx
-                  </button>
+                  <div className="flex items-center justify-center gap-3 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowImportModal(true)}
+                      className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-black inline-flex items-center gap-2 shadow-lg cursor-pointer"
+                    >
+                      <FileSpreadsheet size={15} /> Selecionar Arquivo .xlsx
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isSyncingCloud}
+                      onClick={handleForceCloudSync}
+                      className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      <RefreshCw size={13} className={isSyncingCloud ? 'animate-spin text-cyan-400' : ''} />
+                      <span>Buscar da Nuvem</span>
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="mt-4 space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
-                      <span className="text-slate-400">Total Importado:</span>
-                      <p className="text-lg font-black text-white mt-0.5">{importedCustomers.length} contatos</p>
+                      <span className="text-slate-400">Total de Contatos:</span>
+                      <p className="text-lg font-black text-white mt-0.5">{importedCustomers.length} clientes</p>
                     </div>
                     <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
                       <span className="text-slate-400">Com WhatsApp/Telefone:</span>
@@ -648,6 +718,24 @@ export default function ClientesAdminPage() {
                       <span className="text-slate-400">Com Endereço de Entrega:</span>
                       <p className="text-lg font-black text-cyan-400 mt-0.5">
                         {importedCustomers.filter(i => i.fullAddress).length} contatos
+                      </p>
+                    </div>
+                    <div className="p-3 bg-slate-950 rounded-xl border border-slate-800 text-xs">
+                      <span className="text-slate-400">Nuvem Multi-Dispositivos:</span>
+                      <p className="text-sm font-bold mt-1 flex items-center gap-1.5">
+                        {isSyncingCloud ? (
+                          <span className="text-amber-400 flex items-center gap-1 font-bold">
+                            <RefreshCw size={12} className="animate-spin" /> Sincronizando...
+                          </span>
+                        ) : cloudSyncStatus === 'synced' ? (
+                          <span className="text-emerald-400 flex items-center gap-1 font-bold">
+                            <CheckCircle2 size={13} /> Nuvem Ativa & Pronta
+                          </span>
+                        ) : (
+                          <span className="text-slate-300 flex items-center gap-1">
+                            <CheckCircle2 size={13} className="text-emerald-400" /> Sincronizado
+                          </span>
+                        )}
                       </p>
                     </div>
                   </div>

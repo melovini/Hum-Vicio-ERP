@@ -188,6 +188,25 @@ export interface CashMovement {
   date: string;
 }
 
+export interface CashClosingDetails {
+  countedCash?: number;
+  expectedCash?: number;
+  varianceCash?: number;
+  countedDebito?: number;
+  expectedDebito?: number;
+  varianceDebito?: number;
+  countedCredito?: number;
+  expectedCredito?: number;
+  varianceCredito?: number;
+  countedPix?: number;
+  expectedPix?: number;
+  variancePix?: number;
+  countedTotal?: number;
+  expectedTotal?: number;
+  varianceTotal?: number;
+  notes?: string;
+}
+
 export interface CashSession {
   id: string;
   status: 'open' | 'closed';
@@ -199,6 +218,7 @@ export interface CashSession {
   closedBy?: string;
   openedAt: string;
   closedAt?: string;
+  closingDetails?: CashClosingDetails;
 }
 
 // === CENTRAL DE LOGS DE AUDITORIA (SEGURANÇA DO ADMINISTRADOR) ===
@@ -1914,7 +1934,12 @@ export function useInventory() {
     );
   };
 
-  const closeCaixa = async (finalAmount: number, operatorName: string, expectedAmount?: number) => {
+  const closeCaixa = async (
+    finalAmount: number, 
+    operatorName: string, 
+    expectedAmount?: number,
+    closingDetails?: CashClosingDetails
+  ) => {
     const variance = finalAmount - (expectedAmount || 0);
     const now = new Date().toISOString();
 
@@ -1925,6 +1950,14 @@ export function useInventory() {
         localStorage.removeItem('hum_vicio_delivered_sales');
         localStorage.removeItem('hum_vicio_prod_status_map');
         localStorage.removeItem('hum_vicio_sessao_salao_ativa');
+        if (closingDetails) {
+          localStorage.setItem('hum_vicio_last_closing_summary', JSON.stringify({
+            ...closingDetails,
+            operator: operatorName,
+            date: now,
+            sessionId: activeCashSession?.id
+          }));
+        }
       } catch {}
     }
 
@@ -1951,19 +1984,24 @@ export function useInventory() {
             expectedAmount,
             varianceAmount: variance,
             closedBy: operatorName,
-            closedAt: now
+            closedAt: now,
+            closingDetails
           };
         }
         return s;
       }));
     }
 
+    const auditSummary = closingDetails
+      ? `Fechamento com Conferência de Maquininhas por ${operatorName}. Total Declarado: R$ ${(closingDetails.countedTotal ?? finalAmount).toFixed(2)} | Esperado: R$ ${(closingDetails.expectedTotal ?? expectedAmount ?? 0).toFixed(2)} | Dif Geral: ${((closingDetails.varianceTotal ?? variance) >= 0 ? '+' : '') + (closingDetails.varianceTotal ?? variance).toFixed(2)} | [Débito: R$ ${(closingDetails.countedDebito ?? 0).toFixed(2)} (esp ${(closingDetails.expectedDebito ?? 0).toFixed(2)}) | Crédito: R$ ${(closingDetails.countedCredito ?? 0).toFixed(2)} (esp ${(closingDetails.expectedCredito ?? 0).toFixed(2)}) | PIX: R$ ${(closingDetails.countedPix ?? 0).toFixed(2)} (esp ${(closingDetails.expectedPix ?? 0).toFixed(2)}) | Gaveta: R$ ${(closingDetails.countedCash ?? finalAmount).toFixed(2)} (esp ${(closingDetails.expectedCash ?? expectedAmount ?? 0).toFixed(2)})]${closingDetails.notes ? ` Obs: ${closingDetails.notes}` : ''}`
+      : `Fechamento de Caixa efetuado por ${operatorName}. Contado: R$ ${finalAmount.toFixed(2)} | Esperado: R$ ${(expectedAmount || 0).toFixed(2)} | Diferença: ${variance >= 0 ? `+R$ ${variance.toFixed(2)} (Sobra)` : `-R$ ${Math.abs(variance).toFixed(2)} (Falta)`}`;
+
     addAuditLog(
       'FECHAMENTO_CAIXA',
-      `Fechamento de Caixa efetuado por ${operatorName}. Contado: R$ ${finalAmount.toFixed(2)} | Esperado: R$ ${(expectedAmount || 0).toFixed(2)} | Diferença: ${variance >= 0 ? `+R$ ${variance.toFixed(2)} (Sobra)` : `-R$ ${Math.abs(variance).toFixed(2)} (Falta)`}`,
+      auditSummary,
       operatorName,
-      `Esperado: R$ ${(expectedAmount || 0).toFixed(2)}`,
-      `Contado: R$ ${finalAmount.toFixed(2)} (Diferença: R$ ${variance.toFixed(2)})`
+      `Esperado Geral: R$ ${(closingDetails?.expectedTotal ?? expectedAmount ?? 0).toFixed(2)}`,
+      `Declarado Geral: R$ ${(closingDetails?.countedTotal ?? finalAmount).toFixed(2)} (Diferença: R$ ${(closingDetails?.varianceTotal ?? variance).toFixed(2)})`
     );
 
     setActiveCashSession(null);

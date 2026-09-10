@@ -8,7 +8,8 @@ import {
   Sparkles, Coffee, Flame, Check, X, MessageSquare, UtensilsCrossed, Utensils,
   Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid,
   Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck, RotateCcw,
-  Repeat, Star, ChevronDown, Globe, MapPin, Phone, Landmark
+  Repeat, Star, ChevronDown, Globe, MapPin, Phone, Landmark,
+  Calculator, Zap, Coins, FileCheck2
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -25,7 +26,7 @@ import {
 import { 
   CustomerProfile, CustomerPreviousOrder, ImportedCustomer, CustomerSearchResult,
   extractCustomerProfiles, searchRecurringCustomers, cloneOrderItemsToCart,
-  getStoredImportedCustomers, fetchImportedCustomersAsync
+  getStoredImportedCustomers, fetchImportedCustomersAsync, syncImportedCustomers, subscribeToCustomerChanges
 } from '@/lib/crm-clientes';
 import { 
   getStoredFiscalConfig, simulateNfceIssue, formatCpfCnpj 
@@ -253,7 +254,7 @@ export default function CaixaPage() {
     } catch {}
   }, []);
 
-  // Estado para Relatório de Fechamento de Caixa Cego
+  // Estado para Relatório de Fechamento de Caixa com Conferência de Maquininhas
   const [closingSummary, setClosingSummary] = useState<{
     initial: number;
     cashSales: number;
@@ -261,10 +262,31 @@ export default function CaixaPage() {
     sangrias: number;
     expectedInDrawer: number;
     countedCash: number;
+    varianceCash: number;
+    expectedDebito: number;
+    countedDebito: number;
+    varianceDebito: number;
+    expectedCredito: number;
+    countedCredito: number;
+    varianceCredito: number;
+    expectedPix: number;
+    countedPix: number;
+    variancePix: number;
+    expectedTotal: number;
+    countedTotal: number;
+    varianceTotal: number;
     variance: number;
     operator: string;
+    notes?: string;
     date: string;
   } | null>(null);
+
+  // Estados para Conferência de Maquininhas no Fechamento
+  const [countedDebitoInput, setCountedDebitoInput] = useState('');
+  const [countedCreditoInput, setCountedCreditoInput] = useState('');
+  const [countedPixInput, setCountedPixInput] = useState('');
+  const [closeNotesInput, setCloseNotesInput] = useState('');
+  const [showQuickCheckModal, setShowQuickCheckModal] = useState(false);
 
   // Armazenamento persistente de IDs já alertados para NUNCA disparar bipe falso de pedidos antigos ou já retirados
   const getAlertedReadySales = (): Set<string> => {
@@ -389,9 +411,9 @@ export default function CaixaPage() {
         setImportedCustomers(local);
       }
       try {
-        const cloud = await fetchImportedCustomersAsync();
-        if (cloud && cloud.length > 0) {
-          setImportedCustomers(cloud);
+        const res = await syncImportedCustomers();
+        if (res.customers && res.customers.length > 0) {
+          setImportedCustomers(res.customers);
         }
       } catch {}
     };
@@ -402,10 +424,18 @@ export default function CaixaPage() {
     window.addEventListener('storage', handleSync);
     window.addEventListener('focus', handleSync);
     window.addEventListener('crm_customers_updated', handleSync);
+
+    const unsubscribe = subscribeToCustomerChanges((updated) => {
+      if (updated && updated.length > 0) {
+        setImportedCustomers(updated);
+      }
+    });
+
     return () => {
       window.removeEventListener('storage', handleSync);
       window.removeEventListener('focus', handleSync);
       window.removeEventListener('crm_customers_updated', handleSync);
+      unsubscribe();
     };
   }, []);
 
@@ -440,17 +470,54 @@ export default function CaixaPage() {
   const [movDesc, setMovDesc] = useState('');
   const [movType, setMovType] = useState<'sangria' | 'suprimento'>('sangria');
 
-  // Cálculos do Caixa Atual
+  // Cálculos do Caixa Atual com Suporte a Todas as Formas de Pagamento e Maquininhas
   const sessionStats = useMemo(() => {
     const initial = activeCashSession?.initialAmount || 0;
     
-    // Filtrar vendas em dinheiro após a abertura do turno ativo
-    const cashSales = sales
+    // Filtrar vendas pertinentes ao turno ativo
+    const activeSales = sales.filter(s => {
+      if (s.status === 'cancelled') return false;
+      if (sessionStartTime > 0 && new Date(s.date).getTime() < sessionStartTime) return false;
+      return true;
+    });
+
+    // Vendas efetivamente quitadas/pagas no turno
+    const paidSales = activeSales.filter(s => s.status === 'completed' && s.paymentStatus !== 'pendente_retirada');
+
+    // Vendas por método de pagamento (respeitando paidMethod caso tenha sido pago na retirada)
+    const cashSales = paidSales
+      .filter(s => (s.paidMethod || s.paymentMethod) === 'dinheiro')
+      .reduce((acc, s) => acc + s.total, 0);
+
+    const debitoSales = paidSales
+      .filter(s => (s.paidMethod || s.paymentMethod) === 'debito')
+      .reduce((acc, s) => acc + s.total, 0);
+
+    const creditoSales = paidSales
+      .filter(s => (s.paidMethod || s.paymentMethod) === 'credito')
+      .reduce((acc, s) => acc + s.total, 0);
+
+    const pixSales = paidSales
+      .filter(s => (s.paidMethod || s.paymentMethod) === 'pix')
+      .reduce((acc, s) => acc + s.total, 0);
+
+    const ifoodSales = paidSales
       .filter(s => {
-        if (s.status !== 'completed' || s.paymentMethod !== 'dinheiro') return false;
-        if (sessionStartTime > 0 && new Date(s.date).getTime() < sessionStartTime) return false;
-        return true;
+        const m = s.paidMethod || s.paymentMethod;
+        return m === 'ifood_online' || m === 'ifood_entrega' || s.channel === 'ifood';
       })
+      .reduce((acc, s) => acc + s.total, 0);
+
+    const fiadoSales = activeSales
+      .filter(s => (s.paidMethod || s.paymentMethod) === 'fiado_vip')
+      .reduce((acc, s) => acc + s.total, 0);
+
+    const consumoSales = activeSales
+      .filter(s => (s.paidMethod || s.paymentMethod) === 'consumo_funcionario')
+      .reduce((acc, s) => acc + s.total, 0);
+
+    const pendingPickupSales = activeSales
+      .filter(s => s.paymentStatus === 'pendente_retirada')
       .reduce((acc, s) => acc + s.total, 0);
 
     const suprimentos = movements
@@ -462,13 +529,35 @@ export default function CaixaPage() {
       .reduce((acc, m) => acc + m.amount, 0);
 
     const expectedInDrawer = initial + cashSales + suprimentos - sangrias;
+    const expectedCardsAndPix = debitoSales + creditoSales + pixSales;
+    const expectedTotalRegister = expectedInDrawer + expectedCardsAndPix;
+    const expectedTotalTurno = cashSales + debitoSales + creditoSales + pixSales + ifoodSales + fiadoSales + consumoSales;
+
+    const countDebito = paidSales.filter(s => (s.paidMethod || s.paymentMethod) === 'debito').length;
+    const countCredito = paidSales.filter(s => (s.paidMethod || s.paymentMethod) === 'credito').length;
+    const countPix = paidSales.filter(s => (s.paidMethod || s.paymentMethod) === 'pix').length;
+    const countCash = paidSales.filter(s => (s.paidMethod || s.paymentMethod) === 'dinheiro').length;
 
     return {
       initial,
       cashSales,
+      debitoSales,
+      creditoSales,
+      pixSales,
+      ifoodSales,
+      fiadoSales,
+      consumoSales,
+      pendingPickupSales,
       suprimentos,
       sangrias,
-      expectedInDrawer
+      expectedInDrawer,
+      expectedCardsAndPix,
+      expectedTotalRegister,
+      expectedTotalTurno,
+      countDebito,
+      countCredito,
+      countPix,
+      countCash
     };
   }, [activeCashSession, sales, movements, sessionStartTime]);
 
@@ -1198,12 +1287,49 @@ export default function CaixaPage() {
   const handleConfirmClose = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!operatorCloseInput.trim()) return;
-    const counted = Number(countedAmountInput) || 0;
-    const expected = sessionStats.expectedInDrawer;
-    const variance = counted - expected;
-    const operator = operatorCloseInput.trim();
 
-    await closeCaixa(counted, operator, expected);
+    const countedCash = Number(countedAmountInput) || 0;
+    const countedDebito = Number(countedDebitoInput) || 0;
+    const countedCredito = Number(countedCreditoInput) || 0;
+    const countedPix = Number(countedPixInput) || 0;
+
+    const expectedCash = sessionStats.expectedInDrawer;
+    const expectedDebito = sessionStats.debitoSales;
+    const expectedCredito = sessionStats.creditoSales;
+    const expectedPix = sessionStats.pixSales;
+
+    const varianceCash = countedCash - expectedCash;
+    const varianceDebito = countedDebito - expectedDebito;
+    const varianceCredito = countedCredito - expectedCredito;
+    const variancePix = countedPix - expectedPix;
+
+    const countedTotal = countedCash + countedDebito + countedCredito + countedPix;
+    const expectedTotal = sessionStats.expectedTotalRegister;
+    const varianceTotal = countedTotal - expectedTotal;
+
+    const operator = operatorCloseInput.trim();
+    const notes = closeNotesInput.trim();
+
+    const closingDetails = {
+      countedCash,
+      expectedCash,
+      varianceCash,
+      countedDebito,
+      expectedDebito,
+      varianceDebito,
+      countedCredito,
+      expectedCredito,
+      varianceCredito,
+      countedPix,
+      expectedPix,
+      variancePix,
+      countedTotal,
+      expectedTotal,
+      varianceTotal,
+      notes: notes || undefined
+    };
+
+    await closeCaixa(countedCash, operator, expectedCash, closingDetails);
 
     // Limpar rotas e seleções em memória ao fechar o turno
     setDeliveryRoutes([]);
@@ -1211,19 +1337,31 @@ export default function CaixaPage() {
     setSelectedOrdersForRoute([]);
     setSelectedOrdersForBatch([]);
 
-    // Alerta antifraude em caso de quebra ou sobra no fechamento cego
-    if (Math.abs(variance) > 0.05) {
+    // Alerta antifraude em caso de divergência relevante (> R$ 0.05) em qualquer modalidade
+    const hasDivergence = Math.abs(varianceCash) > 0.05 || 
+                          Math.abs(varianceDebito) > 0.05 || 
+                          Math.abs(varianceCredito) > 0.05 || 
+                          Math.abs(variancePix) > 0.05;
+
+    if (hasDivergence) {
+      const diffList: string[] = [];
+      if (Math.abs(varianceDebito) > 0.05) diffList.push(`Débito: ${varianceDebito > 0 ? '+' : ''}R$ ${varianceDebito.toFixed(2)} (Esp: R$ ${expectedDebito.toFixed(2)}, Inf: R$ ${countedDebito.toFixed(2)})`);
+      if (Math.abs(varianceCredito) > 0.05) diffList.push(`Crédito: ${varianceCredito > 0 ? '+' : ''}R$ ${varianceCredito.toFixed(2)} (Esp: R$ ${expectedCredito.toFixed(2)}, Inf: R$ ${countedCredito.toFixed(2)})`);
+      if (Math.abs(variancePix) > 0.05) diffList.push(`PIX: ${variancePix > 0 ? '+' : ''}R$ ${variancePix.toFixed(2)} (Esp: R$ ${expectedPix.toFixed(2)}, Inf: R$ ${countedPix.toFixed(2)})`);
+      if (Math.abs(varianceCash) > 0.05) diffList.push(`Gaveta: ${varianceCash > 0 ? '+' : ''}R$ ${varianceCash.toFixed(2)} (Esp: R$ ${expectedCash.toFixed(2)}, Inf: R$ ${countedCash.toFixed(2)})`);
+
       sendOwnerSecurityAlert({
         type: 'FECHAMENTO_CAIXA_DIVERGENCIA',
-        title: `Alerta de Fechamento Cego: ${variance < 0 ? 'Quebra de Caixa (Falta)' : 'Sobra de Caixa (Excedente)'}`,
-        message: `O operador ${operator} encerrou o turno com divergência de ${variance < 0 ? `- R$ ${Math.abs(variance).toFixed(2)} (Falta)` : `+ R$ ${variance.toFixed(2)} (Sobra)`}. Esperado pelo sistema: R$ ${expected.toFixed(2)} | Contado fisicamente: R$ ${counted.toFixed(2)}.`,
+        title: `Alerta de Fechamento de Caixa: ${varianceTotal < 0 ? 'Quebra de Caixa (Falta)' : 'Sobra / Divergência de Caixa'}`,
+        message: `O operador ${operator} encerrou o turno com divergência total de ${varianceTotal < 0 ? `- R$ ${Math.abs(varianceTotal).toFixed(2)} (Falta)` : `+ R$ ${varianceTotal.toFixed(2)} (Sobra)`}. Detalhamento: ${diffList.join(' | ')}.${notes ? ` Observação: ${notes}` : ''}`,
         operator,
-        amount: Math.abs(variance),
+        amount: Math.abs(varianceTotal),
         details: {
           operador: operator,
-          esperado: expected,
-          contado: counted,
-          divergencia: variance,
+          esperadoTotal: expectedTotal,
+          contadoTotal: countedTotal,
+          divergenciaTotal: varianceTotal,
+          detalhes: closingDetails,
           sessaoId: activeCashSession?.id
         }
       });
@@ -1234,15 +1372,34 @@ export default function CaixaPage() {
       cashSales: sessionStats.cashSales,
       suprimentos: sessionStats.suprimentos,
       sangrias: sessionStats.sangrias,
-      expectedInDrawer: expected,
-      countedCash: counted,
-      variance,
+      expectedInDrawer: expectedCash,
+      countedCash,
+      varianceCash,
+      expectedDebito,
+      countedDebito,
+      varianceDebito,
+      expectedCredito,
+      countedCredito,
+      varianceCredito,
+      expectedPix,
+      countedPix,
+      variancePix,
+      expectedTotal,
+      countedTotal,
+      varianceTotal,
+      variance: varianceCash,
       operator,
+      notes,
       date: new Date().toISOString()
     });
 
     setShowCloseModal(false);
+    setShowQuickCheckModal(false);
     setCountedAmountInput('');
+    setCountedDebitoInput('');
+    setCountedCreditoInput('');
+    setCountedPixInput('');
+    setCloseNotesInput('');
     setOperatorCloseInput('');
   };
 
@@ -1369,20 +1526,46 @@ export default function CaixaPage() {
             </button>
 
             {isOpen ? (
-              <button 
-                onClick={() => {
-                  setCountedAmountInput('');
-                  setDenominations({
-                    bill100: 0, bill50: 0, bill20: 0, bill10: 0, bill5: 0, bill2: 0,
-                    coin1: 0, coin050: 0, coin025: 0, coin010: 0, coin005: 0
-                  });
-                  setUsePhysicalCalc(true);
-                  setShowCloseModal(true);
-                }}
-                className="px-5 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/30 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-sm"
-              >
-                <Lock size={16} /> Fechar Caixa (Cego)
-              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setCountedAmountInput('');
+                    setCountedDebitoInput('');
+                    setCountedCreditoInput('');
+                    setCountedPixInput('');
+                    setCloseNotesInput('');
+                    setOperatorCloseInput(activeCashSession?.openedBy || '');
+                    setShowQuickCheckModal(true);
+                  }}
+                  className="px-4 py-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-xs sm:text-sm shadow-md"
+                  title="Conferir se os valores das maquininhas de cartão batem com o sistema sem encerrar o caixa"
+                >
+                  <Calculator size={16} className="text-blue-400" /> Conferir Maquininhas
+                </button>
+
+                <button 
+                  type="button"
+                  onClick={() => {
+                    setCountedAmountInput('');
+                    setCountedDebitoInput('');
+                    setCountedCreditoInput('');
+                    setCountedPixInput('');
+                    setCloseNotesInput('');
+                    setOperatorCloseInput(activeCashSession?.openedBy || '');
+                    setDenominations({
+                      bill100: 0, bill50: 0, bill20: 0, bill10: 0, bill5: 0, bill2: 0,
+                      coin1: 0, coin050: 0, coin025: 0, coin010: 0, coin005: 0
+                    });
+                    setUsePhysicalCalc(true);
+                    setShowCloseModal(true);
+                  }}
+                  className="px-4 sm:px-5 py-3 bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-xs sm:text-sm shadow-md"
+                  title="Iniciar fechamento do turno com conferência detalhada de cartões e gaveta"
+                >
+                  <Lock size={16} /> Fechar Caixa & Conferência
+                </button>
+              </div>
             ) : (
               <button 
                 onClick={() => setShowOpenModal(true)}
@@ -1470,175 +1653,542 @@ export default function CaixaPage() {
           </div>
         )}
 
-        {/* Modal de Fechamento Cego */}
-        {showCloseModal && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-xl w-full shadow-2xl animate-fade-in max-h-[92vh] flex flex-col">
-              <div className="flex justify-between items-start mb-2">
-                <h2 className="text-2xl font-bold text-white flex items-center gap-2">
-                  <Lock className="text-red-400" /> Fechamento Cego de Turno
-                </h2>
-                <button
-                  type="button"
-                  onClick={() => setShowCloseModal(false)}
-                  className="p-1 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-              <p className="text-slate-400 text-xs mb-4">
-                Conte o dinheiro físico da gaveta. O sistema fará a conferência da quebra ou sobra apenas após a confirmação.
-              </p>
+        {/* Modal de Fechamento & Conferência do Caixa e Maquininhas */}
+        {(showCloseModal || showQuickCheckModal) && (() => {
+          const numDebito = parseFloat(countedDebitoInput) || 0;
+          const numCredito = parseFloat(countedCreditoInput) || 0;
+          const numPix = parseFloat(countedPixInput) || 0;
+          const numCash = parseFloat(countedAmountInput) || 0;
 
-              {/* Toggle de Métodos de Contagem */}
-              <div className="flex gap-2 p-1 bg-slate-950 rounded-xl border border-slate-800 mb-4 text-xs font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setUsePhysicalCalc(true)}
-                  className={`flex-1 py-2 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
-                    usePhysicalCalc ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  🧮 Calculadora de Cédulas & Moedas
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setUsePhysicalCalc(false)}
-                  className={`flex-1 py-2 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
-                    !usePhysicalCalc ? 'bg-red-500/20 text-red-300 border border-red-500/30' : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  🔢 Digitar Total Direto
-                </button>
-              </div>
+          const diffDebito = numDebito - sessionStats.debitoSales;
+          const diffCredito = numCredito - sessionStats.creditoSales;
+          const diffPix = numPix - sessionStats.pixSales;
+          const diffCash = numCash - sessionStats.expectedInDrawer;
 
-              <form onSubmit={handleConfirmClose} className="space-y-4 overflow-y-auto pr-1 flex-1">
-                {usePhysicalCalc ? (
-                  <div className="space-y-4 bg-slate-950/60 p-4 rounded-2xl border border-slate-800">
-                    <div>
-                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
-                        💵 Cédulas Físicas:
-                      </span>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {[
-                          { key: 'bill100', label: 'R$ 100', mult: 100 },
-                          { key: 'bill50', label: 'R$ 50', mult: 50 },
-                          { key: 'bill20', label: 'R$ 20', mult: 20 },
-                          { key: 'bill10', label: 'R$ 10', mult: 10 },
-                          { key: 'bill5', label: 'R$ 5', mult: 5 },
-                          { key: 'bill2', label: 'R$ 2', mult: 2 }
-                        ].map(c => (
-                          <div key={c.key} className="bg-slate-900/90 border border-slate-800 p-2 rounded-xl flex items-center justify-between">
-                            <div>
-                              <span className="text-xs font-bold text-white block">{c.label}</span>
-                              <span className="text-[10px] text-slate-500 font-mono">
-                                = R$ {(denominations[c.key as keyof typeof denominations] * c.mult).toFixed(2)}
-                              </span>
-                            </div>
-                            <input
-                              type="number"
-                              min="0"
-                              value={denominations[c.key as keyof typeof denominations] || ''}
-                              onChange={e => updateDenomination(c.key as keyof typeof denominations, parseInt(e.target.value) || 0)}
-                              placeholder="0"
-                              className="w-14 bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-center font-mono text-sm text-white font-bold outline-none focus:border-red-500"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+          const totalCounted = numDebito + numCredito + numPix + numCash;
+          const totalExpected = sessionStats.expectedTotalRegister;
+          const totalDiff = totalCounted - totalExpected;
 
-                    <div>
-                      <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-2">
-                        🪙 Moedas:
-                      </span>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {[
-                          { key: 'coin1', label: 'R$ 1,00', mult: 1 },
-                          { key: 'coin050', label: 'R$ 0,50', mult: 0.50 },
-                          { key: 'coin025', label: 'R$ 0,25', mult: 0.25 },
-                          { key: 'coin010', label: 'R$ 0,10', mult: 0.10 },
-                          { key: 'coin005', label: 'R$ 0,05', mult: 0.05 }
-                        ].map(m => (
-                          <div key={m.key} className="bg-slate-900/90 border border-slate-800 p-2 rounded-xl flex items-center justify-between">
-                            <div>
-                              <span className="text-xs font-bold text-white block">{m.label}</span>
-                              <span className="text-[10px] text-slate-500 font-mono">
-                                = R$ {(denominations[m.key as keyof typeof denominations] * m.mult).toFixed(2)}
-                              </span>
-                            </div>
-                            <input
-                              type="number"
-                              min="0"
-                              value={denominations[m.key as keyof typeof denominations] || ''}
-                              onChange={e => updateDenomination(m.key as keyof typeof denominations, parseInt(e.target.value) || 0)}
-                              placeholder="0"
-                              className="w-14 bg-slate-950 border border-slate-700 rounded-lg p-1.5 text-center font-mono text-sm text-white font-bold outline-none focus:border-red-500"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
+          const isAllCorrect = 
+            Math.abs(diffDebito) < 0.01 && 
+            Math.abs(diffCredito) < 0.01 && 
+            Math.abs(diffPix) < 0.01 && 
+            Math.abs(diffCash) < 0.01;
 
-                {/* Box de Total Contado */}
-                <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 flex items-center justify-between">
+          const hasAnyInput = countedDebitoInput !== '' || countedCreditoInput !== '' || countedPixInput !== '' || countedAmountInput !== '';
+
+          return (
+            <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+              <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 sm:p-7 max-w-3xl w-full shadow-2xl animate-fade-in max-h-[94vh] flex flex-col my-auto">
+                {/* Cabeçalho */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800 shrink-0">
                   <div>
-                    <label className="block text-slate-400 font-bold text-xs">Total Físico em Espécie na Gaveta</label>
-                    <span className="text-[10px] text-slate-500">Valor que você está declarando estar presente</span>
+                    <h2 className="text-xl sm:text-2xl font-black text-white flex items-center gap-2.5">
+                      {showQuickCheckModal ? (
+                        <span className="p-2 rounded-xl bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                          <Calculator size={20} />
+                        </span>
+                      ) : (
+                        <span className="p-2 rounded-xl bg-red-500/20 text-red-400 border border-red-500/30">
+                          <Lock size={20} />
+                        </span>
+                      )}
+                      {showQuickCheckModal ? 'Conferência Parcial de Maquininhas' : 'Fechamento & Conferência do Caixa'}
+                    </h2>
+                    <p className="text-slate-400 text-xs mt-0.5">
+                      {showQuickCheckModal
+                        ? 'Verifique se os valores das maquininhas e dinheiro batem com o sistema sem fechar o caixa.'
+                        : 'Informe os totais apurados nas maquininhas e na gaveta. O sistema valida a soma automaticamente.'}
+                    </p>
                   </div>
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-xs text-slate-400 font-mono">R$</span>
-                    {usePhysicalCalc ? (
-                      <span className="text-2xl font-mono font-black text-emerald-400">
-                        {Number(countedAmountInput || 0).toFixed(2)}
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCountedDebitoInput(sessionStats.debitoSales > 0 ? sessionStats.debitoSales.toFixed(2) : '0.00');
+                        setCountedCreditoInput(sessionStats.creditoSales > 0 ? sessionStats.creditoSales.toFixed(2) : '0.00');
+                        setCountedPixInput(sessionStats.pixSales > 0 ? sessionStats.pixSales.toFixed(2) : '0.00');
+                        setCountedAmountInput(sessionStats.expectedInDrawer > 0 ? sessionStats.expectedInDrawer.toFixed(2) : '0.00');
+                      }}
+                      className="px-3 py-1.5 bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+                      title="Preencher automaticamente com os valores registrados no sistema para conferência rápida"
+                    >
+                      <Sparkles size={14} /> Auto-Preencher Sistema
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCountedDebitoInput('');
+                        setCountedCreditoInput('');
+                        setCountedPixInput('');
+                        setCountedAmountInput('');
+                        setDenominations({
+                          bill100: 0, bill50: 0, bill20: 0, bill10: 0, bill5: 0, bill2: 0,
+                          coin1: 0, coin050: 0, coin025: 0, coin010: 0, coin005: 0
+                        });
+                      }}
+                      className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded-xl text-xs font-semibold transition-all cursor-pointer"
+                      title="Limpar todos os campos digitados"
+                    >
+                      <RotateCcw size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowCloseModal(false);
+                        setShowQuickCheckModal(false);
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors cursor-pointer ml-1"
+                    >
+                      <X size={18} />
+                    </button>
+                  </div>
+                </div>
+
+                {/* PAINEL CENTRAL DE VERIFICAÇÃO EM TEMPO REAL: A SOMA DO CAIXA */}
+                <div className="py-3 shrink-0">
+                  {hasAnyInput && isAllCorrect ? (
+                    <div className="p-4 rounded-2xl bg-emerald-950/60 border border-emerald-500/50 flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg shadow-emerald-950/30 animate-fade-in">
+                      <div className="flex items-center gap-3">
+                        <div className="w-11 h-11 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center border border-emerald-500/40 shrink-0">
+                          <CheckCircle2 size={26} />
+                        </div>
+                        <div>
+                          <span className="font-black text-emerald-300 text-sm sm:text-base flex items-center gap-2">
+                            🎉 TUDO CORRETO! CAIXA 100% BATIDO
+                          </span>
+                          <span className="text-[11px] text-emerald-400/90 block">
+                            Todas as maquininhas de cartão, PIX e o saldo da gaveta conferem com o sistema sem divergências.
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-right font-mono shrink-0 bg-slate-900/80 px-4 py-2 rounded-xl border border-emerald-500/30">
+                        <span className="text-[10px] text-emerald-400 font-bold uppercase tracking-wider block">Total Conferido</span>
+                        <span className="text-xl font-black text-emerald-300">R$ {totalExpected.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  ) : hasAnyInput && !isAllCorrect ? (
+                    <div className={`p-4 rounded-2xl border flex flex-col sm:flex-row items-center justify-between gap-3 shadow-lg animate-fade-in ${
+                      totalDiff < 0 ? 'bg-rose-950/40 border-rose-500/50 shadow-rose-950/20' : 'bg-amber-950/40 border-amber-500/50 shadow-amber-950/20'
+                    }`}>
+                      <div className="flex items-center gap-3">
+                        <div className={`w-11 h-11 rounded-2xl flex items-center justify-center border shrink-0 ${
+                          totalDiff < 0 ? 'bg-rose-500/20 text-rose-400 border-rose-500/40' : 'bg-amber-500/20 text-amber-400 border-amber-500/40'
+                        }`}>
+                          <AlertOctagon size={24} />
+                        </div>
+                        <div>
+                          <span className={`font-black text-sm sm:text-base flex items-center gap-2 ${totalDiff < 0 ? 'text-rose-300' : 'text-amber-300'}`}>
+                            {totalDiff < 0 ? '⚠️ DIVERGÊNCIA: QUEBRA DE CAIXA (FALTA)' : '💡 DIVERGÊNCIA: SOBRA DE CAIXA'}
+                          </span>
+                          <span className="text-[11px] text-slate-300 block">
+                            Esperado pelo sistema: <strong className="text-white">R$ {totalExpected.toFixed(2)}</strong> | Informado: <strong className="text-white">R$ {totalCounted.toFixed(2)}</strong>
+                          </span>
+                        </div>
+                      </div>
+                      <div className="text-right font-mono shrink-0 bg-slate-900/80 px-4 py-2 rounded-xl border border-slate-800">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider block">Diferença Geral</span>
+                        <span className={`text-xl font-black ${totalDiff < 0 ? 'text-rose-400' : 'text-amber-400'}`}>
+                          {totalDiff >= 0 ? '+' : ''} R$ {totalDiff.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-3.5 rounded-2xl bg-slate-950/80 border border-slate-800 flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2 text-slate-400">
+                        <Coins size={16} className="text-amber-400" />
+                        <span>Preencha os valores apurados abaixo para validação instantânea da soma.</span>
+                      </div>
+                      <div className="text-right font-mono">
+                        <span className="text-slate-500 text-[10px] block">Esperado pelo Sistema</span>
+                        <span className="text-sm font-bold text-slate-200">R$ {totalExpected.toFixed(2)}</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Formulário com Scroll Suave */}
+                <form onSubmit={handleConfirmClose} className="space-y-4 overflow-y-auto pr-1 flex-1">
+                  
+                  {/* SEÇÃO 1: MAQUININHAS DE CARTÃO & PIX */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                        <CreditCard size={14} className="text-blue-400" /> 1. Maquininhas de Cartão & Pagamentos Digitais
                       </span>
-                    ) : (
+                      <span className="text-[10px] text-slate-500">
+                        Total esperado: R$ {sessionStats.expectedCardsAndPix.toFixed(2)}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      
+                      {/* Cartão de Débito */}
+                      <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 flex flex-col justify-between hover:border-slate-700 transition-colors">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-extrabold text-blue-400 flex items-center gap-1">
+                              💳 Cartão Débito
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {sessionStats.countDebito} {sessionStats.countDebito === 1 ? 'venda' : 'vendas'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 mb-2">
+                            Sistema: <strong className="font-mono text-slate-200">R$ {sessionStats.debitoSales.toFixed(2)}</strong>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Fita da Maquininha (R$)</label>
+                          <input 
+                            type="number" 
+                            step="0.01" 
+                            value={countedDebitoInput}
+                            onChange={e => setCountedDebitoInput(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 font-mono text-base font-bold text-blue-300 outline-none focus:border-blue-500 transition-colors placeholder:text-slate-600"
+                            placeholder="0.00"
+                          />
+                          {countedDebitoInput !== '' && (
+                            <div className="mt-1.5 text-right font-mono text-[11px]">
+                              {Math.abs(diffDebito) < 0.01 ? (
+                                <span className="text-emerald-400 font-bold">✅ Bateu (R$ 0,00)</span>
+                              ) : diffDebito > 0 ? (
+                                <span className="text-blue-400 font-bold">⬆️ Sobra +R$ {diffDebito.toFixed(2)}</span>
+                              ) : (
+                                <span className="text-rose-400 font-bold">⬇️ Falta -R$ {Math.abs(diffDebito).toFixed(2)}</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Cartão de Crédito */}
+                      <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 flex flex-col justify-between hover:border-slate-700 transition-colors">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-extrabold text-purple-400 flex items-center gap-1">
+                              💳 Cartão Crédito
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {sessionStats.countCredito} {sessionStats.countCredito === 1 ? 'venda' : 'vendas'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 mb-2">
+                            Sistema: <strong className="font-mono text-slate-200">R$ {sessionStats.creditoSales.toFixed(2)}</strong>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Fita da Maquininha (R$)</label>
+                          <input 
+                            type="number" 
+                            step="0.01" 
+                            value={countedCreditoInput}
+                            onChange={e => setCountedCreditoInput(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 font-mono text-base font-bold text-purple-300 outline-none focus:border-purple-500 transition-colors placeholder:text-slate-600"
+                            placeholder="0.00"
+                          />
+                          {countedCreditoInput !== '' && (
+                            <div className="mt-1.5 text-right font-mono text-[11px]">
+                              {Math.abs(diffCredito) < 0.01 ? (
+                                <span className="text-emerald-400 font-bold">✅ Bateu (R$ 0,00)</span>
+                              ) : diffCredito > 0 ? (
+                                <span className="text-purple-400 font-bold">⬆️ Sobra +R$ {diffCredito.toFixed(2)}</span>
+                              ) : (
+                                <span className="text-rose-400 font-bold">⬇️ Falta -R$ {Math.abs(diffCredito).toFixed(2)}</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* PIX Direto */}
+                      <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-3.5 flex flex-col justify-between hover:border-slate-700 transition-colors">
+                        <div>
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-extrabold text-emerald-400 flex items-center gap-1">
+                              <Zap size={14} /> PIX Direto
+                            </span>
+                            <span className="text-[10px] text-slate-500 font-mono">
+                              {sessionStats.countPix} {sessionStats.countPix === 1 ? 'venda' : 'vendas'}
+                            </span>
+                          </div>
+                          <div className="text-[11px] text-slate-400 mb-2">
+                            Sistema: <strong className="font-mono text-slate-200">R$ {sessionStats.pixSales.toFixed(2)}</strong>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Extrato / Fita PIX (R$)</label>
+                          <input 
+                            type="number" 
+                            step="0.01" 
+                            value={countedPixInput}
+                            onChange={e => setCountedPixInput(e.target.value)}
+                            className="w-full bg-slate-900 border border-slate-700 rounded-xl p-2 font-mono text-base font-bold text-emerald-300 outline-none focus:border-emerald-500 transition-colors placeholder:text-slate-600"
+                            placeholder="0.00"
+                          />
+                          {countedPixInput !== '' && (
+                            <div className="mt-1.5 text-right font-mono text-[11px]">
+                              {Math.abs(diffPix) < 0.01 ? (
+                                <span className="text-emerald-400 font-bold">✅ Bateu (R$ 0,00)</span>
+                              ) : diffPix > 0 ? (
+                                <span className="text-emerald-400 font-bold">⬆️ Sobra +R$ {diffPix.toFixed(2)}</span>
+                              ) : (
+                                <span className="text-rose-400 font-bold">⬇️ Falta -R$ {Math.abs(diffPix).toFixed(2)}</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                    </div>
+                  </div>
+
+                  {/* SEÇÃO 2: DINHEIRO FÍSICO NA GAVETA */}
+                  <div className="space-y-2 bg-slate-950/70 p-4 rounded-2xl border border-slate-800">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <span className="text-[11px] font-black uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                          <Banknote size={14} className="text-amber-400" /> 2. Dinheiro em Espécie na Gaveta
+                        </span>
+                        <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-0.5">
+                          <span>Fundo: R$ {sessionStats.initial.toFixed(2)}</span>
+                          <span>• Vendas: +R$ {sessionStats.cashSales.toFixed(2)}</span>
+                          {sessionStats.suprimentos > 0 && <span className="text-blue-400">• Sup: +R$ {sessionStats.suprimentos.toFixed(2)}</span>}
+                          {sessionStats.sangrias > 0 && <span className="text-rose-400">• Sang: -R$ {sessionStats.sangrias.toFixed(2)}</span>}
+                        </div>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="text-[10px] uppercase text-slate-500 block">Saldo Esperado na Gaveta</span>
+                        <span className="text-base font-black font-mono text-amber-300">
+                          R$ {sessionStats.expectedInDrawer.toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Toggle Calculadora vs Valor Direto */}
+                    <div className="flex gap-2 p-1 bg-slate-900 rounded-xl border border-slate-800 text-xs font-semibold">
+                      <button
+                        type="button"
+                        onClick={() => setUsePhysicalCalc(true)}
+                        className={`flex-1 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                          usePhysicalCalc ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        🧮 Calculadora de Cédulas & Moedas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUsePhysicalCalc(false)}
+                        className={`flex-1 py-1.5 rounded-lg transition-colors cursor-pointer flex items-center justify-center gap-1.5 ${
+                          !usePhysicalCalc ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        🔢 Digitar Total Direto
+                      </button>
+                    </div>
+
+                    {usePhysicalCalc && (
+                      <div className="space-y-3 pt-2">
+                        {/* Cédulas */}
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                            💵 Cédulas:
+                          </span>
+                          <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
+                            {[
+                              { key: 'bill100', label: 'R$ 100', mult: 100 },
+                              { key: 'bill50', label: 'R$ 50', mult: 50 },
+                              { key: 'bill20', label: 'R$ 20', mult: 20 },
+                              { key: 'bill10', label: 'R$ 10', mult: 10 },
+                              { key: 'bill5', label: 'R$ 5', mult: 5 },
+                              { key: 'bill2', label: 'R$ 2', mult: 2 }
+                            ].map(c => (
+                              <div key={c.key} className="bg-slate-900 border border-slate-800 p-1.5 rounded-xl text-center">
+                                <span className="text-[11px] font-bold text-white block">{c.label}</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={denominations[c.key as keyof typeof denominations] || ''}
+                                  onChange={e => updateDenomination(c.key as keyof typeof denominations, parseInt(e.target.value) || 0)}
+                                  placeholder="0"
+                                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-1 text-center font-mono text-sm text-white font-bold outline-none focus:border-amber-500 mt-1"
+                                />
+                                <span className="text-[9px] text-slate-500 font-mono block mt-0.5">
+                                  R$ {(denominations[c.key as keyof typeof denominations] * c.mult).toFixed(0)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Moedas */}
+                        <div>
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1.5">
+                            🪙 Moedas:
+                          </span>
+                          <div className="grid grid-cols-3 sm:grid-cols-5 gap-2">
+                            {[
+                              { key: 'coin1', label: 'R$ 1,00', mult: 1 },
+                              { key: 'coin050', label: 'R$ 0,50', mult: 0.50 },
+                              { key: 'coin025', label: 'R$ 0,25', mult: 0.25 },
+                              { key: 'coin010', label: 'R$ 0,10', mult: 0.10 },
+                              { key: 'coin005', label: 'R$ 0,05', mult: 0.05 }
+                            ].map(m => (
+                              <div key={m.key} className="bg-slate-900 border border-slate-800 p-1.5 rounded-xl text-center">
+                                <span className="text-[11px] font-bold text-white block">{m.label}</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={denominations[m.key as keyof typeof denominations] || ''}
+                                  onChange={e => updateDenomination(m.key as keyof typeof denominations, parseInt(e.target.value) || 0)}
+                                  placeholder="0"
+                                  className="w-full bg-slate-950 border border-slate-700 rounded-lg p-1 text-center font-mono text-sm text-white font-bold outline-none focus:border-amber-500 mt-1"
+                                />
+                                <span className="text-[9px] text-slate-500 font-mono block mt-0.5">
+                                  R$ {(denominations[m.key as keyof typeof denominations] * m.mult).toFixed(2)}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Total Físico da Gaveta */}
+                    <div className="p-3 bg-slate-900 rounded-xl border border-slate-800 flex items-center justify-between mt-2">
+                      <div>
+                        <span className="text-xs font-bold text-slate-300 block">Total Declarado em Dinheiro Físico</span>
+                        <span className="text-[10px] text-slate-500">Valor presente na gaveta</span>
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-baseline gap-1">
+                          <span className="text-xs text-slate-400 font-mono">R$</span>
+                          {usePhysicalCalc ? (
+                            <span className="text-xl font-mono font-black text-amber-300">
+                              {Number(countedAmountInput || 0).toFixed(2)}
+                            </span>
+                          ) : (
+                            <input 
+                              type="number" 
+                              step="0.01" 
+                              required 
+                              value={countedAmountInput}
+                              onChange={e => setCountedAmountInput(e.target.value)}
+                              className="w-32 bg-slate-950 border border-slate-700 rounded-xl p-1.5 text-right text-amber-300 font-mono text-lg font-bold outline-none focus:border-amber-500"
+                              placeholder="0.00"
+                            />
+                          )}
+                        </div>
+
+                        {countedAmountInput !== '' && (
+                          <div className="font-mono text-xs pl-2 border-l border-slate-800">
+                            {Math.abs(diffCash) < 0.01 ? (
+                              <span className="text-emerald-400 font-bold">✅ Bateu</span>
+                            ) : diffCash > 0 ? (
+                              <span className="text-amber-400 font-bold">⬆️ +R$ {diffCash.toFixed(2)}</span>
+                            ) : (
+                              <span className="text-rose-400 font-bold">⬇️ -R$ {Math.abs(diffCash).toFixed(2)}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* SEÇÃO 3: INFORMATIVO DE OUTROS CANAIS DO TURNO */}
+                  <div className="p-3 bg-slate-950/40 rounded-2xl border border-slate-800/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+                    <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                      📋 Outros Canais do Turno (Informativo):
+                    </span>
+                    <div className="flex flex-wrap items-center gap-4 text-slate-300 font-mono">
+                      <span>iFood (Online/Entrega): <strong className="text-red-400">R$ {sessionStats.ifoodSales.toFixed(2)}</strong></span>
+                      {(sessionStats.fiadoSales > 0 || sessionStats.consumoSales > 0) && (
+                        <span>Fiado / Equipe: <strong className="text-purple-400">R$ {(sessionStats.fiadoSales + sessionStats.consumoSales).toFixed(2)}</strong></span>
+                      )}
+                      {sessionStats.pendingPickupSales > 0 && (
+                        <span>Retiradas Pendentes: <strong className="text-amber-400">R$ {sessionStats.pendingPickupSales.toFixed(2)}</strong></span>
+                      )}
+                      <span>Total Geral Vendido: <strong className="text-emerald-400">R$ {sessionStats.expectedTotalTurno.toFixed(2)}</strong></span>
+                    </div>
+                  </div>
+
+                  {/* SEÇÃO 4: DADOS DO OPERADOR E OBSERVAÇÕES */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    <div>
+                      <label className="block text-slate-300 font-bold text-xs mb-1">
+                        Operador Responsável <span className="text-rose-400">*</span>
+                      </label>
                       <input 
-                        type="number" 
-                        step="0.01" 
+                        type="text" 
                         required 
-                        value={countedAmountInput}
-                        onChange={e => setCountedAmountInput(e.target.value)}
-                        className="w-32 bg-slate-900 border border-slate-700 rounded-xl p-2 text-right text-emerald-400 font-mono text-xl font-bold outline-none focus:border-red-500"
-                        placeholder="0.00"
+                        value={operatorCloseInput}
+                        onChange={e => setOperatorCloseInput(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-white outline-none focus:border-red-500 text-sm"
+                        placeholder="Nome do operador"
                       />
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-300 font-bold text-xs mb-1">
+                        Observações do Fechamento (Opcional)
+                      </label>
+                      <input 
+                        type="text" 
+                        value={closeNotesInput}
+                        onChange={e => setCloseNotesInput(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-white outline-none focus:border-red-500 text-sm"
+                        placeholder="Ex: R$ 0,50 de centavos arredondados na maquininha Stone"
+                      />
+                    </div>
+                  </div>
+
+                  {/* BOTÕES DE AÇÃO DO RODAPÉ */}
+                  <div className="flex gap-3 pt-3 border-t border-slate-800">
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        setShowCloseModal(false);
+                        setShowQuickCheckModal(false);
+                      }}
+                      className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold transition-all cursor-pointer text-sm"
+                    >
+                      {showQuickCheckModal ? 'Fechar Conferência' : 'Voltar ao Caixa'}
+                    </button>
+
+                    {showQuickCheckModal ? (
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          setShowQuickCheckModal(false);
+                          setShowCloseModal(true);
+                        }}
+                        className="flex-1 py-3 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-bold shadow-lg shadow-red-600/30 transition-all cursor-pointer text-sm flex items-center justify-center gap-2"
+                      >
+                        <Lock size={16} /> Prosseguir para Fechamento Oficial
+                      </button>
+                    ) : (
+                      <button 
+                        type="submit" 
+                        className={`flex-1 py-3.5 rounded-2xl font-black text-sm shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 ${
+                          isAllCorrect
+                            ? 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
+                            : 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30'
+                        }`}
+                      >
+                        <Lock size={16} /> Encerrar Turno e Apurar Caixa
+                      </button>
                     )}
                   </div>
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 font-bold text-xs mb-1">Operador Responsável pelo Fechamento</label>
-                  <input 
-                    type="text" 
-                    required 
-                    value={operatorCloseInput}
-                    onChange={e => setOperatorCloseInput(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-2xl p-3 text-white outline-none focus:border-red-500 text-sm"
-                    placeholder="Seu nome"
-                  />
-                </div>
-
-                <div className="flex gap-3 pt-2">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowCloseModal(false)}
-                    className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-2xl font-bold transition-all cursor-pointer text-sm"
-                  >
-                    Voltar
-                  </button>
-                  <button 
-                    type="submit" 
-                    className="flex-1 py-3.5 bg-red-600 hover:bg-red-500 text-white rounded-2xl font-bold shadow-lg shadow-red-600/30 transition-all cursor-pointer text-sm"
-                  >
-                    Encerrar e Apurar Caixa
-                  </button>
-                </div>
-              </form>
+                </form>
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Modal de Apagar Caixa de Teste e Expurgar Vendas */}
         {showDeleteTestModal && (
@@ -4985,66 +5535,134 @@ export default function CaixaPage() {
           </div>
         )}
 
-        {/* COMPROVANTE DE FECHAMENTO DE CAIXA (APURAÇÃO DE QUEBRA/SOBRA) */}
+        {/* COMPROVANTE DE FECHAMENTO DE CAIXA COM CONFERÊNCIA DE MAQUININHAS */}
         {closingSummary && (
-          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl animate-fade-in space-y-5">
+          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-md z-50 flex items-center justify-center p-4 overflow-y-auto">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-lg w-full shadow-2xl animate-fade-in space-y-4 my-auto">
               <div className="text-center space-y-1">
-                <div className="w-14 h-14 mx-auto bg-blue-500/10 text-blue-400 rounded-2xl flex items-center justify-center mb-2 border border-blue-500/20">
+                <div className="w-14 h-14 mx-auto bg-emerald-500/10 text-emerald-400 rounded-2xl flex items-center justify-center mb-1 border border-emerald-500/20">
                   <Receipt size={28} />
                 </div>
-                <h3 className="text-2xl font-black text-white">Fechamento de Caixa</h3>
-                <p className="text-xs text-slate-400">Apuração de Turno — {new Date(closingSummary.date).toLocaleString('pt-BR')}</p>
+                <h3 className="text-2xl font-black text-white">Fechamento do Turno</h3>
+                <p className="text-xs text-slate-400">Apuração de Caixa — {new Date(closingSummary.date).toLocaleString('pt-BR')}</p>
                 <p className="text-xs text-amber-400 font-bold uppercase">Operador: {closingSummary.operator}</p>
+                {closingSummary.notes && (
+                  <p className="text-[11px] text-slate-400 italic bg-slate-950/60 p-1.5 rounded-lg border border-slate-800">
+                    Obs: {closingSummary.notes}
+                  </p>
+                )}
               </div>
 
-              {/* Extrato da Conferência */}
-              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-2 text-xs">
-                <div className="flex justify-between text-slate-400">
-                  <span>Troco Inicial:</span>
-                  <span className="font-mono text-slate-200">R$ {closingSummary.initial.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Vendas em Dinheiro:</span>
-                  <span className="font-mono text-emerald-400 font-bold">+ R$ {closingSummary.cashSales.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Suprimentos na Gaveta:</span>
-                  <span className="font-mono text-blue-400">+ R$ {closingSummary.suprimentos.toFixed(2)}</span>
-                </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Sangrias Realizadas:</span>
-                  <span className="font-mono text-red-400">- R$ {closingSummary.sangrias.toFixed(2)}</span>
-                </div>
-
-                <div className="pt-2 border-t border-slate-800 space-y-1.5 font-bold">
-                  <div className="flex justify-between text-slate-300">
-                    <span>Esperado pelo Sistema:</span>
-                    <span className="font-mono text-white">R$ {closingSummary.expectedInDrawer.toFixed(2)}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-300">
-                    <span>Informado pelo Operador:</span>
-                    <span className="font-mono text-white">R$ {closingSummary.countedCash.toFixed(2)}</span>
+              {/* Demonstrativo por Modalidade */}
+              <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 space-y-3 text-xs">
+                <div className="flex items-center justify-between pb-1.5 border-b border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                  <span>Modalidade</span>
+                  <div className="flex gap-4 font-mono">
+                    <span>Sistema</span>
+                    <span>Informado</span>
+                    <span>Dif</span>
                   </div>
                 </div>
 
-                {/* Apuração da Diferença */}
-                <div className={`mt-3 p-3 rounded-xl border text-center font-black text-sm flex flex-col items-center gap-1 ${
-                  Math.abs(closingSummary.variance) < 0.01
+                {/* Linha Cartão Débito */}
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-blue-400">💳 Cartão Débito:</span>
+                  <div className="flex gap-4 font-mono">
+                    <span className="text-slate-400">R$ {closingSummary.expectedDebito.toFixed(2)}</span>
+                    <span className="text-white font-bold">R$ {closingSummary.countedDebito.toFixed(2)}</span>
+                    <span className={Math.abs(closingSummary.varianceDebito) < 0.01 ? 'text-emerald-400' : closingSummary.varianceDebito < 0 ? 'text-rose-400 font-bold' : 'text-blue-400 font-bold'}>
+                      {closingSummary.varianceDebito >= 0 ? '+' : ''}{closingSummary.varianceDebito.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Linha Cartão Crédito */}
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-purple-400">💳 Cartão Crédito:</span>
+                  <div className="flex gap-4 font-mono">
+                    <span className="text-slate-400">R$ {closingSummary.expectedCredito.toFixed(2)}</span>
+                    <span className="text-white font-bold">R$ {closingSummary.countedCredito.toFixed(2)}</span>
+                    <span className={Math.abs(closingSummary.varianceCredito) < 0.01 ? 'text-emerald-400' : closingSummary.varianceCredito < 0 ? 'text-rose-400 font-bold' : 'text-purple-400 font-bold'}>
+                      {closingSummary.varianceCredito >= 0 ? '+' : ''}{closingSummary.varianceCredito.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Linha PIX */}
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-emerald-400">⚡ PIX Direto:</span>
+                  <div className="flex gap-4 font-mono">
+                    <span className="text-slate-400">R$ {closingSummary.expectedPix.toFixed(2)}</span>
+                    <span className="text-white font-bold">R$ {closingSummary.countedPix.toFixed(2)}</span>
+                    <span className={Math.abs(closingSummary.variancePix) < 0.01 ? 'text-emerald-400' : closingSummary.variancePix < 0 ? 'text-rose-400 font-bold' : 'text-emerald-400 font-bold'}>
+                      {closingSummary.variancePix >= 0 ? '+' : ''}{closingSummary.variancePix.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Linha Dinheiro na Gaveta */}
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold text-amber-400">💵 Gaveta (Espécie):</span>
+                  <div className="flex gap-4 font-mono">
+                    <span className="text-slate-400">R$ {closingSummary.expectedInDrawer.toFixed(2)}</span>
+                    <span className="text-white font-bold">R$ {closingSummary.countedCash.toFixed(2)}</span>
+                    <span className={Math.abs(closingSummary.varianceCash) < 0.01 ? 'text-emerald-400' : closingSummary.varianceCash < 0 ? 'text-rose-400 font-bold' : 'text-amber-400 font-bold'}>
+                      {closingSummary.varianceCash >= 0 ? '+' : ''}{closingSummary.varianceCash.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Totalização Geral */}
+                <div className="pt-2.5 border-t border-slate-800 flex items-center justify-between font-bold text-sm">
+                  <span className="text-white">TOTAL GERAL:</span>
+                  <div className="flex gap-4 font-mono">
+                    <span className="text-slate-400">R$ {closingSummary.expectedTotal.toFixed(2)}</span>
+                    <span className="text-white font-black">R$ {closingSummary.countedTotal.toFixed(2)}</span>
+                    <span className={Math.abs(closingSummary.varianceTotal) < 0.01 ? 'text-emerald-400 font-black' : closingSummary.varianceTotal < 0 ? 'text-rose-400 font-black' : 'text-amber-400 font-black'}>
+                      {closingSummary.varianceTotal >= 0 ? '+' : ''}{closingSummary.varianceTotal.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Detalhe de Movimentações da Gaveta */}
+                <div className="pt-2 border-t border-slate-800/80 text-[10px] text-slate-500 font-mono space-y-0.5">
+                  <div className="flex justify-between">
+                    <span>Fundo Inicial: R$ {closingSummary.initial.toFixed(2)}</span>
+                    <span>Vendas Dinheiro: +R$ {closingSummary.cashSales.toFixed(2)}</span>
+                  </div>
+                  {(closingSummary.suprimentos > 0 || closingSummary.sangrias > 0) && (
+                    <div className="flex justify-between">
+                      <span>Suprimentos: +R$ {closingSummary.suprimentos.toFixed(2)}</span>
+                      <span>Sangrias: -R$ {closingSummary.sangrias.toFixed(2)}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Status da Validação */}
+                <div className={`mt-3 p-3 rounded-xl border text-center font-black text-xs sm:text-sm flex flex-col items-center gap-0.5 ${
+                  Math.abs(closingSummary.varianceTotal) < 0.01 && 
+                  Math.abs(closingSummary.varianceDebito) < 0.01 && 
+                  Math.abs(closingSummary.varianceCredito) < 0.01 && 
+                  Math.abs(closingSummary.variancePix) < 0.01 && 
+                  Math.abs(closingSummary.varianceCash) < 0.01
                     ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-400'
-                    : closingSummary.variance < 0
-                      ? 'bg-red-950/40 border-red-500/40 text-red-400'
+                    : closingSummary.varianceTotal < 0
+                      ? 'bg-rose-950/40 border-rose-500/40 text-rose-400'
                       : 'bg-amber-950/40 border-amber-500/40 text-amber-400'
                 }`}>
-                  <span className="text-[10px] uppercase tracking-wider">
-                    {Math.abs(closingSummary.variance) < 0.01 
-                      ? '✅ Caixa Bateu Perfeitamente!' 
-                      : closingSummary.variance < 0 
-                        ? '⚠️ Quebra de Caixa (Falta)' 
-                        : '💡 Sobra de Caixa'}
+                  <span className="uppercase tracking-wider">
+                    {Math.abs(closingSummary.varianceTotal) < 0.01 && 
+                     Math.abs(closingSummary.varianceDebito) < 0.01 && 
+                     Math.abs(closingSummary.varianceCredito) < 0.01 && 
+                     Math.abs(closingSummary.variancePix) < 0.01 && 
+                     Math.abs(closingSummary.varianceCash) < 0.01
+                      ? '🎉 Caixa & Maquininhas Bateram 100%!' 
+                      : closingSummary.varianceTotal < 0 
+                        ? '⚠️ Quebra / Falta Identificada no Fechamento' 
+                        : '💡 Sobra Identificada no Fechamento'}
                   </span>
-                  <span className="text-xl font-mono">
-                    {closingSummary.variance >= 0 ? '+' : ''} R$ {closingSummary.variance.toFixed(2)}
+                  <span className="text-base font-mono">
+                    Diferença Geral: {closingSummary.varianceTotal >= 0 ? '+' : ''} R$ {closingSummary.varianceTotal.toFixed(2)}
                   </span>
                 </div>
               </div>
@@ -5061,38 +5679,66 @@ export default function CaixaPage() {
                         <div class="font-bold text-sm">FECHAMENTO DE CAIXA</div>
                         <div class="text-[10px]">${new Date(closingSummary.date).toLocaleString('pt-BR')}</div>
                         <div class="text-[10px] font-bold">OPERADOR: ${closingSummary.operator.toUpperCase()}</div>
+                        ${closingSummary.notes ? `<div class="text-[9px] italic">OBS: ${closingSummary.notes.toUpperCase()}</div>` : ''}
                         <div class="border-b my-1"></div>
                       </div>
                       <div class="space-y-1 text-xs">
+                        <div class="font-bold text-[10px] uppercase text-center">CONFERÊNCIA DE MAQUININHAS & GAVETA</div>
                         <div class="flex justify-between">
+                          <span>Cartão Débito:</span>
+                          <span class="font-bold">R$ ${closingSummary.countedDebito.toFixed(2)} (Esp: R$ ${closingSummary.expectedDebito.toFixed(2)})</span>
+                        </div>
+                        <div class="flex justify-between">
+                          <span>Cartão Crédito:</span>
+                          <span class="font-bold">R$ ${closingSummary.countedCredito.toFixed(2)} (Esp: R$ ${closingSummary.expectedCredito.toFixed(2)})</span>
+                        </div>
+                        <div class="flex justify-between">
+                          <span>PIX Direto:</span>
+                          <span class="font-bold">R$ ${closingSummary.countedPix.toFixed(2)} (Esp: R$ ${closingSummary.expectedPix.toFixed(2)})</span>
+                        </div>
+                        <div class="flex justify-between">
+                          <span>Dinheiro (Gaveta):</span>
+                          <span class="font-bold">R$ ${closingSummary.countedCash.toFixed(2)} (Esp: R$ ${closingSummary.expectedInDrawer.toFixed(2)})</span>
+                        </div>
+                        
+                        <div class="border-b my-1"></div>
+                        <div class="font-bold text-[10px] uppercase text-center">MOVIMENTAÇÃO DA GAVETA</div>
+                        <div class="flex justify-between text-[10px]">
                           <span>Troco Inicial:</span>
-                          <span class="font-bold">R$ ${closingSummary.initial.toFixed(2)}</span>
+                          <span>R$ ${closingSummary.initial.toFixed(2)}</span>
                         </div>
-                        <div class="flex justify-between">
-                          <span>Vendas em Dinheiro:</span>
-                          <span class="font-bold">+ R$ ${closingSummary.cashSales.toFixed(2)}</span>
+                        <div class="flex justify-between text-[10px]">
+                          <span>Vendas Dinheiro:</span>
+                          <span>+ R$ ${closingSummary.cashSales.toFixed(2)}</span>
                         </div>
-                        <div class="flex justify-between">
-                          <span>Suprimentos na Gaveta:</span>
-                          <span class="font-bold">+ R$ ${closingSummary.suprimentos.toFixed(2)}</span>
-                        </div>
-                        <div class="flex justify-between">
-                          <span>Sangrias Realizadas:</span>
-                          <span class="font-bold">- R$ ${closingSummary.sangrias.toFixed(2)}</span>
-                        </div>
+                        ${closingSummary.suprimentos > 0 ? `
+                        <div class="flex justify-between text-[10px]">
+                          <span>Suprimentos:</span>
+                          <span>+ R$ ${closingSummary.suprimentos.toFixed(2)}</span>
+                        </div>` : ''}
+                        ${closingSummary.sangrias > 0 ? `
+                        <div class="flex justify-between text-[10px]">
+                          <span>Sangrias:</span>
+                          <span>- R$ ${closingSummary.sangrias.toFixed(2)}</span>
+                        </div>` : ''}
+
                         <div class="border-b my-1"></div>
                         <div class="flex justify-between font-bold">
-                          <span>Esperado na Gaveta:</span>
-                          <span>R$ ${closingSummary.expectedInDrawer.toFixed(2)}</span>
+                          <span>Total Esperado:</span>
+                          <span>R$ ${closingSummary.expectedTotal.toFixed(2)}</span>
                         </div>
                         <div class="flex justify-between font-bold">
-                          <span>Contado na Gaveta:</span>
-                          <span>R$ ${closingSummary.countedCash.toFixed(2)}</span>
+                          <span>Total Informado:</span>
+                          <span>R$ ${closingSummary.countedTotal.toFixed(2)}</span>
                         </div>
+                        <div class="flex justify-between font-bold">
+                          <span>Diferença Geral:</span>
+                          <span>${closingSummary.varianceTotal >= 0 ? '+' : ''} R$ ${closingSummary.varianceTotal.toFixed(2)}</span>
+                        </div>
+
                         <div class="border-b my-1"></div>
-                        <div class="text-center p-2 font-bold ${Math.abs(closingSummary.variance) < 0.01 ? '' : 'bg-black text-white'}">
-                          <div class="text-xs uppercase">${Math.abs(closingSummary.variance) < 0.01 ? 'CAIXA BATEU PERFEITAMENTE' : closingSummary.variance < 0 ? 'QUEBRA DE CAIXA (FALTA)' : 'SOBRA DE CAIXA'}</div>
-                          <div class="text-base">${closingSummary.variance >= 0 ? '+' : ''} R$ ${closingSummary.variance.toFixed(2)}</div>
+                        <div class="text-center p-1.5 font-bold ${Math.abs(closingSummary.varianceTotal) < 0.01 ? '' : 'bg-black text-white'}">
+                          <div class="text-xs uppercase">${Math.abs(closingSummary.varianceTotal) < 0.01 ? 'CAIXA BATEU 100% CORRETO' : closingSummary.varianceTotal < 0 ? 'QUEBRA DE CAIXA (FALTA)' : 'SOBRA DE CAIXA'}</div>
                         </div>
                         <div class="border-b my-1"></div>
                         <div class="text-center text-[10px] pt-4">
