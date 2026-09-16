@@ -15,4 +15,5 @@ export * from './Skeleton';
 export * from './Switch';
 export * from './Textarea';
 export * from './Toolbar';
+export * from './FilterBar';
 export * from './Toast';

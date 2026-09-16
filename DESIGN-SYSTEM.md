@@ -45,6 +45,10 @@ Não sobrepor Dialog customizado/portais à gaveta nativa: ficam atrás da top l
 - Sucesso, falha, carregamento e duplo envio sem usar banco de produção.
 - Typecheck, testes e build; validação visual e de interação é separada.
 
+## Consulta de fornecedores
+
+FilterBar combina busca, filtros nativos, contagem e Limpar filtros. Usa navegação Tab normal, sem role toolbar. A tela de Fornecedores é a primeira adoção: busca diferida sem distinção de acentos, categoria combinada, cabeçalho e estados vazios padronizados. Cadastro, exclusão e histórico mantêm a lógica anterior. Os testes supplier-filters cobrem a busca e combinação dos filtros; não substituem testes de navegador.
+
 ## Pendências
 
-Este bloco não conclui P0: faltam adoção de toasts nos módulos, FilterBar, navegação, glossário completo e testes de interface automatizados. Testes de negócio e build não certificam aparência ou acessibilidade.
+Este bloco não conclui P0: faltam adoção de toasts nos módulos, navegação, glossário completo e testes de interface automatizados. Testes de negócio e build não certificam aparência ou acessibilidade.

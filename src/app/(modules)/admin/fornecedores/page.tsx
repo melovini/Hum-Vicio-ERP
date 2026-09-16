@@ -1,17 +1,27 @@
 'use client';
-import { useState } from 'react';
-import { useInventory, Supplier } from '@/lib/store';
+import { useDeferredValue, useState } from 'react';
+import { useInventory } from '@/lib/store';
 import { 
-  ArrowLeft, Truck, Plus, Phone, MessageSquare, Trash2, 
-  History, DollarSign, Calendar, Package, Search, ExternalLink 
+  ArrowLeft, Truck, Plus, MessageSquare, Trash2, History
 } from 'lucide-react';
 import Link from 'next/link';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Button } from '@/components/ui/Button';
+import { FilterBar } from '@/components/ui/FilterBar';
+import { Select } from '@/components/ui/Select';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { filterSuppliers } from '@/lib/supplier-filters';
 
 export default function FornecedoresPage() {
   const { suppliers, addSupplier, removeSupplier, purchaseRecords, isLoaded } = useInventory();
   
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+
+  const [categoryFilter, setCategoryFilter] = useState('');
+  const deferredSearch = useDeferredValue(searchTerm);
+  const clearFilters = () => { setSearchTerm(''); setCategoryFilter(''); };
 
   // Form
   const [name, setName] = useState('');
@@ -22,8 +32,11 @@ export default function FornecedoresPage() {
 
   if (!isLoaded) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-500 border-t-transparent"></div>
+      <div role="status" aria-label="Carregando fornecedores" className="mx-auto max-w-6xl space-y-6 p-6">
+        <span className="sr-only">Carregando fornecedores…</span>
+        <Skeleton className="h-12 w-64" />
+        <Skeleton className="h-28 w-full" />
+        <div className="grid gap-4 md:grid-cols-3">{[0, 1, 2].map((id) => <Skeleton key={id} className="h-48" />)}</div>
       </div>
     );
   }
@@ -47,37 +60,22 @@ export default function FornecedoresPage() {
     setShowAddModal(false);
   };
 
-  const filteredSuppliers = suppliers.filter(s => 
-    s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    s.category.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    s.contactName.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredSuppliers = filterSuppliers(suppliers, deferredSearch, categoryFilter);
+  const categories = [...new Set(suppliers.map((supplier) => supplier.category).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const filtersActive = Boolean(searchTerm || categoryFilter);
 
   return (
     <div className="min-h-screen relative p-4 md:p-8 overflow-hidden">
       <div className="absolute top-0 right-0 w-[50%] h-[50%] bg-blue-500/10 blur-[150px] pointer-events-none" />
       
       <div className="max-w-6xl mx-auto relative z-10">
-        <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-10">
-          <div className="flex items-center gap-6">
-            <Link href="/" className="p-4 glass-card rounded-2xl hover:bg-slate-800 transition-colors">
-              <ArrowLeft size={24} className="text-slate-300" />
-            </Link>
-            <div>
-              <div className="inline-flex items-center gap-2 text-blue-400 font-bold mb-1">
-                <Truck size={20} /> Módulo Gestão Executiva
-              </div>
-              <h1 className="text-4xl font-extrabold text-white tracking-tight">Gestão de Fornecedores</h1>
-            </div>
-          </div>
-
-          <button 
-            onClick={() => setShowAddModal(true)}
-            className="px-6 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl font-bold flex items-center gap-2 shadow-[0_0_20px_rgba(37,99,235,0.3)] transition-all cursor-pointer"
-          >
-            <Plus size={20} /> Cadastrar Fornecedor
-          </button>
-        </header>
+        <Link href="/" className="mb-5 inline-flex min-h-10 items-center gap-2 text-sm text-text-secondary hover:text-text-primary">
+          <ArrowLeft size={18} aria-hidden="true" /> Voltar à central
+        </Link>
+        <PageHeader title="Fornecedores" eyebrow="Gestão"
+          description="Encontre parceiros e consulte o histórico de compras."
+          className="mb-6"
+          actions={<Button onClick={() => setShowAddModal(true)} leadingIcon={<Plus size={18} aria-hidden="true" />}>Cadastrar fornecedor</Button>} />
 
         {/* Modal de Cadastro */}
         {showAddModal && (
@@ -172,19 +170,27 @@ export default function FornecedoresPage() {
           </div>
         )}
 
-        {/* Barra de Busca */}
-        <div className="mb-8">
-          <div className="relative">
-            <Search size={20} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-500" />
-            <input 
-              type="text"
-              placeholder="Buscar por fornecedor, categoria ou vendedor..."
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              className="w-full bg-slate-900/60 border border-slate-800 rounded-2xl py-4 pl-12 pr-4 text-white outline-none focus:border-blue-500 text-sm"
-            />
-          </div>
+        <div className="mb-6">
+          <FilterBar search={searchTerm} onSearchChange={setSearchTerm} searchLabel="Buscar fornecedores"
+            placeholder="Nome, categoria ou vendedor" resultCount={filteredSuppliers.length}
+            totalCount={suppliers.length} active={filtersActive} onClear={clearFilters}>
+            <div className="space-y-1.5 sm:w-56">
+              <label htmlFor="supplier-category-filter" className="block text-sm font-medium text-text-secondary">Categoria</label>
+              <Select id="supplier-category-filter" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+                <option value="">Todas as categorias</option>
+                {categories.map((value) => <option key={value} value={value}>{value || 'Sem categoria'}</option>)}
+              </Select>
+            </div>
+          </FilterBar>
         </div>
+        {filteredSuppliers.length === 0 && <div className="mb-8">
+          <EmptyState title={suppliers.length ? 'Nenhum fornecedor encontrado' : 'Seu primeiro fornecedor'}
+            description={suppliers.length ? 'Altere a busca ou limpe os filtros para consultar outros parceiros.' : 'Cadastre um parceiro para organizar contatos e vincular suas compras.'}
+            icon={<Truck aria-hidden="true" />}
+            action={suppliers.length
+              ? <Button variant="secondary" onClick={clearFilters}>Limpar filtros</Button>
+              : <Button onClick={() => setShowAddModal(true)}>Cadastrar fornecedor</Button>} />
+        </div>}
 
         {/* Grid de Fornecedores */}
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
@@ -195,7 +201,7 @@ export default function FornecedoresPage() {
               : null;
 
             return (
-              <div key={sup.id} className="glass-card rounded-3xl p-6 border border-slate-800 hover:border-slate-700 transition-all flex flex-col justify-between">
+              <div key={sup.id} className="rounded-card bg-surface-card p-6 border border-border-default hover:border-border-strong transition-colors flex flex-col justify-between">
                 <div>
                   <div className="flex justify-between items-start mb-3">
                     <span className="px-3 py-1 bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-bold rounded-lg uppercase">
@@ -208,7 +214,7 @@ export default function FornecedoresPage() {
                         }
                       }}
                       className="text-slate-600 hover:text-red-400 p-1 cursor-pointer"
-                      title="Excluir"
+                      aria-label={`Excluir fornecedor ${sup.name}`} title="Excluir fornecedor"
                     >
                       <Trash2 size={16} />
                     </button>
@@ -259,12 +265,12 @@ export default function FornecedoresPage() {
               <table className="w-full text-left text-sm">
                 <thead>
                   <tr className="border-b border-slate-800 text-slate-400 uppercase text-xs">
-                    <th className="pb-3 font-semibold">Data</th>
-                    <th className="pb-3 font-semibold">Insumo</th>
-                    <th className="pb-3 font-semibold">Fornecedor</th>
-                    <th className="pb-3 font-semibold text-right">Qtd</th>
-                    <th className="pb-3 font-semibold text-right">Custo Unitário</th>
-                    <th className="pb-3 font-semibold text-right">Total Pago</th>
+                    <th scope="col" className="pb-3 font-semibold">Data</th>
+                    <th scope="col" className="pb-3 font-semibold">Insumo</th>
+                    <th scope="col" className="pb-3 font-semibold">Fornecedor</th>
+                    <th scope="col" className="pb-3 font-semibold text-right">Qtd</th>
+                    <th scope="col" className="pb-3 font-semibold text-right">Custo Unitário</th>
+                    <th scope="col" className="pb-3 font-semibold text-right">Total Pago</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60">

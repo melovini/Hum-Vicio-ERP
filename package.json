@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-test-isolation=none tests/security.test.mjs tests/parked-orders-and-architecture.test.mjs",
+    "test": "node --test --experimental-test-isolation=none tests/security.test.mjs tests/parked-orders-and-architecture.test.mjs tests/supplier-filters.test.mjs",
     "test:security": "node --test --experimental-test-isolation=none tests/security.test.mjs",
     "security:setup": "node --env-file=.env.local scripts/security-setup.mjs",
     "backup": "node --env-file=.env.local scripts/backup.mjs",
