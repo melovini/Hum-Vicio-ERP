@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useSyncExternalStore } from 'react';
 import { createClient } from '@/lib/supabase';
 import { 
   isTrainingModeActive, setTrainingModeActive, resetTrainingSandbox,
@@ -241,214 +241,776 @@ function getSavedFixedExpensesConfig(): FixedExpensesConfig {
 
 export type ConnectionStatus = 'connected' | 'server_unreachable' | 'offline';
 
-export function useInventory() {
-  const [items, setItems] = useState<InventoryItem[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [isLoaded, setIsLoaded] = useState(false);
-  
-  // Custos Fixos Mensais (DRE & Ponto de Equilíbrio)
-  const [fixedExpensesConfig, setFixedExpensesConfigState] = useState<FixedExpensesConfig>(DEFAULT_FIXED_EXPENSES);
+export interface GlobalStoreState {
+  items: InventoryItem[];
+  products: Product[];
+  isLoaded: boolean;
+  fixedExpensesConfig: FixedExpensesConfig;
+  isOpen: boolean;
+  activeCashSession: CashSession | null;
+  allCashSessions: CashSession[];
+  targetPrepMinutes: number;
+  sales: Sale[];
+  movements: CashMovement[];
+  isTrainingMode: boolean;
+  offlineQueueCount: number;
+  offlineSalesList: Sale[];
+  isOnline: boolean;
+  connectionStatus: ConnectionStatus;
+  lastServerSync: string | null;
+  wasteRecords: WasteRecord[];
+  checklist: DailyChecklist | null;
+  allChecklists: DailyChecklist[];
+  suppliers: Supplier[];
+  purchaseRecords: PurchaseRecord[];
+  stockAudits: StockAudit[];
+  subRecipes: SubRecipeItem[];
+  auditLogs: AuditLog[];
+  lastFetchedAt: number;
+}
 
-  useEffect(() => {
-    setFixedExpensesConfigState(getSavedFixedExpensesConfig());
-  }, []);
+const serverInitialState: GlobalStoreState = {
+  items: [],
+  products: [],
+  isLoaded: false,
+  fixedExpensesConfig: DEFAULT_FIXED_EXPENSES,
+  isOpen: false,
+  activeCashSession: null,
+  allCashSessions: [],
+  targetPrepMinutes: 20,
+  sales: [],
+  movements: [],
+  isTrainingMode: false,
+  offlineQueueCount: 0,
+  offlineSalesList: [],
+  isOnline: true,
+  connectionStatus: 'connected',
+  lastServerSync: null,
+  wasteRecords: [],
+  checklist: null,
+  allChecklists: [],
+  suppliers: [],
+  purchaseRecords: [],
+  stockAudits: [],
+  subRecipes: [],
+  auditLogs: [],
+  lastFetchedAt: 0
+};
 
-  const saveFixedExpensesConfig = (config: FixedExpensesConfig) => {
-    setFixedExpensesConfigState(config);
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem('hum_vicio_fixed_expenses_config', JSON.stringify(config));
-      } catch {}
-    }
-    const totalMonthly = config.rent + config.electricity + config.gas + config.water + config.internetSoftware + config.payroll + config.proLabore + config.otherExpenses;
-    addAuditLog(
-      'CUSTOS_FIXOS_CONFIG',
-      `Custos Fixos Mensais atualizados. Total mensal: R$ ${totalMonthly.toFixed(2)} (${config.operatingDaysPerMonth} dias úteis).`,
-      'Gestor / Admin'
-    );
-  };
+function getInitialGlobalState(): GlobalStoreState {
+  let cachedItems: InventoryItem[] = [];
+  let cachedProducts: Product[] = [];
+  let cachedSales: Sale[] = [];
+  let cachedSessions: CashSession[] = [];
+  let cachedLogs: AuditLog[] = [];
+  let lastSync: string | null = null;
+  let hasCache = false;
 
-  // Caixa State (em Nuvem)
-  const [isOpen, setIsOpen] = useState(false);
-  const [activeCashSession, setActiveCashSession] = useState<CashSession | null>(null);
-  const [allCashSessions, setAllCashSessions] = useState<CashSession[]>([]);
-
-  // Tempo Médio Dinâmico de Preparo (KDS / Balcão)
-  const [targetPrepMinutes, setTargetPrepMinutesState] = useState<number>(20);
-
-  useEffect(() => {
-    const saved = typeof window !== 'undefined' ? localStorage.getItem('hum_vicio_target_prep_minutes') : null;
-    if (saved) setTargetPrepMinutesState(Number(saved) || 20);
-  }, []);
-
-  const setTargetPrepMinutes = (mins: number) => {
-    setTargetPrepMinutesState(mins);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('hum_vicio_target_prep_minutes', mins.toString());
-    }
-  };
-
-  const [sales, setSales] = useState<Sale[]>([]);
-  const [movements, setMovements] = useState<CashMovement[]>([]);
-
-  // Modo Treinamento (Sandbox Isolado - Frente 4.4)
-  const [isTrainingMode, setIsTrainingMode] = useState<boolean>(false);
-
-  useEffect(() => {
-    setIsTrainingMode(isTrainingModeActive());
-    const handleMode = (e: any) => {
-      const active = Boolean(e.detail?.active);
-      setIsTrainingMode(active);
-      if (active) {
-        const tSales = getTrainingSales();
-        if (tSales.length > 0) {
-          setSales(prev => [...tSales, ...prev.filter(p => !tSales.some(t => t.id === p.id))]);
-        }
-      }
-    };
-    window.addEventListener('hum_vicio_training_mode_changed', handleMode);
-    return () => window.removeEventListener('hum_vicio_training_mode_changed', handleMode);
-  }, []);
-
-  // Resiliência Offline & Fila de Sincronização (Quando o Banco de Dados Cai)
-  const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
-  const [offlineSalesList, setOfflineSalesList] = useState<Sale[]>([]);
-  const [isOnline, setIsOnline] = useState<boolean>(true);
-  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connected');
-  const [lastServerSync, setLastServerSync] = useState<string | null>(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('hum_vicio_last_server_sync') || null;
-    }
-    return null;
-  });
-
-  // Verificação ativa de comunicação efetiva com o servidor (diferenciando Wi-Fi de resposta da API)
-  const checkServerHealth = async (): Promise<ConnectionStatus> => {
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      setConnectionStatus('offline');
-      setIsOnline(false);
-      return 'offline';
-    }
-
+  if (typeof window !== 'undefined') {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3500);
-      const res = await fetch('/api/health', {
-        method: 'GET',
-        cache: 'no-store',
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-
-      if (res.ok) {
-        setConnectionStatus('connected');
-        setIsOnline(true);
-        const nowIso = new Date().toISOString();
-        setLastServerSync(nowIso);
-        try { localStorage.setItem('hum_vicio_last_server_sync', nowIso); } catch {}
-        return 'connected';
-      } else {
-        setConnectionStatus('server_unreachable');
-        setIsOnline(false);
-        return 'server_unreachable';
+      const sItems = localStorage.getItem('hum_vicio_cached_inventory');
+      if (sItems) {
+        cachedItems = JSON.parse(sItems);
+        if (Array.isArray(cachedItems) && cachedItems.length > 0) hasCache = true;
       }
-    } catch {
-      const status = typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable';
-      setConnectionStatus(status);
-      setIsOnline(false);
-      return status;
-    }
+    } catch {}
+    try {
+      const sProds = localStorage.getItem('hum_vicio_cached_products');
+      if (sProds) {
+        cachedProducts = JSON.parse(sProds);
+        if (Array.isArray(cachedProducts) && cachedProducts.length > 0) hasCache = true;
+      }
+    } catch {}
+    try {
+      const sSales = localStorage.getItem('hum_vicio_cached_sales');
+      if (sSales) {
+        cachedSales = JSON.parse(sSales);
+        if (Array.isArray(cachedSales) && cachedSales.length > 0) hasCache = true;
+      }
+    } catch {}
+    try {
+      const sSess = localStorage.getItem('hum_vicio_cached_sessions');
+      if (sSess) cachedSessions = JSON.parse(sSess);
+    } catch {}
+    try {
+      const sLogs = localStorage.getItem('hum_vicio_audit_logs');
+      if (sLogs) cachedLogs = JSON.parse(sLogs);
+    } catch {}
+    try {
+      lastSync = localStorage.getItem('hum_vicio_last_server_sync') || null;
+    } catch {}
+  }
+
+  const activeSession = cachedSessions.find(s => s.status === 'open') || null;
+
+  return {
+    items: cachedItems,
+    products: cachedProducts,
+    isLoaded: hasCache,
+    fixedExpensesConfig: getSavedFixedExpensesConfig(),
+    isOpen: !!activeSession,
+    activeCashSession: activeSession,
+    allCashSessions: cachedSessions,
+    targetPrepMinutes: 20,
+    sales: cachedSales,
+    movements: [],
+    isTrainingMode: false,
+    offlineQueueCount: 0,
+    offlineSalesList: [],
+    isOnline: true,
+    connectionStatus: 'connected',
+    lastServerSync: lastSync,
+    wasteRecords: [],
+    checklist: null,
+    allChecklists: [],
+    suppliers: [],
+    purchaseRecords: [],
+    stockAudits: [],
+    subRecipes: [],
+    auditLogs: cachedLogs,
+    lastFetchedAt: 0
   };
+}
 
-  // Monitor de Auto-Sincronização e Drenagem da Fila Offline
-  const syncOfflineQueueNow = async () => {
-    const res = await syncOfflineSalesQueue(supabase);
-    const queue = getOfflineSalesQueue();
-    setOfflineQueueCount(queue.length);
-    setOfflineSalesList(queue);
+let globalStore: GlobalStoreState = getInitialGlobalState();
+const storeListeners = new Set<() => void>();
 
-    if (res.syncedCount > 0 || res.errorsCount === 0) {
-      setConnectionStatus('connected');
-      setIsOnline(true);
-      const nowIso = new Date().toISOString();
-      setLastServerSync(nowIso);
-      try { localStorage.setItem('hum_vicio_last_server_sync', nowIso); } catch {}
+function notifyStoreUpdated() {
+  storeListeners.forEach(listener => {
+    try {
+      listener();
+    } catch {}
+  });
+}
 
-      // Atualizar status das vendas sincronizadas na memória e cache local
-      const queuedIds = new Set(queue.map(q => q.id));
-      setSales(prev => {
-        const updated = prev.map(s => {
-          if (!queuedIds.has(s.id) && (s.syncStatus === 'pending' || !s.isOfflineSynced)) {
-            return { ...s, syncStatus: 'synced' as const, isOfflineSynced: true };
-          }
-          return s;
+function updateGlobalStore(partial: Partial<GlobalStoreState> | ((prev: GlobalStoreState) => Partial<GlobalStoreState>)) {
+  const updates = typeof partial === 'function' ? partial(globalStore) : partial;
+  globalStore = { ...globalStore, ...updates };
+  notifyStoreUpdated();
+}
+
+let activeLoadPromise: Promise<void> | null = null;
+
+export async function executeParallelLoadData(supabaseClient: any): Promise<void> {
+  if (activeLoadPromise) {
+    return activeLoadPromise;
+  }
+
+  activeLoadPromise = (async () => {
+    try {
+      const today = new Date().toLocaleDateString('en-CA');
+
+      // Executa todas as 14 consultas em paralelo eliminando o gargalo sequencial
+      const [
+        invRes,
+        prodRes,
+        recRes,
+        salesRes,
+        saleItemsRes,
+        allSessRes,
+        movRes,
+        wasteRes,
+        checksRes,
+        supRes,
+        purchRes,
+        auditRes,
+        subRes,
+        logsRes
+      ] = await Promise.all([
+        supabaseClient.from('inventory').select('*').catch(() => ({ data: null })),
+        supabaseClient.from('products').select('*').catch(() => ({ data: null })),
+        supabaseClient.from('recipes').select('*').catch(() => ({ data: null })),
+        supabaseClient.from('sales').select('*').is('deleted_at', null).order('created_at', { ascending: false }).limit(80).catch(() => ({ data: null })),
+        supabaseClient.from('sale_items').select('*').not('sale_id', 'is', null).catch(() => ({ data: null })),
+        supabaseClient.from('cash_sessions').select('*').is('deleted_at', null).order('opened_at', { ascending: false }).catch(() => ({ data: null })),
+        supabaseClient.from('cash_movements').select('*').order('created_at', { ascending: false }).catch(() => ({ data: null })),
+        supabaseClient.from('waste_records').select('*').order('created_at', { ascending: false }).catch(() => ({ data: null })),
+        supabaseClient.from('kitchen_checklists').select('*').order('date', { ascending: false }).catch(() => ({ data: null })),
+        supabaseClient.from('suppliers').select('*').order('name', { ascending: true }).catch(() => ({ data: null })),
+        supabaseClient.from('purchase_records').select('*').order('created_at', { ascending: false }).catch(() => ({ data: null })),
+        supabaseClient.from('stock_audits').select('*').order('created_at', { ascending: false }).catch(() => ({ data: null })),
+        supabaseClient.from('sub_recipes').select('*').catch(() => ({ data: null })),
+        supabaseClient.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200).catch(() => ({ data: null }))
+      ]);
+
+      // 1. Processar Insumos
+      let mappedItems = globalStore.items;
+      if (invRes?.data) {
+        const minStockMap = getSavedMinStockMap();
+        const stationMap = getSavedStationMap();
+        mappedItems = (invRes.data as any[]).map(i => {
+          const customStation = (i.station || stationMap[i.id] || getDefaultStationForIngredient(i.name)) as KitchenStation;
+          return {
+            id: i.id, name: i.name, category: i.category, unit: i.unit, 
+            costPerUnit: Number(i.cost_per_unit) || 0, 
+            currentStock: Number(i.current_stock) || 0, 
+            minStock: i.min_stock !== undefined && i.min_stock !== null ? Number(i.min_stock) : minStockMap[i.id],
+            status: i.status,
+            isActive: i.is_active !== undefined ? i.is_active : true,
+            station: customStation
+          };
         });
         if (typeof window !== 'undefined') {
-          try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+          try { localStorage.setItem('hum_vicio_cached_inventory', JSON.stringify(mappedItems)); } catch {}
         }
-        return updated;
+      }
+
+      // 2. Processar Produtos e Fichas Técnicas
+      let mappedProducts = globalStore.products;
+      if (prodRes?.data) {
+        const recData = (recRes?.data as any[]) || [];
+        mappedProducts = (prodRes.data as any[]).map(p => ({
+          id: p.id, name: p.name, category: p.category, 
+          priceBalcao: Number(p.price_balcao) || 0, 
+          priceIfood: Number(p.price_ifood) || 0,
+          recipe: recData.filter(r => r.product_id === p.id).map(r => ({
+            ingredientId: r.ingredient_id,
+            quantity: Number(r.quantity) || 0
+          }))
+        }));
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem('hum_vicio_cached_products', JSON.stringify(mappedProducts)); } catch {}
+        }
+      }
+
+      // 3. Processar Vendas
+      let mappedSales = globalStore.sales;
+      if (salesRes?.data && salesRes.data.length > 0) {
+        const overrides = getSavedProductionOverrides();
+        const creditMap = getSavedCreditSalesMap();
+        const pickupMap = getSavedPickupPendingSalesMap();
+        let overridesCleaned = false;
+        const saleItemsData = (saleItemsRes?.data as any[]) || [];
+
+        const remoteSales: Sale[] = (salesRes.data as any[]).map(s => {
+          const override = overrides[s.id];
+          const creditInfo = creditMap[s.id] || {};
+          const pickupInfo = pickupMap[s.id] || {};
+          const prodStatus = (s.production_status || override?.status || 'em_producao') as ProductionStatus;
+          const prodStarted = s.production_started_at || override?.startedAt || s.created_at;
+
+          if (override && s.production_status) {
+            delete overrides[s.id];
+            overridesCleaned = true;
+          }
+
+          let parsedDiff: any = undefined;
+          let parsedIsModified = false;
+          if (s.delay_notes && typeof s.delay_notes === 'string' && s.delay_notes.includes('KITCHEN_DIFF')) {
+            try {
+              const parsed = JSON.parse(s.delay_notes);
+              if (parsed.tag === 'KITCHEN_DIFF') {
+                parsedDiff = parsed.orderDiff;
+                parsedIsModified = true;
+              }
+            } catch {}
+          }
+
+          const paymentStatus = pickupInfo.paymentStatus || s.payment_status || (s.payment_method === 'consumo_funcionario' || s.payment_method === 'fiado_vip' ? 'pendente_retirada' : 'pago');
+
+          return {
+            id: s.id, 
+            customerName: creditInfo.creditCustomerName || s.customer_name || 'Balcão',
+            orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
+            channel: s.channel, 
+            total: Number(s.total) || 0, 
+            paymentMethod: s.payment_method, 
+            paymentStatus,
+            paidAt: pickupInfo.paidAt || s.paid_at || undefined,
+            paidMethod: pickupInfo.paidMethod || s.paid_method || undefined,
+            isOfflineSynced: true,
+            date: s.created_at, 
+            status: s.status,
+            productionStatus: prodStatus,
+            productionStartedAt: prodStarted,
+            productionCompletedAt: s.production_completed_at || undefined,
+            productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
+            targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
+            delayReason: s.delay_reason || undefined,
+            delayNotes: s.delay_notes || undefined,
+            orderDiff: parsedDiff,
+            isModifiedInKitchen: parsedIsModified,
+            collaboratorId: creditInfo.collaboratorId || s.collaborator_id || undefined,
+            collaboratorName: creditInfo.collaboratorName || s.collaborator_name || undefined,
+            creditCustomerName: creditInfo.creditCustomerName || s.credit_customer_name || undefined,
+            creditDueDate: creditInfo.creditDueDate || s.credit_due_date || undefined,
+            creditNotes: creditInfo.creditNotes || s.credit_notes || undefined,
+            creditStatus: creditInfo.creditStatus || s.credit_status || (s.payment_method === 'consumo_funcionario' || s.payment_method === 'fiado_vip' ? 'pendente' : undefined),
+            creditPaidAt: creditInfo.creditPaidAt || s.credit_paid_at || undefined,
+            creditPaidMethod: creditInfo.creditPaidMethod || s.credit_paid_method || undefined,
+            items: saleItemsData.filter(i => i.sale_id === s.id).map(i => ({
+              id: i.id,
+              productId: i.product_id, 
+              productName: i.product_name, 
+              quantity: Number(i.quantity) || 0, 
+              unitPrice: Number(i.unit_price) || 0,
+              combo: i.combo || undefined,
+              notes: i.notes ? i.notes.trim().toUpperCase() : undefined,
+              additionals: Array.isArray(i.additionals) ? i.additionals : undefined
+            }))
+          };
+        });
+
+        const offlineQueue = getOfflineSalesQueue();
+        const unpersisted = offlineQueue.filter(oq => !remoteSales.some(ms => ms.id === oq.id));
+        mappedSales = [...unpersisted, ...remoteSales];
+
+        if (typeof window !== 'undefined') {
+          try { 
+            localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(remoteSales.slice(0, 100))); 
+            if (overridesCleaned) {
+              localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(overrides));
+            }
+          } catch {}
+        }
+      } else if (salesRes?.data && salesRes.data.length === 0) {
+        mappedSales = [];
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.removeItem('hum_vicio_cached_sales');
+            localStorage.removeItem('hum_vicio_prod_status_map');
+          } catch {}
+        }
+      }
+
+      // 4. Processar Sessões de Caixa
+      let mappedSessions: CashSession[] = globalStore.allCashSessions;
+      let openSession: CashSession | null = globalStore.activeCashSession;
+      let isOpenNow = globalStore.isOpen;
+      if (allSessRes?.data) {
+        mappedSessions = (allSessRes.data as any[]).map(s => ({
+          id: s.id,
+          status: s.status,
+          initialAmount: Number(s.initial_amount) || 0,
+          finalAmount: s.final_amount ? Number(s.final_amount) : undefined,
+          expectedAmount: s.expected_amount ? Number(s.expected_amount) : undefined,
+          varianceAmount: s.variance_amount ? Number(s.variance_amount) : undefined,
+          openedBy: s.opened_by,
+          closedBy: s.closed_by,
+          openedAt: s.opened_at,
+          closedAt: s.closed_at
+        }));
+        openSession = mappedSessions.find(s => s.status === 'open') || null;
+        isOpenNow = !!openSession;
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem('hum_vicio_cached_sessions', JSON.stringify(mappedSessions)); } catch {}
+        }
+      }
+
+      // 5. Processar Movimentações
+      let mappedMovements = globalStore.movements;
+      if (movRes?.data) {
+        mappedMovements = (movRes.data as any[]).map(m => ({
+          id: m.id,
+          type: m.type,
+          amount: Number(m.amount) || 0,
+          description: m.description,
+          date: m.created_at
+        }));
+      }
+
+      // 6. Processar Perdas
+      let mappedWaste = globalStore.wasteRecords;
+      if (wasteRes?.data) {
+        mappedWaste = (wasteRes.data as any[]).map(w => ({
+          id: w.id,
+          ingredientId: w.ingredient_id,
+          ingredientName: w.ingredient_name,
+          quantity: Number(w.quantity) || 0,
+          unit: w.unit,
+          costAtTime: Number(w.cost_at_time) || 0,
+          totalLoss: Number(w.total_loss) || 0,
+          reason: w.reason,
+          responsibleName: w.responsible_name,
+          createdAt: w.created_at
+        }));
+      }
+
+      // 7. Processar Checklists
+      let mappedChecklists = globalStore.allChecklists;
+      let activeChecklist = globalStore.checklist;
+      if (checksRes?.data) {
+        mappedChecklists = (checksRes.data as any[]).map(c => ({
+          id: c.id,
+          date: c.date,
+          tasks: c.tasks,
+          signedBy: c.signed_by
+        }));
+        const todayCheck = mappedChecklists.find(c => c.date === today);
+        activeChecklist = todayCheck || { id: '', date: today, tasks: defaultChecklistTasks };
+      } else if (!activeChecklist) {
+        activeChecklist = { id: '', date: today, tasks: defaultChecklistTasks };
+      }
+
+      // 8. Processar Fornecedores
+      let mappedSuppliers = globalStore.suppliers;
+      if (supRes?.data) {
+        mappedSuppliers = (supRes.data as any[]).map(s => ({
+          id: s.id,
+          name: s.name,
+          contactName: s.contact_name || '',
+          phone: s.phone || '',
+          category: s.category || 'Geral',
+          notes: s.notes || '',
+          createdAt: s.created_at
+        }));
+      }
+
+      // 9. Processar Histórico de Compras
+      let mappedPurchases = globalStore.purchaseRecords;
+      if (purchRes?.data) {
+        mappedPurchases = (purchRes.data as any[]).map(p => ({
+          id: p.id,
+          ingredientId: p.ingredient_id,
+          ingredientName: p.ingredient_name,
+          supplierId: p.supplier_id,
+          supplierName: p.supplier_name || 'Diversos',
+          quantity: Number(p.quantity) || 0,
+          unit: p.unit,
+          costPerUnit: Number(p.cost_per_unit) || 0,
+          totalCost: Number(p.total_cost) || 0,
+          createdAt: p.created_at
+        }));
+      }
+
+      // 10. Processar Auditorias de Estoque
+      let mappedAudits = globalStore.stockAudits;
+      if (auditRes?.data) {
+        mappedAudits = (auditRes.data as any[]).map(a => ({
+          id: a.id,
+          auditedBy: a.audited_by,
+          items: a.items || [],
+          totalVarianceCost: Number(a.total_variance_cost) || 0,
+          createdAt: a.created_at
+        }));
+      }
+
+      // 11. Processar Sub-Receitas
+      let mappedSubRecipes = globalStore.subRecipes;
+      if (subRes?.data) {
+        mappedSubRecipes = (subRes.data as any[]).map(s => ({
+          id: s.id,
+          parentIngredientId: s.parent_ingredient_id,
+          childIngredientId: s.child_ingredient_id,
+          quantity: Number(s.quantity) || 0
+        }));
+      }
+
+      // 12. Processar Logs de Auditoria
+      let mappedLogs = globalStore.auditLogs;
+      if (logsRes?.data && logsRes.data.length > 0) {
+        mappedLogs = (logsRes.data as any[]).map((l: any) => ({
+          id: l.id,
+          timestamp: l.created_at || l.timestamp,
+          action: l.action,
+          operator: l.operator || 'Sistema',
+          details: l.details || '',
+          oldValue: l.old_value,
+          newValue: l.new_value
+        }));
+      }
+
+      updateGlobalStore({
+        items: mappedItems,
+        products: mappedProducts,
+        sales: mappedSales,
+        allCashSessions: mappedSessions,
+        activeCashSession: openSession,
+        isOpen: isOpenNow,
+        movements: mappedMovements,
+        wasteRecords: mappedWaste,
+        allChecklists: mappedChecklists,
+        checklist: activeChecklist,
+        suppliers: mappedSuppliers,
+        purchaseRecords: mappedPurchases,
+        stockAudits: mappedAudits,
+        subRecipes: mappedSubRecipes,
+        auditLogs: mappedLogs,
+        isLoaded: true,
+        lastFetchedAt: Date.now()
       });
-    } else if (res.errorsCount > 0) {
-      setConnectionStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable');
+    } finally {
+      activeLoadPromise = null;
     }
-    return res;
+  })();
+
+  return activeLoadPromise;
+}
+
+// Poller em segundo plano singleton com contagem de referências
+let pollerCount = 0;
+let pollerTimer: any = null;
+
+function startBackgroundPoller(supabaseClient: any) {
+  pollerCount++;
+  if (pollerCount === 1) {
+    pollerTimer = setInterval(async () => {
+      try {
+        const { data: latestSales } = await supabaseClient
+          .from('sales')
+          .select('*')
+          .is('deleted_at', null)
+          .order('created_at', { ascending: false })
+          .limit(60);
+        const { data: latestItems } = await supabaseClient.from('sale_items').select('*').not('sale_id', 'is', null);
+        if (latestSales && latestSales.length > 0) {
+          const overrides = getSavedProductionOverrides();
+          let overridesCleaned = false;
+          const prev = globalStore.sales;
+          const localOnly = prev.filter(p => p.id.startsWith('local_') && !latestSales.some((ls: any) => ls.id === p.id));
+          const remoteMapped: Sale[] = (latestSales as any[]).map(s => {
+            const existing = prev.find(p => p.id === s.id);
+            const override = overrides[s.id];
+            const prodStatus = (s.production_status || override?.status || existing?.productionStatus || 'em_producao') as ProductionStatus;
+            const prodStarted = s.production_started_at || override?.startedAt || existing?.productionStartedAt || s.created_at;
+
+            if (override && s.production_status) {
+              delete overrides[s.id];
+              overridesCleaned = true;
+            }
+
+            let parsedDiff = existing?.orderDiff;
+            let parsedIsModified = existing?.isModifiedInKitchen || false;
+
+            if (s.delay_notes && typeof s.delay_notes === 'string' && s.delay_notes.includes('KITCHEN_DIFF')) {
+              try {
+                const parsed = JSON.parse(s.delay_notes);
+                if (parsed.tag === 'KITCHEN_DIFF') {
+                  parsedDiff = parsed.orderDiff;
+                  parsedIsModified = true;
+                }
+              } catch {}
+            } else if (s.delay_notes === null && existing?.isModifiedInKitchen) {
+              parsedIsModified = false;
+            }
+
+            return {
+              id: s.id,
+              customerName: s.customer_name || 'Balcão',
+              orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
+              channel: s.channel,
+              subtotal: Number(s.subtotal) || existing?.subtotal || 0,
+              discount: Number(s.discount) || existing?.discount || 0,
+              deliveryFee: Number(s.delivery_fee) || existing?.deliveryFee || 0,
+              total: Number(s.total) || 0,
+              paymentMethod: s.payment_method,
+              date: s.created_at,
+              status: s.status,
+              productionStatus: prodStatus,
+              productionStartedAt: prodStarted,
+              productionCompletedAt: s.production_completed_at || undefined,
+              productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
+              targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
+              delayReason: s.delay_reason || undefined,
+              delayNotes: s.delay_notes || undefined,
+              orderDiff: parsedDiff,
+              isModifiedInKitchen: parsedIsModified,
+              items: ((latestItems as any[]) || []).filter(i => i.sale_id === s.id).map(i => ({
+                id: i.id,
+                productId: i.product_id,
+                productName: i.product_name,
+                quantity: Number(i.quantity) || 0,
+                unitPrice: Number(i.unit_price) || 0,
+                combo: i.combo || undefined,
+                notes: i.notes ? i.notes.trim().toUpperCase() : undefined,
+                additionals: Array.isArray(i.additionals) ? i.additionals : undefined
+              }))
+            };
+          });
+          updateGlobalStore({ sales: [...localOnly, ...remoteMapped] });
+          if (overridesCleaned && typeof window !== 'undefined') {
+            try { localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(overrides)); } catch {}
+          }
+        } else if (Array.isArray(latestSales) && latestSales.length === 0) {
+          const localOnly = globalStore.sales.filter(p => p.id.startsWith('local_'));
+          if (typeof window !== 'undefined') {
+            try {
+              localStorage.removeItem('hum_vicio_cached_sales');
+              localStorage.removeItem('hum_vicio_prod_status_map');
+            } catch {}
+          }
+          updateGlobalStore({ sales: localOnly });
+        }
+      } catch {}
+    }, 3500);
+  }
+}
+
+function stopBackgroundPoller() {
+  pollerCount--;
+  if (pollerCount <= 0) {
+    pollerCount = 0;
+    if (pollerTimer) {
+      clearInterval(pollerTimer);
+      pollerTimer = null;
+    }
+  }
+}
+
+const subscribeToStore = (callback: () => void) => {
+  storeListeners.add(callback);
+  return () => {
+    storeListeners.delete(callback);
+  };
+};
+
+const getStoreSnapshot = () => globalStore;
+const getServerStoreSnapshot = () => serverInitialState;
+
+export function useInventory() {
+  const store = useSyncExternalStore(subscribeToStore, getStoreSnapshot, getServerStoreSnapshot);
+  const supabase = createClient();
+
+  const {
+    items,
+    products,
+    isLoaded,
+    fixedExpensesConfig,
+    isOpen,
+    activeCashSession,
+    allCashSessions,
+    targetPrepMinutes,
+    sales,
+    movements,
+    isTrainingMode,
+    offlineQueueCount,
+    offlineSalesList,
+    isOnline,
+    connectionStatus,
+    lastServerSync,
+    wasteRecords,
+    checklist,
+    allChecklists,
+    suppliers,
+    purchaseRecords,
+    stockAudits,
+    subRecipes,
+    auditLogs
+  } = store;
+
+  // Setters com suporte transparente a valores diretos ou funções de callback
+  const setItems = (value: InventoryItem[] | ((prev: InventoryItem[]) => InventoryItem[])) => {
+    const next = typeof value === 'function' ? value(globalStore.items) : value;
+    updateGlobalStore({ items: next });
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem('hum_vicio_cached_inventory', JSON.stringify(next)); } catch {}
+    }
   };
 
-  useEffect(() => {
-    const initialQueue = getOfflineSalesQueue();
-    setOfflineQueueCount(initialQueue.length);
-    setOfflineSalesList(initialQueue);
+  const setProducts = (value: Product[] | ((prev: Product[]) => Product[])) => {
+    const next = typeof value === 'function' ? value(globalStore.products) : value;
+    updateGlobalStore({ products: next });
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem('hum_vicio_cached_products', JSON.stringify(next)); } catch {}
+    }
+  };
 
-    void checkServerHealth();
+  const setSales = (value: Sale[] | ((prev: Sale[]) => Sale[])) => {
+    const next = typeof value === 'function' ? value(globalStore.sales) : value;
+    updateGlobalStore({ sales: next });
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(next.slice(0, 100))); } catch {}
+    }
+  };
 
-    const handleOnline = () => {
-      void checkServerHealth().then(status => {
-        if (status === 'connected') {
-          syncOfflineQueueNow();
-        }
-      });
-    };
-    const handleOffline = () => {
-      setConnectionStatus('offline');
-      setIsOnline(false);
-    };
+  const setAllCashSessions = (value: CashSession[] | ((prev: CashSession[]) => CashSession[])) => {
+    const next = typeof value === 'function' ? value(globalStore.allCashSessions) : value;
+    updateGlobalStore({ allCashSessions: next });
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem('hum_vicio_cached_sessions', JSON.stringify(next)); } catch {}
+    }
+  };
 
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
+  const setActiveCashSession = (value: CashSession | null | ((prev: CashSession | null) => CashSession | null)) => {
+    const next = typeof value === 'function' ? value(globalStore.activeCashSession) : value;
+    updateGlobalStore({ activeCashSession: next });
+  };
 
-    // Heartbeat a cada 20 segundos para drenar a fila e manter a conexão viva
-    const interval = setInterval(() => {
-      if (getOfflineSalesQueue().length > 0) {
-        syncOfflineQueueNow();
-      } else {
-        void checkServerHealth();
-      }
-    }, 20000);
+  const setIsOpen = (value: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof value === 'function' ? value(globalStore.isOpen) : value;
+    updateGlobalStore({ isOpen: next });
+  };
 
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-      clearInterval(interval);
-    };
-  }, []);
+  const setMovements = (value: CashMovement[] | ((prev: CashMovement[]) => CashMovement[])) => {
+    const next = typeof value === 'function' ? value(globalStore.movements) : value;
+    updateGlobalStore({ movements: next });
+  };
 
-  // Perdas State (em Nuvem)
-  const [wasteRecords, setWasteRecords] = useState<WasteRecord[]>([]);
+  const setWasteRecords = (value: WasteRecord[] | ((prev: WasteRecord[]) => WasteRecord[])) => {
+    const next = typeof value === 'function' ? value(globalStore.wasteRecords) : value;
+    updateGlobalStore({ wasteRecords: next });
+  };
 
-  // Checklist State
-  const [checklist, setChecklist] = useState<DailyChecklist | null>(null);
-  const [allChecklists, setAllChecklists] = useState<DailyChecklist[]>([]);
+  const setChecklist = (value: DailyChecklist | null | ((prev: DailyChecklist | null) => DailyChecklist | null)) => {
+    const next = typeof value === 'function' ? value(globalStore.checklist) : value;
+    updateGlobalStore({ checklist: next });
+  };
 
-  // Fase 3 States
-  const [suppliers, setSuppliers] = useState<Supplier[]>([]);
-  const [purchaseRecords, setPurchaseRecords] = useState<PurchaseRecord[]>([]);
-  const [stockAudits, setStockAudits] = useState<StockAudit[]>([]);
+  const setAllChecklists = (value: DailyChecklist[] | ((prev: DailyChecklist[]) => DailyChecklist[])) => {
+    const next = typeof value === 'function' ? value(globalStore.allChecklists) : value;
+    updateGlobalStore({ allChecklists: next });
+  };
 
-  // Sub-receitas State
-  const [subRecipes, setSubRecipes] = useState<SubRecipeItem[]>([]);
+  const setSuppliers = (value: Supplier[] | ((prev: Supplier[]) => Supplier[])) => {
+    const next = typeof value === 'function' ? value(globalStore.suppliers) : value;
+    updateGlobalStore({ suppliers: next });
+  };
 
-  // Logs de Auditoria do Administrador (Segurança & Rastreabilidade)
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const setPurchaseRecords = (value: PurchaseRecord[] | ((prev: PurchaseRecord[]) => PurchaseRecord[])) => {
+    const next = typeof value === 'function' ? value(globalStore.purchaseRecords) : value;
+    updateGlobalStore({ purchaseRecords: next });
+  };
+
+  const setStockAudits = (value: StockAudit[] | ((prev: StockAudit[]) => StockAudit[])) => {
+    const next = typeof value === 'function' ? value(globalStore.stockAudits) : value;
+    updateGlobalStore({ stockAudits: next });
+  };
+
+  const setSubRecipes = (value: SubRecipeItem[] | ((prev: SubRecipeItem[]) => SubRecipeItem[])) => {
+    const next = typeof value === 'function' ? value(globalStore.subRecipes) : value;
+    updateGlobalStore({ subRecipes: next });
+  };
+
+  const setAuditLogs = (value: AuditLog[] | ((prev: AuditLog[]) => AuditLog[])) => {
+    const next = typeof value === 'function' ? value(globalStore.auditLogs) : value;
+    updateGlobalStore({ auditLogs: next });
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem('hum_vicio_audit_logs', JSON.stringify(next.slice(0, 200))); } catch {}
+    }
+  };
+
+  const setIsLoaded = (value: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof value === 'function' ? value(globalStore.isLoaded) : value;
+    updateGlobalStore({ isLoaded: next });
+  };
+
+  const setIsOnline = (value: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof value === 'function' ? value(globalStore.isOnline) : value;
+    updateGlobalStore({ isOnline: next });
+  };
+
+  const setOfflineQueueCount = (value: number | ((prev: number) => number)) => {
+    const next = typeof value === 'function' ? value(globalStore.offlineQueueCount) : value;
+    updateGlobalStore({ offlineQueueCount: next });
+  };
+
+  const setOfflineSalesList = (value: Sale[] | ((prev: Sale[]) => Sale[])) => {
+    const next = typeof value === 'function' ? value(globalStore.offlineSalesList) : value;
+    updateGlobalStore({ offlineSalesList: next });
+  };
+
+  const setConnectionStatus = (value: ConnectionStatus | ((prev: ConnectionStatus) => ConnectionStatus)) => {
+    const next = typeof value === 'function' ? value(globalStore.connectionStatus) : value;
+    updateGlobalStore({ connectionStatus: next });
+  };
+
+  const setLastServerSync = (value: string | null | ((prev: string | null) => string | null)) => {
+    const next = typeof value === 'function' ? value(globalStore.lastServerSync) : value;
+    updateGlobalStore({ lastServerSync: next });
+    if (typeof window !== 'undefined' && next) {
+      try { localStorage.setItem('hum_vicio_last_server_sync', next); } catch {}
+    }
+  };
 
   const addAuditLog = async (
     action: AuditAction, 
@@ -467,13 +1029,11 @@ export function useInventory() {
       newValue
     };
 
-    setAuditLogs(prev => {
-      const updated = [newLog, ...prev].slice(0, 500);
-      if (typeof window !== 'undefined') {
-        try { localStorage.setItem('hum_vicio_audit_logs', JSON.stringify(updated.slice(0, 200))); } catch {}
-      }
-      return updated;
-    });
+    const updated = [newLog, ...globalStore.auditLogs].slice(0, 500);
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem('hum_vicio_audit_logs', JSON.stringify(updated.slice(0, 200))); } catch {}
+    }
+    updateGlobalStore({ auditLogs: updated });
 
     try {
       await supabase.from('audit_logs').insert({
@@ -489,495 +1049,181 @@ export function useInventory() {
     }
   };
 
-  const supabase = createClient();
+  // Custos Fixos Mensais (DRE & Ponto de Equilíbrio)
+  const saveFixedExpensesConfig = (config: FixedExpensesConfig) => {
+    updateGlobalStore({ fixedExpensesConfig: config });
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem('hum_vicio_fixed_expenses_config', JSON.stringify(config));
+      } catch {}
+    }
+    const totalMonthly = config.rent + config.electricity + config.gas + config.water + config.internetSoftware + config.payroll + config.proLabore + config.otherExpenses;
+    addAuditLog(
+      'CUSTOS_FIXOS_CONFIG',
+      `Custos Fixos Mensais atualizados. Total mensal: R$ ${totalMonthly.toFixed(2)} (${config.operatingDaysPerMonth} dias úteis).`,
+      'Gestor / Admin'
+    );
+  };
+
+  // Tempo Médio Dinâmico de Preparo (KDS / Balcão)
+  const setTargetPrepMinutes = (mins: number) => {
+    updateGlobalStore({ targetPrepMinutes: mins });
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('hum_vicio_target_prep_minutes', mins.toString());
+    }
+  };
+
+  // Verificação ativa de comunicação efetiva com o servidor
+  const checkServerHealth = async (): Promise<ConnectionStatus> => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      updateGlobalStore({ connectionStatus: 'offline', isOnline: false });
+      return 'offline';
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const res = await fetch('/api/health', {
+        method: 'GET',
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        const nowIso = new Date().toISOString();
+        updateGlobalStore({
+          connectionStatus: 'connected',
+          isOnline: true,
+          lastServerSync: nowIso
+        });
+        try { localStorage.setItem('hum_vicio_last_server_sync', nowIso); } catch {}
+        return 'connected';
+      } else {
+        updateGlobalStore({ connectionStatus: 'server_unreachable', isOnline: false });
+        return 'server_unreachable';
+      }
+    } catch {
+      const status = typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable';
+      updateGlobalStore({ connectionStatus: status, isOnline: false });
+      return status;
+    }
+  };
+
+  // Monitor de Auto-Sincronização e Drenagem da Fila Offline
+  const syncOfflineQueueNow = async () => {
+    const res = await syncOfflineSalesQueue(supabase);
+    const queue = getOfflineSalesQueue();
+    updateGlobalStore({
+      offlineQueueCount: queue.length,
+      offlineSalesList: queue
+    });
+
+    if (res.syncedCount > 0 || res.errorsCount === 0) {
+      const nowIso = new Date().toISOString();
+      try { localStorage.setItem('hum_vicio_last_server_sync', nowIso); } catch {}
+
+      const queuedIds = new Set(queue.map(q => q.id));
+      const updated = globalStore.sales.map(s => {
+        if (!queuedIds.has(s.id) && (s.syncStatus === 'pending' || !s.isOfflineSynced)) {
+          return { ...s, syncStatus: 'synced' as const, isOfflineSynced: true };
+        }
+        return s;
+      });
+
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      }
+
+      updateGlobalStore({
+        connectionStatus: 'connected',
+        isOnline: true,
+        lastServerSync: nowIso,
+        sales: updated
+      });
+    } else if (res.errorsCount > 0) {
+      const status = typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable';
+      updateGlobalStore({ connectionStatus: status });
+    }
+    return res;
+  };
 
   useEffect(() => {
-    const loadData = async () => {
-      // 1. Fetch Inventory
-      const { data: invData } = await supabase.from('inventory').select('*');
-      if (invData) {
-        const minStockMap = getSavedMinStockMap();
-        const stationMap = getSavedStationMap();
-        setItems(invData.map(i => {
-          const customStation = (i.station || stationMap[i.id] || getDefaultStationForIngredient(i.name)) as KitchenStation;
-          return {
-            id: i.id, name: i.name, category: i.category, unit: i.unit, 
-            costPerUnit: Number(i.cost_per_unit) || 0, 
-            currentStock: Number(i.current_stock) || 0, 
-            minStock: i.min_stock !== undefined && i.min_stock !== null ? Number(i.min_stock) : minStockMap[i.id],
-            status: i.status,
-            isActive: i.is_active !== undefined ? i.is_active : true,
-            station: customStation
-          };
-        }));
-      }
+    // 1. Carga de dados rápida em paralelo: se não carregou ou dados com mais de 20s
+    if (!globalStore.isLoaded || Date.now() - globalStore.lastFetchedAt > 20000) {
+      void executeParallelLoadData(supabase);
+    }
 
-      // 2. Fetch Products & Recipes
-      const { data: prodData } = await supabase.from('products').select('*');
-      const { data: recData } = await supabase.from('recipes').select('*');
-      
-      if (prodData) {
-        setProducts(prodData.map(p => ({
-          id: p.id, name: p.name, category: p.category, 
-          priceBalcao: Number(p.price_balcao) || 0, 
-          priceIfood: Number(p.price_ifood) || 0,
-          recipe: (recData || []).filter(r => r.product_id === p.id).map(r => ({
-            ingredientId: r.ingredient_id,
-            quantity: Number(r.quantity) || 0
-          }))
-        })));
-      }
+    // 2. Inicia poller singleton em segundo plano (3.5s) com contagem de referências
+    startBackgroundPoller(supabase);
 
-      // 3. Fetch Sales (com suporte a fallback local resiliente)
-      try {
-        const { data: salesData } = await supabase
-          .from('sales')
-          .select('*')
-          .is('deleted_at', null)
-          .order('created_at', { ascending: false })
-          .limit(80);
-        const { data: saleItemsData } = await supabase.from('sale_items').select('*').not('sale_id', 'is', null);
-        
-        if (salesData && salesData.length > 0) {
-          const overrides = getSavedProductionOverrides();
-          const creditMap = getSavedCreditSalesMap();
-          const pickupMap = getSavedPickupPendingSalesMap();
-          let overridesCleaned = false;
-          const mappedSales: Sale[] = salesData.map(s => {
-            const override = overrides[s.id];
-            const creditInfo = creditMap[s.id] || {};
-            const pickupInfo = pickupMap[s.id] || {};
-            // O Supabase é a fonte oficial da verdade sincronizada entre múltiplos dispositivos (PC Caixa e Tablet Cozinha)
-            const prodStatus = (s.production_status || override?.status || 'em_producao') as ProductionStatus;
-            const prodStarted = s.production_started_at || override?.startedAt || s.created_at;
+    // 3. Sincronização offline inicial e verificação de saúde do servidor
+    const initialQueue = getOfflineSalesQueue();
+    updateGlobalStore({
+      offlineQueueCount: initialQueue.length,
+      offlineSalesList: initialQueue,
+      isTrainingMode: isTrainingModeActive()
+    });
+    void checkServerHealth();
 
-            // Se o status já estiver consolidado no Supabase, limpa o override local correspondente
-            if (override && s.production_status) {
-              delete overrides[s.id];
-              overridesCleaned = true;
-            }
-
-            let parsedDiff: any = undefined;
-            let parsedIsModified = false;
-            if (s.delay_notes && typeof s.delay_notes === 'string' && s.delay_notes.includes('KITCHEN_DIFF')) {
-              try {
-                const parsed = JSON.parse(s.delay_notes);
-                if (parsed.tag === 'KITCHEN_DIFF') {
-                  parsedDiff = parsed.orderDiff;
-                  parsedIsModified = true;
-                }
-              } catch {}
-            }
-
-            const paymentStatus = pickupInfo.paymentStatus || s.payment_status || (s.payment_method === 'consumo_funcionario' || s.payment_method === 'fiado_vip' ? 'pendente_retirada' : 'pago');
-
-            return {
-              id: s.id, 
-              customerName: creditInfo.creditCustomerName || s.customer_name || 'Balcão',
-              orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
-              channel: s.channel, 
-              total: Number(s.total) || 0, 
-              paymentMethod: s.payment_method, 
-              paymentStatus,
-              paidAt: pickupInfo.paidAt || s.paid_at || undefined,
-              paidMethod: pickupInfo.paidMethod || s.paid_method || undefined,
-              isOfflineSynced: true,
-              date: s.created_at, 
-              status: s.status,
-              productionStatus: prodStatus,
-              productionStartedAt: prodStarted,
-              productionCompletedAt: s.production_completed_at || undefined,
-              productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
-              targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
-              delayReason: s.delay_reason || undefined,
-              delayNotes: s.delay_notes || undefined,
-              orderDiff: parsedDiff,
-              isModifiedInKitchen: parsedIsModified,
-              collaboratorId: creditInfo.collaboratorId || s.collaborator_id || undefined,
-              collaboratorName: creditInfo.collaboratorName || s.collaborator_name || undefined,
-              creditCustomerName: creditInfo.creditCustomerName || s.credit_customer_name || undefined,
-              creditDueDate: creditInfo.creditDueDate || s.credit_due_date || undefined,
-              creditNotes: creditInfo.creditNotes || s.credit_notes || undefined,
-              creditStatus: creditInfo.creditStatus || s.credit_status || (s.payment_method === 'consumo_funcionario' || s.payment_method === 'fiado_vip' ? 'pendente' : undefined),
-              creditPaidAt: creditInfo.creditPaidAt || s.credit_paid_at || undefined,
-              creditPaidMethod: creditInfo.creditPaidMethod || s.credit_paid_method || undefined,
-              items: (saleItemsData || []).filter(i => i.sale_id === s.id).map(i => ({
-                id: i.id,
-                productId: i.product_id, 
-                productName: i.product_name, 
-                quantity: Number(i.quantity) || 0, 
-                unitPrice: Number(i.unit_price) || 0,
-                combo: i.combo || undefined,
-                notes: i.notes ? i.notes.trim().toUpperCase() : undefined,
-                additionals: Array.isArray(i.additionals) ? i.additionals : undefined
-              }))
-            };
-          });
-
-          // Mergir vendas locais da fila offline que ainda não subiram para o Supabase
-          const offlineQueue = getOfflineSalesQueue();
-          const unpersisted = offlineQueue.filter(oq => !mappedSales.some(ms => ms.id === oq.id));
-          const allSales = [...unpersisted, ...mappedSales];
-          setSales(allSales);
-          if (typeof window !== 'undefined') {
-            try { 
-              localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(mappedSales.slice(0, 100))); 
-              if (overridesCleaned) {
-                localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(overrides));
-              }
-            } catch {}
-          }
-        } else if (salesData && salesData.length === 0) {
-          // O banco de dados retornou oficialmente 0 vendas ativas (expurgadas ou limpas)
-          setSales([]);
-          if (typeof window !== 'undefined') {
-            try {
-              localStorage.removeItem('hum_vicio_cached_sales');
-              localStorage.removeItem('hum_vicio_prod_status_map');
-            } catch {}
-          }
-        } else if (typeof window !== 'undefined') {
-          // Fallback offline exclusivamente em caso de erro real de conexão
-          const cached = localStorage.getItem('hum_vicio_cached_sales');
-          if (cached) {
-            try {
-              const parsed = JSON.parse(cached);
-              if (Array.isArray(parsed) && parsed.length > 0) setSales(parsed);
-            } catch {}
-          }
-        }
-      } catch (err) {
-        console.warn('Erro ao carregar vendas do Supabase, buscando cache local:', err);
-        if (typeof window !== 'undefined') {
-          const cached = localStorage.getItem('hum_vicio_cached_sales');
-          if (cached) {
-            try {
-              const parsed = JSON.parse(cached);
-              if (Array.isArray(parsed) && parsed.length > 0) setSales(parsed);
-            } catch {}
-          }
-        }
-      }
-
-      // 4. Fetch Todas as Sessões de Caixa (Histórico + Ativo)
-      try {
-        const { data: allSessData } = await supabase
-          .from('cash_sessions')
-          .select('*')
-          .is('deleted_at', null)
-          .order('opened_at', { ascending: false });
-
-        if (allSessData && allSessData.length > 0) {
-          const mappedSessions: CashSession[] = allSessData.map(s => ({
-            id: s.id,
-            status: s.status,
-            initialAmount: Number(s.initial_amount) || 0,
-            finalAmount: s.final_amount ? Number(s.final_amount) : undefined,
-            expectedAmount: s.expected_amount ? Number(s.expected_amount) : undefined,
-            varianceAmount: s.variance_amount ? Number(s.variance_amount) : undefined,
-            openedBy: s.opened_by,
-            closedBy: s.closed_by,
-            openedAt: s.opened_at,
-            closedAt: s.closed_at
+    // 4. Ouvinte de modo de treinamento
+    const handleMode = (e: any) => {
+      const active = Boolean(e.detail?.active);
+      updateGlobalStore({ isTrainingMode: active });
+      if (active) {
+        const tSales = getTrainingSales();
+        if (tSales.length > 0) {
+          updateGlobalStore(prev => ({
+            sales: [...tSales, ...prev.sales.filter(p => !tSales.some(t => t.id === p.id))]
           }));
-          setAllCashSessions(mappedSessions);
-
-          const openOne = mappedSessions.find(s => s.status === 'open');
-          if (openOne) {
-            setActiveCashSession(openOne);
-            setIsOpen(true);
-          } else {
-            setActiveCashSession(null);
-            setIsOpen(false);
-          }
-        } else {
-          setAllCashSessions([]);
-          setActiveCashSession(null);
-          setIsOpen(false);
-        }
-      } catch (err) {
-        console.warn('Tabela cash_sessions ainda não criada:', err);
-      }
-
-      // 5. Fetch Movimentações de Caixa
-      try {
-        const { data: movData } = await supabase
-          .from('cash_movements')
-          .select('*')
-          .order('created_at', { ascending: false });
-
-        if (movData) {
-          setMovements(movData.map(m => ({
-            id: m.id,
-            type: m.type,
-            amount: Number(m.amount) || 0,
-            description: m.description,
-            date: m.created_at
-          })));
-        }
-      } catch (err) {
-        console.warn('Tabela cash_movements ainda não criada:', err);
-      }
-
-      // 6. Fetch Perdas / Desperdícios
-      try {
-        const { data: wasteData } = await supabase
-          .from('waste_records')
-          .select('*')
-          .order('created_at', { ascending: false });
-
-        if (wasteData) {
-          setWasteRecords(wasteData.map(w => ({
-            id: w.id,
-            ingredientId: w.ingredient_id,
-            ingredientName: w.ingredient_name,
-            quantity: Number(w.quantity) || 0,
-            unit: w.unit,
-            costAtTime: Number(w.cost_at_time) || 0,
-            totalLoss: Number(w.total_loss) || 0,
-            reason: w.reason,
-            responsibleName: w.responsible_name,
-            createdAt: w.created_at
-          })));
-        }
-      } catch (err) {
-        console.warn('Tabela waste_records ainda não criada:', err);
-      }
-
-      // 7. Fetch Daily Checklist & All Checklists
-      const today = new Date().toLocaleDateString('en-CA');
-      const { data: allChecks } = await supabase.from('kitchen_checklists').select('*').order('date', { ascending: false });
-      
-      if (allChecks) {
-        const mappedChecks = allChecks.map(c => ({
-          id: c.id,
-          date: c.date,
-          tasks: c.tasks,
-          signedBy: c.signed_by
-        }));
-        setAllChecklists(mappedChecks);
-        
-        const todayCheck = mappedChecks.find(c => c.date === today);
-        if (todayCheck) {
-          setChecklist(todayCheck);
-        } else {
-          setChecklist({ id: '', date: today, tasks: defaultChecklistTasks });
-        }
-      } else {
-        setChecklist({ id: '', date: today, tasks: defaultChecklistTasks });
-      }
-
-      // 8. Fetch Fornecedores (Fase 3)
-      try {
-        const { data: supData } = await supabase.from('suppliers').select('*').order('name', { ascending: true });
-        if (supData) {
-          setSuppliers(supData.map(s => ({
-            id: s.id,
-            name: s.name,
-            contactName: s.contact_name || '',
-            phone: s.phone || '',
-            category: s.category || 'Geral',
-            notes: s.notes || '',
-            createdAt: s.created_at
-          })));
-        }
-      } catch (err) {
-        console.warn('Tabela suppliers ainda não criada:', err);
-      }
-
-      // 9. Fetch Histórico de Compras (Fase 3)
-      try {
-        const { data: purchData } = await supabase.from('purchase_records').select('*').order('created_at', { ascending: false });
-        if (purchData) {
-          setPurchaseRecords(purchData.map(p => ({
-            id: p.id,
-            ingredientId: p.ingredient_id,
-            ingredientName: p.ingredient_name,
-            supplierId: p.supplier_id,
-            supplierName: p.supplier_name || 'Diversos',
-            quantity: Number(p.quantity) || 0,
-            unit: p.unit,
-            costPerUnit: Number(p.cost_per_unit) || 0,
-            totalCost: Number(p.total_cost) || 0,
-            createdAt: p.created_at
-          })));
-        }
-      } catch (err) {
-        console.warn('Tabela purchase_records ainda não criada:', err);
-      }
-
-      // 10. Fetch Auditorias de Inventário (Fase 3)
-      try {
-        const { data: auditData } = await supabase.from('stock_audits').select('*').order('created_at', { ascending: false });
-        if (auditData) {
-          setStockAudits(auditData.map(a => ({
-            id: a.id,
-            auditedBy: a.audited_by,
-            items: a.items || [],
-            totalVarianceCost: Number(a.total_variance_cost) || 0,
-            createdAt: a.created_at
-          })));
-        }
-      } catch (err) {
-        console.warn('Tabela stock_audits ainda não criada:', err);
-      }
-
-      // 11. Fetch Sub-Receitas
-      try {
-        const { data: subData } = await supabase.from('sub_recipes').select('*');
-        if (subData) {
-          setSubRecipes(subData.map(s => ({
-            id: s.id,
-            parentIngredientId: s.parent_ingredient_id,
-            childIngredientId: s.child_ingredient_id,
-            quantity: Number(s.quantity) || 0
-          })));
-        }
-      } catch (err) {
-        console.warn('Tabela sub_recipes ainda não criada:', err);
-      }
-
-      // 12. Fetch Logs de Auditoria
-      try {
-        const { data: logsData } = await supabase.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200);
-        if (logsData && logsData.length > 0) {
-          setAuditLogs(logsData.map((l: any) => ({
-            id: l.id,
-            timestamp: l.created_at || l.timestamp,
-            action: l.action,
-            operator: l.operator || 'Sistema',
-            details: l.details || '',
-            oldValue: l.old_value,
-            newValue: l.new_value
-          })));
-        } else if (typeof window !== 'undefined') {
-          const cached = localStorage.getItem('hum_vicio_audit_logs');
-          if (cached) setAuditLogs(JSON.parse(cached));
-        }
-      } catch {
-        if (typeof window !== 'undefined') {
-          const cached = localStorage.getItem('hum_vicio_audit_logs');
-          if (cached) setAuditLogs(JSON.parse(cached));
         }
       }
-
-      setIsLoaded(true);
     };
+    window.addEventListener('hum_vicio_training_mode_changed', handleMode);
 
-    loadData();
+    // 5. Ouvinte de conexão de rede
+    const handleOnline = () => {
+      void checkServerHealth().then(status => {
+        if (status === 'connected') {
+          syncOfflineQueueNow();
+        }
+      });
+    };
+    const handleOffline = () => {
+      updateGlobalStore({ connectionStatus: 'offline', isOnline: false });
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
 
-    // Sincronização instantânea entre abas no mesmo navegador
+    // 6. Ouvinte de storage para abas do navegador
     const handleStorage = (e: StorageEvent) => {
       if (e.key === 'hum_vicio_cached_sales' && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue);
-          if (Array.isArray(parsed)) setSales(parsed);
+          if (Array.isArray(parsed)) {
+            updateGlobalStore({ sales: parsed });
+          }
         } catch {}
       }
     };
     window.addEventListener('storage', handleStorage);
 
-    // Assinatura Supabase Realtime para sincronização sub-segundo (<100ms) entre PC do Caixa e Tablet da Cozinha
-    // Polling contínuo a cada 3.5s para garantir sincronização resiliente e atualização de itens
-    const syncInterval = setInterval(async () => {
-      try {
-        const { data: latestSales } = await supabase
-          .from('sales')
-          .select('*')
-          .is('deleted_at', null)
-          .order('created_at', { ascending: false })
-          .limit(60);
-        const { data: latestItems } = await supabase.from('sale_items').select('*').not('sale_id', 'is', null);
-        if (latestSales && latestSales.length > 0) {
-          const overrides = getSavedProductionOverrides();
-          let overridesCleaned = false;
-          setSales(prev => {
-            const localOnly = prev.filter(p => p.id.startsWith('local_') && !latestSales.some(ls => ls.id === p.id));
-            const remoteMapped: Sale[] = latestSales.map(s => {
-              const existing = prev.find(p => p.id === s.id);
-              const override = overrides[s.id];
-              // Supabase é a fonte oficial da verdade compartilhada entre múltiplos dispositivos
-              const prodStatus = (s.production_status || override?.status || existing?.productionStatus || 'em_producao') as ProductionStatus;
-              const prodStarted = s.production_started_at || override?.startedAt || existing?.productionStartedAt || s.created_at;
-
-              if (override && s.production_status) {
-                delete overrides[s.id];
-                overridesCleaned = true;
-              }
-
-              let parsedDiff = existing?.orderDiff;
-              let parsedIsModified = existing?.isModifiedInKitchen || false;
-
-              if (s.delay_notes && typeof s.delay_notes === 'string' && s.delay_notes.includes('KITCHEN_DIFF')) {
-                try {
-                  const parsed = JSON.parse(s.delay_notes);
-                  if (parsed.tag === 'KITCHEN_DIFF') {
-                    parsedDiff = parsed.orderDiff;
-                    parsedIsModified = true;
-                  }
-                } catch {}
-              } else if (s.delay_notes === null && existing?.isModifiedInKitchen) {
-                parsedIsModified = false;
-              }
-
-              return {
-                id: s.id,
-                customerName: s.customer_name || 'Balcão',
-                orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
-                channel: s.channel,
-                subtotal: Number(s.subtotal) || existing?.subtotal || 0,
-                discount: Number(s.discount) || existing?.discount || 0,
-                deliveryFee: Number(s.delivery_fee) || existing?.deliveryFee || 0,
-                total: Number(s.total) || 0,
-                paymentMethod: s.payment_method,
-                date: s.created_at,
-                status: s.status,
-                productionStatus: prodStatus,
-                productionStartedAt: prodStarted,
-                productionCompletedAt: s.production_completed_at || undefined,
-                productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
-                targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
-                delayReason: s.delay_reason || undefined,
-                delayNotes: s.delay_notes || undefined,
-                orderDiff: parsedDiff,
-                isModifiedInKitchen: parsedIsModified,
-                items: (latestItems || []).filter(i => i.sale_id === s.id).map(i => ({
-                  id: i.id,
-                  productId: i.product_id,
-                  productName: i.product_name,
-                  quantity: Number(i.quantity) || 0,
-                  unitPrice: Number(i.unit_price) || 0,
-                  combo: i.combo || undefined,
-                  notes: i.notes ? i.notes.trim().toUpperCase() : undefined,
-                  additionals: Array.isArray(i.additionals) ? i.additionals : undefined
-                }))
-              };
-            });
-            return [...localOnly, ...remoteMapped];
-          });
-          if (overridesCleaned && typeof window !== 'undefined') {
-            try { localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(overrides)); } catch {}
-          }
-        } else if (Array.isArray(latestSales) && latestSales.length === 0) {
-          // Quando todas as vendas foram expurgadas no banco, zera a lista e o cache
-          setSales(prev => {
-            const localOnly = prev.filter(p => p.id.startsWith('local_'));
-            if (typeof window !== 'undefined') {
-              try {
-                localStorage.removeItem('hum_vicio_cached_sales');
-                localStorage.removeItem('hum_vicio_prod_status_map');
-              } catch {}
-            }
-            return localOnly;
-          });
-        }
-      } catch {}
-    }, 3500);
+    // 7. Heartbeat a cada 20 segundos para drenar a fila e manter conexão viva
+    const heartbeatInterval = setInterval(() => {
+      if (getOfflineSalesQueue().length > 0) {
+        syncOfflineQueueNow();
+      } else {
+        void checkServerHealth();
+      }
+    }, 20000);
 
     return () => {
+      stopBackgroundPoller();
+      window.removeEventListener('hum_vicio_training_mode_changed', handleMode);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
       window.removeEventListener('storage', handleStorage);
-      clearInterval(syncInterval);
-
+      clearInterval(heartbeatInterval);
     };
   }, []);
 

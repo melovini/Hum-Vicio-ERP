@@ -357,7 +357,13 @@ export default function EngenhariaCardapioPage() {
     }
   };
 
-  if (!isLoaded) return null;
+  if (!isLoaded) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-500 border-t-transparent"></div>
+      </div>
+    );
+  }
 
   const resetForm = () => {
     setName(''); setCategory('lanche'); setPriceBalcao(''); setPriceIfood('');

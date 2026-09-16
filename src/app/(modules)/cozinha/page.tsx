@@ -703,7 +703,14 @@ export default function CozinhaKDSPage() {
     }, {} as Record<string, InventoryItem[]>);
   }, [items]);
 
-  if (!isLoaded) return null;
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center gap-3">
+        <div className="w-10 h-10 border-4 border-amber-500 border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-slate-400 text-sm font-medium animate-pulse">Carregando Cozinha KDS...</p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-3 md:p-6 select-none">

@@ -16,7 +16,13 @@ export default function SimuladorCombosPage() {
   const [selectedId, setSelectedId] = useState('');
   const [targetMargin, setTargetMargin] = useState('50'); // 50% margem desejada
 
-  if (!isLoaded) return null;
+  if (!isLoaded) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-500 border-t-transparent"></div>
+      </div>
+    );
+  }
 
   const handleAdd = () => {
     const p = products.find(x => x.id === selectedId);

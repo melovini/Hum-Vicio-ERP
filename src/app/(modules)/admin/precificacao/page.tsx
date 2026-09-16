@@ -207,7 +207,13 @@ export default function PrecificacaoPage() {
     };
   }, [selectedProduct, selectedProductCmv, selectedProductIfoodPrice, ifoodCommissionPct, paymentFeePct]);
 
-  if (!isLoaded) return null;
+  if (!isLoaded) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-500 border-t-transparent"></div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen relative p-4 md:p-8 overflow-hidden pb-20">
