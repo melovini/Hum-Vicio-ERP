@@ -1,4 +1,4 @@
-import { useId, type ReactElement, type ReactNode } from 'react';
+import { cloneElement, useId, type ReactElement, type ReactNode } from 'react';
 
 interface FormFieldProps {
   label: string;
@@ -13,15 +13,11 @@ export function FormField({ label, children, hint, error, required = false }: Fo
   const inputId = children.props.id ?? generatedId;
   const descriptionId = hint || error ? `${inputId}-description` : undefined;
 
-  const field = {
-    ...children,
-    props: {
-      ...children.props,
-      id: inputId,
-      'aria-describedby': descriptionId,
-      invalid: Boolean(error) || children.props.invalid,
-    },
-  };
+  const field = cloneElement(children, {
+    id: inputId,
+    'aria-describedby': descriptionId,
+    invalid: Boolean(error) || children.props.invalid,
+  });
 
   return (
     <div className="space-y-1.5">

@@ -1,6 +1,6 @@
 'use client';
 import { useDeferredValue, useState } from 'react';
-import { useInventory } from '@/lib/store';
+import { useInventory, type Supplier } from '@/lib/store';
 import { 
   ArrowLeft, Truck, Plus, MessageSquare, Trash2, History
 } from 'lucide-react';
@@ -12,12 +12,24 @@ import { Select } from '@/components/ui/Select';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { filterSuppliers } from '@/lib/supplier-filters';
+import { Dialog } from '@/components/ui/Dialog';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { FormField } from '@/components/ui/FormField';
+import { Input } from '@/components/ui/Input';
+import { Textarea } from '@/components/ui/Textarea';
+import { IconButton } from '@/components/ui/IconButton';
+import { useToast } from '@/components/ui/Toast';
 
 export default function FornecedoresPage() {
   const { suppliers, addSupplier, removeSupplier, purchaseRecords, isLoaded } = useInventory();
   
   const [showAddModal, setShowAddModal] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [supplierToDelete, setSupplierToDelete] = useState<Supplier | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [nameError, setNameError] = useState('');
+  const { notify } = useToast();
 
   const [categoryFilter, setCategoryFilter] = useState('');
   const deferredSearch = useDeferredValue(searchTerm);
@@ -43,21 +55,30 @@ export default function FornecedoresPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim()) { setNameError('Informe o nome do fornecedor.'); return; }
+    setNameError('');
+    setIsSaving(true);
+    try {
+      await addSupplier({ name: name.trim(), contactName: contactName.trim(), phone: phone.trim(), category, notes: notes.trim() });
+      setName(''); setContactName(''); setPhone(''); setNotes(''); setCategory('Carnes');
+      setShowAddModal(false);
+      notify({ title: 'Fornecedor cadastrado', description: `${name.trim()} já está disponível para compras.`, tone: 'success' });
+    } catch {
+      notify({ title: 'Não foi possível cadastrar', description: 'Confira a conexão e tente novamente. Os campos foram preservados.', tone: 'danger' });
+    } finally { setIsSaving(false); }
+  };
 
-    await addSupplier({
-      name: name.trim(),
-      contactName: contactName.trim(),
-      phone: phone.trim(),
-      category,
-      notes: notes.trim()
-    });
-
-    setName('');
-    setContactName('');
-    setPhone('');
-    setNotes('');
-    setShowAddModal(false);
+  const handleDelete = async () => {
+    if (!supplierToDelete) return;
+    setIsDeleting(true);
+    try {
+      const deletedName = supplierToDelete.name;
+      await removeSupplier(supplierToDelete.id);
+      setSupplierToDelete(null);
+      notify({ title: 'Fornecedor excluído', description: `${deletedName} foi removido.`, tone: 'success' });
+    } catch {
+      notify({ title: 'Não foi possível excluir', description: 'O fornecedor foi mantido. Tente novamente.', tone: 'danger' });
+    } finally { setIsDeleting(false); }
   };
 
   const filteredSuppliers = filterSuppliers(suppliers, deferredSearch, categoryFilter);
@@ -77,98 +98,29 @@ export default function FornecedoresPage() {
           className="mb-6"
           actions={<Button onClick={() => setShowAddModal(true)} leadingIcon={<Plus size={18} aria-hidden="true" />}>Cadastrar fornecedor</Button>} />
 
-        {/* Modal de Cadastro */}
-        {showAddModal && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 max-w-md w-full shadow-2xl animate-fade-in">
-              <h2 className="text-2xl font-bold text-white mb-2 flex items-center gap-2">
-                <Truck size={24} className="text-blue-400" /> Novo Fornecedor
-              </h2>
-              <p className="text-slate-400 text-sm mb-6">Cadastre o parceiro para vincular às compras e cotações.</p>
-              
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                  <label className="block text-slate-300 text-xs font-bold mb-1">Nome da Empresa / Fornecedor</label>
-                  <input 
-                    type="text" 
-                    required 
-                    value={name} 
-                    onChange={e => setName(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3.5 text-white outline-none focus:border-blue-500"
-                    placeholder="Ex: Açougue Premium Carnes"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="block text-slate-300 text-xs font-bold mb-1">Contato / Vendedor</label>
-                    <input 
-                      type="text" 
-                      value={contactName} 
-                      onChange={e => setContactName(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3.5 text-white outline-none focus:border-blue-500"
-                      placeholder="Ex: Rodrigo"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-300 text-xs font-bold mb-1">WhatsApp / Telefone</label>
-                    <input 
-                      type="text" 
-                      value={phone} 
-                      onChange={e => setPhone(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3.5 text-white outline-none focus:border-blue-500"
-                      placeholder="(11) 99999-9999"
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 text-xs font-bold mb-1">Categoria de Insumos</label>
-                  <select 
-                    value={category} 
-                    onChange={e => setCategory(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3.5 text-slate-200 outline-none focus:border-blue-500"
-                  >
-                    <option value="Carnes">Carnes & Frios</option>
-                    <option value="Padaria">Pães & Massas</option>
-                    <option value="Laticínios">Queijos & Laticínios</option>
-                    <option value="Hortifruti">Hortifruti & Verduras</option>
-                    <option value="Embalagens">Embalagens & Descartáveis</option>
-                    <option value="Bebidas">Bebidas & Refrigerantes</option>
-                    <option value="Geral">Outros</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-slate-300 text-xs font-bold mb-1">Observações / Condições</label>
-                  <textarea 
-                    rows={2}
-                    value={notes} 
-                    onChange={e => setNotes(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3.5 text-white outline-none focus:border-blue-500 text-sm"
-                    placeholder="Ex: Pedido mínimo R$ 200, entrega terças e sextas"
-                  />
-                </div>
-
-                <div className="flex gap-3 pt-4">
-                  <button 
-                    type="button" 
-                    onClick={() => setShowAddModal(false)}
-                    className="flex-1 py-3.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold"
-                  >
-                    Cancelar
-                  </button>
-                  <button 
-                    type="submit" 
-                    className="flex-1 py-3.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold shadow-lg shadow-blue-600/30"
-                  >
-                    Salvar
-                  </button>
-                </div>
-              </form>
+        <Dialog open={showAddModal} onClose={() => { if (!isSaving) setShowAddModal(false); }} title="Novo fornecedor"
+          description="Cadastre o parceiro para vincular às compras e cotações."
+          footer={<><Button variant="ghost" onClick={() => setShowAddModal(false)} disabled={isSaving}>Cancelar</Button><Button type="submit" form="supplier-form" loading={isSaving}>Salvar fornecedor</Button></>}>
+          <form id="supplier-form" onSubmit={handleSubmit} className="space-y-4">
+            <FormField label="Nome da empresa ou fornecedor" required error={nameError}>
+              <Input required autoFocus value={name} onChange={(e) => { setName(e.target.value); if (nameError) setNameError(''); }} placeholder="Ex.: Açougue Premium Carnes" />
+            </FormField>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Contato ou vendedor"><Input value={contactName} onChange={(e) => setContactName(e.target.value)} placeholder="Ex.: Rodrigo" /></FormField>
+              <FormField label="WhatsApp ou telefone"><Input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(34) 99999-9999" /></FormField>
             </div>
-          </div>
-        )}
+            <FormField label="Categoria de insumos">
+              <Select value={category} onChange={(e) => setCategory(e.target.value)}>
+                <option value="Carnes">Carnes e frios</option><option value="Padaria">Pães e massas</option>
+                <option value="Laticínios">Queijos e laticínios</option><option value="Hortifruti">Hortifruti e verduras</option>
+                <option value="Embalagens">Embalagens e descartáveis</option><option value="Bebidas">Bebidas e refrigerantes</option><option value="Geral">Outros</option>
+              </Select>
+            </FormField>
+            <FormField label="Observações ou condições">
+              <Textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Ex.: Pedido mínimo R$ 200; entrega às terças e sextas" />
+            </FormField>
+          </form>
+        </Dialog>
 
         <div className="mb-6">
           <FilterBar search={searchTerm} onSearchChange={setSearchTerm} searchLabel="Buscar fornecedores"
@@ -207,17 +159,7 @@ export default function FornecedoresPage() {
                     <span className="px-3 py-1 bg-blue-500/10 text-blue-400 border border-blue-500/20 text-xs font-bold rounded-lg uppercase">
                       {sup.category}
                     </span>
-                    <button 
-                      onClick={() => {
-                        if (confirm(`Excluir fornecedor ${sup.name}?`)) {
-                          removeSupplier(sup.id);
-                        }
-                      }}
-                      className="text-slate-600 hover:text-red-400 p-1 cursor-pointer"
-                      aria-label={`Excluir fornecedor ${sup.name}`} title="Excluir fornecedor"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+                    <IconButton onClick={() => setSupplierToDelete(sup)} label={`Excluir fornecedor ${sup.name}`} icon={<Trash2 size={16} aria-hidden="true" />} />
                   </div>
                   
                   <h3 className="text-xl font-bold text-white mb-1">{sup.name}</h3>
@@ -247,6 +189,12 @@ export default function FornecedoresPage() {
             );
           })}
         </div>
+
+        <ConfirmDialog open={Boolean(supplierToDelete)} onClose={() => { if (!isDeleting) setSupplierToDelete(null); }}
+          onConfirm={handleDelete} loading={isDeleting} title="Excluir fornecedor?"
+          description={supplierToDelete ? `O cadastro de ${supplierToDelete.name} será removido.` : ''}
+          confirmLabel="Excluir fornecedor"
+          details="O histórico de compras já registrado será preservado. Esta ação remove o fornecedor das próximas seleções." />
 
         {/* Histórico de Compras e Evolução de Preços */}
         <div className="glass-card rounded-3xl p-8 border border-slate-800">

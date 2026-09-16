@@ -49,6 +49,8 @@ Não sobrepor Dialog customizado/portais à gaveta nativa: ficam atrás da top l
 
 FilterBar combina busca, filtros nativos, contagem e Limpar filtros. Usa navegação Tab normal, sem role toolbar. A tela de Fornecedores é a primeira adoção: busca diferida sem distinção de acentos, categoria combinada, cabeçalho e estados vazios padronizados. Cadastro, exclusão e histórico mantêm a lógica anterior. Os testes supplier-filters cobrem a busca e combinação dos filtros; não substituem testes de navegador.
 
+O cadastro de fornecedor usa Dialog, FormField e controles padronizados, preserva os campos quando o servidor falha e bloqueia envio duplicado. A exclusão usa ConfirmDialog e só remove o item local após confirmação do banco. Ambos usam toast para o resultado final; as operações da store lançam falhas para a tela tratá-las, sem alert nativo.
+
 ## Pendências
 
 Este bloco não conclui P0: faltam adoção de toasts nos módulos, navegação, glossário completo e testes de interface automatizados. Testes de negócio e build não certificam aparência ou acessibilidade.
