@@ -1,4 +1,4 @@
-﻿'use client';
+'use client';
 import React, { useEffect } from 'react';
 import { 
   X, HelpCircle, Keyboard, WifiOff, 
@@ -114,7 +114,15 @@ export default function QuickHelpModal({ isOpen, onClose, context = 'caixa' }: Q
               <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-xl space-y-1.5">
                 <span className="font-extrabold text-emerald-400 block uppercase">No Caixa / PDV:</span>
                 <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
-                  <span className="text-slate-300">Novo Pedido / Limpar</span>
+                  <span className="text-slate-300">Novo Atendimento (Paralelo)</span>
+                  <kbd className="px-2 py-0.5 bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 rounded font-mono font-bold">Alt + N</kbd>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                  <span className="text-slate-300">Alternar Abas de Pedidos</span>
+                  <kbd className="px-2 py-0.5 bg-amber-950/80 text-amber-300 border border-amber-500/40 rounded font-mono font-bold">Alt + 1..6</kbd>
+                </div>
+                <div className="flex justify-between items-center py-1 border-b border-slate-800/60">
+                  <span className="text-slate-300">Limpar / Novo Pedido</span>
                   <kbd className="px-2 py-0.5 bg-slate-800 rounded text-slate-200 font-mono font-bold">F2</kbd>
                 </div>
                 <div className="flex justify-between items-center py-1 border-b border-slate-800/60">

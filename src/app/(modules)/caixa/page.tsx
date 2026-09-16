@@ -10,7 +10,7 @@ import {
   Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck, RotateCcw,
   Repeat, Star, ChevronDown, Globe, MapPin, Phone, Landmark,
   Calculator, Zap, Coins, FileCheck2,
-  HelpCircle, GraduationCap, BookOpen
+  HelpCircle, GraduationCap, BookOpen, PauseCircle
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -1916,6 +1916,38 @@ export default function CaixaPage() {
                   </div>
                 </div>
               )}
+
+              {/* Botão de Destaque Global: + Novo Atendimento (Alt+N) */}
+              {isOpen && (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('pdv');
+                      handleCreateNewDraft();
+                    }}
+                    className="px-3.5 py-2.5 min-h-[44px] bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/50 rounded-2xl font-black flex items-center gap-2 cursor-pointer text-xs uppercase tracking-wider transition-all shadow-[0_0_20px_rgba(16,185,129,0.35)] active:scale-95"
+                    title="Iniciar novo atendimento paralelo sem perder o pedido atual (Ex: cliente chegou no balcão enquanto atendia online) [Alt+N]"
+                  >
+                    <Plus size={16} className="text-white shrink-0" />
+                    <span>+ Novo Atendimento</span>
+                    <span className="text-[10px] bg-emerald-800/80 px-1.5 py-0.5 rounded font-mono hidden sm:inline">Alt+N</span>
+                  </button>
+
+                  {parkedDrafts.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('pdv')}
+                      className="px-3 py-2 min-h-[44px] bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/40 rounded-2xl text-amber-300 text-xs font-black flex items-center gap-1.5 transition-all cursor-pointer shadow-sm active:scale-95"
+                      title="Existem múltiplos atendimentos em andamento. Clique para ver e alternar entre eles."
+                    >
+                      <PauseCircle size={16} className="text-amber-400 animate-pulse shrink-0" />
+                      <span>{parkedDrafts.length} Em Espera</span>
+                    </button>
+                  )}
+                </div>
+              )}
+
               <button 
                 type="button"
                 onClick={() => {
@@ -2780,16 +2812,38 @@ export default function CaixaPage() {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             {/* Abas Laterais */}
             <div className="lg:col-span-2 space-y-2">
-              <button 
-                onClick={() => setActiveTab('pdv')} 
-                className={`w-full flex items-center gap-2.5 p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
-                  activeTab === 'pdv' 
-                    ? 'bg-surface-elevated text-slate-100 border-surface-borderHover shadow-xs' 
-                    : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
-                }`}
-              >
-                <CartIcon size={16} className="text-brand-primary" /> Pedidos
-              </button>
+              <div className="space-y-1">
+                <button 
+                  onClick={() => setActiveTab('pdv')} 
+                  className={`w-full flex items-center justify-between p-3 rounded-xl text-xs font-semibold transition-all text-left cursor-pointer border ${
+                    activeTab === 'pdv' 
+                      ? 'bg-surface-elevated text-slate-100 border-surface-borderHover shadow-xs' 
+                      : 'bg-surface-card text-slate-400 hover:text-slate-200 border-surface-border'
+                  }`}
+                >
+                  <div className="flex items-center gap-2.5">
+                    <CartIcon size={16} className="text-brand-primary" /> Pedidos
+                  </div>
+                  {parkedDrafts.length > 1 && (
+                    <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[10px] font-mono tabular-nums font-bold rounded-full">
+                      {parkedDrafts.length} abas
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTab('pdv');
+                    handleCreateNewDraft();
+                  }}
+                  className="w-full py-2 px-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/35 rounded-xl text-[11px] font-black flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-xs active:scale-95"
+                  title="Abrir novo atendimento paralelo no balcão sem perder o atual [Alt+N]"
+                >
+                  <Plus size={13} className="text-emerald-400" />
+                  <span>+ Novo Atendimento</span>
+                </button>
+              </div>
 
               <button 
                 onClick={() => setActiveTab('mesas')} 
@@ -3008,7 +3062,17 @@ export default function CaixaPage() {
                 </div>
               )}
               {activeTab === 'pdv' && (
-                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-[75vh]">
+                <div className="space-y-4">
+                  {/* BARRA SUPERIOR DE ATENDIMENTOS CONCORRENTES (FULL-WIDTH NO TOPO DO PDV) */}
+                  <ParkedOrdersBar
+                    drafts={parkedDrafts}
+                    activeDraftId={activeDraftId}
+                    onSelectDraft={handleSelectDraft}
+                    onNewDraft={handleCreateNewDraft}
+                    onDeleteDraft={handleDeleteDraft}
+                  />
+
+                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-[75vh]">
                   
                   {/* Grade de Produtos com Categorias */}
                   <div className="lg:col-span-7 glass-card rounded-3xl p-6 border-t-4 border-blue-500 flex flex-col">
@@ -3149,21 +3213,32 @@ export default function CaixaPage() {
                   {/* Carrinho de Pedidos */}
                   <div className="lg:col-span-5 glass-card rounded-3xl p-6 border-t-4 border-emerald-500 flex flex-col justify-between">
                     <div>
-                      {/* BARRA DE ATENDIMENTOS CONCORRENTES (Parked Orders - Frente 5) */}
-                      <ParkedOrdersBar
-                        drafts={parkedDrafts}
-                        activeDraftId={activeDraftId}
-                        onSelectDraft={handleSelectDraft}
-                        onNewDraft={handleCreateNewDraft}
-                        onDeleteDraft={handleDeleteDraft}
-                      />
-
                       <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-800">
-                        <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                          <CartIcon size={20} className="text-emerald-400" /> Carrinho do Pedido
-                        </h2>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                            <CartIcon size={20} className="text-emerald-400" /> Carrinho
+                          </h2>
+                          {(() => {
+                            const activeDraft = parkedDrafts.find(d => d.id === activeDraftId) || parkedDrafts[0];
+                            const draftIdx = parkedDrafts.findIndex(d => d.id === activeDraftId);
+                            const label = activeDraft?.customerName ? activeDraft.customerName : `Aba #${draftIdx >= 0 ? draftIdx + 1 : 1}`;
+                            return (
+                              <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded-lg text-xs font-bold font-mono">
+                                🏷️ {label}
+                              </span>
+                            );
+                          })()}
+                        </div>
                         
                         <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleCreateNewDraft}
+                            className="px-2.5 py-1.5 min-h-[36px] bg-emerald-600 hover:bg-emerald-500 text-white border border-emerald-400/40 rounded-xl text-xs font-black transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
+                            title="Iniciar outro atendimento paralelo no balcão sem perder este pedido [Alt+N]"
+                          >
+                            <Plus size={14} /> + Novo
+                          </button>
                           {cart.length > 0 && (
                             <button
                               type="button"
@@ -4156,6 +4231,7 @@ export default function CaixaPage() {
                     </div>
                   </div>
 
+                  </div>
                 </div>
               )}
 
