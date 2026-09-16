@@ -1,86 +1,53 @@
 'use client';
-import { useEffect } from 'react';
+import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
+import { IconButton } from './IconButton';
 
 interface SlidingSheetProps {
   isOpen: boolean;
   onClose: () => void;
-  title: React.ReactNode;
+  title: ReactNode;
   description?: string;
-  children: React.ReactNode;
-  footer?: React.ReactNode;
+  children: ReactNode;
+  footer?: ReactNode;
   width?: 'sm' | 'md' | 'lg';
 }
-
-export default function SlidingSheet({
-  isOpen,
-  onClose,
-  title,
-  description,
-  children,
-  footer,
-  width = 'md'
-}: SlidingSheetProps) {
-  // Atalho de Teclado: Esc para fechar a gaveta
+export default function SlidingSheet({ isOpen, onClose, title, description, children, footer, width = 'md' }: SlidingSheetProps) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && isOpen) {
-        onClose();
-      }
+    const dialog = ref.current;
+    if (!isOpen || !dialog) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const overflow = document.body.style.overflow;
+    dialog.showModal();
+    document.body.style.overflow = 'hidden';
+    return () => {
+      dialog.close();
+      document.body.style.overflow = overflow;
+      if (previous?.isConnected) previous.focus();
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, onClose]);
-
-  if (!isOpen) return null;
-
-  const widthClass = 
-    width === 'sm' ? 'max-w-sm' :
-    width === 'lg' ? 'max-w-xl' : 'max-w-md';
-
+  }, [isOpen]);
+  const widthClass = width === 'sm' ? 'max-w-sm' : width === 'lg' ? 'max-w-xl' : 'max-w-md';
   return (
-    <div className="fixed inset-0 z-50 overflow-hidden select-none">
-      {/* Backdrop translúcido sutil que mantém o salão/PDV visível ao fundo */}
-      <div 
-        onClick={onClose}
-        className="absolute inset-0 bg-black/40 backdrop-blur-[2px] transition-opacity animate-fade-in cursor-pointer"
-      />
-
-      <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
-        <div className={`w-screen ${widthClass} bg-surface-card border-l border-surface-border shadow-2xl flex flex-col transform transition-transform duration-200 ease-out animate-in slide-in-from-right`}>
-          
-          {/* Cabeçalho da Gaveta */}
-          <div className="p-5 border-b border-surface-border flex items-start justify-between bg-surface-card/90">
-            <div className="space-y-0.5 pr-4">
-              <h3 className="text-base font-bold text-slate-100 tracking-tight">{title}</h3>
-              {description && (
-                <p className="text-xs text-slate-400 leading-relaxed">{description}</p>
-              )}
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-100 hover:bg-surface-elevated transition-colors cursor-pointer"
-              title="Fechar (Esc)"
-            >
-              <X size={18} />
-            </button>
-          </div>
-
-          {/* Conteúdo com rolagem contida */}
-          <div className="flex-1 overflow-y-auto p-5 space-y-4">
-            {children}
-          </div>
-
-          {/* Rodapé de Ações Fixo */}
-          {footer && (
-            <div className="p-4 border-t border-surface-border bg-surface-elevated/40">
-              {footer}
-            </div>
-          )}
-
-        </div>
-      </div>
-    </div>
+    <dialog ref={ref} aria-labelledby={titleId} aria-describedby={description ? descriptionId : undefined}
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onClick={(event) => {
+        if (event.target !== event.currentTarget) return;
+        const rect = event.currentTarget.getBoundingClientRect();
+        if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) onClose();
+      }}
+      className={`fixed inset-y-0 left-auto right-0 m-0 h-dvh max-h-dvh w-full ${widthClass} border-l border-border-default bg-surface-card p-0 text-text-primary shadow-elevated backdrop:bg-black/60`}>
+      {isOpen && <div className="flex h-full flex-col">
+        <header className="flex items-start justify-between gap-4 border-b border-border-default p-5">
+          <div><h2 id={titleId} className="text-base font-semibold">{title}</h2>
+            {description && <p id={descriptionId} className="mt-1 text-sm text-text-muted">{description}</p>}</div>
+          <IconButton label="Fechar painel (Esc)" icon={<X size={18} aria-hidden="true" />} onClick={onClose} />
+        </header>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">{children}</div>
+        {footer && <footer className="border-t border-border-default bg-surface-elevated/40 p-4">{footer}</footer>}
+      </div>}
+    </dialog>
   );
 }
