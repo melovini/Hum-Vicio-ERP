@@ -3,6 +3,43 @@
 
 let sharedAudioCtx: AudioContext | null = null;
 
+export interface AudioSettings {
+  volume: number; // 0.0 a 1.0 (padrão 1.0)
+  muted: boolean;
+}
+
+export function getAudioSettings(): AudioSettings {
+  if (typeof window === 'undefined') return { volume: 1.0, muted: false };
+  try {
+    const saved = localStorage.getItem('hum_vicio_kds_audio_settings');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      return {
+        volume: typeof parsed.volume === 'number' ? Math.max(0, Math.min(1, parsed.volume)) : 1.0,
+        muted: Boolean(parsed.muted)
+      };
+    }
+  } catch {}
+  return { volume: 1.0, muted: false };
+}
+
+export function saveAudioSettings(settings: AudioSettings) {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem('hum_vicio_kds_audio_settings', JSON.stringify(settings));
+  } catch {}
+}
+
+export function setAudioVolume(volume: number) {
+  const current = getAudioSettings();
+  saveAudioSettings({ ...current, volume: Math.max(0, Math.min(1, volume)) });
+}
+
+export function setAudioMuted(muted: boolean) {
+  const current = getAudioSettings();
+  saveAudioSettings({ ...current, muted });
+}
+
 function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
   try {
@@ -34,6 +71,9 @@ if (typeof window !== 'undefined') {
 }
 
 export function playKitchenChime() {
+  const settings = getAudioSettings();
+  if (settings.muted || settings.volume <= 0) return;
+
   try {
     const ctx = getAudioContext();
     if (!ctx) return;
@@ -42,13 +82,15 @@ export function playKitchenChime() {
       ctx.resume().catch(() => {});
     }
 
+    const volMult = settings.volume;
     const playTone = (freq: number, start: number, duration: number, volume: number = 0.4) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sine';
       osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
       
-      gain.gain.setValueAtTime(volume, ctx.currentTime + start);
+      const effectiveVol = Math.max(0.001, volume * volMult);
+      gain.gain.setValueAtTime(effectiveVol, ctx.currentTime + start);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
       
       osc.connect(gain);
@@ -66,6 +108,9 @@ export function playKitchenChime() {
 }
 
 export function playCancellationWarning() {
+  const settings = getAudioSettings();
+  if (settings.muted || settings.volume <= 0) return;
+
   try {
     const ctx = getAudioContext();
     if (!ctx) return;
@@ -74,13 +119,15 @@ export function playCancellationWarning() {
       ctx.resume().catch(() => {});
     }
 
+    const volMult = settings.volume;
     const playTone = (freq: number, start: number, duration: number, volume: number = 0.35) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'sawtooth';
       osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
       
-      gain.gain.setValueAtTime(volume, ctx.currentTime + start);
+      const effectiveVol = Math.max(0.001, volume * volMult);
+      gain.gain.setValueAtTime(effectiveVol, ctx.currentTime + start);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
       
       osc.connect(gain);
@@ -99,6 +146,9 @@ export function playCancellationWarning() {
 
 // Alerta de Pedido Pronto para o Balcão (Campainha de Expedição)
 export function playOrderReadyChime() {
+  const settings = getAudioSettings();
+  if (settings.muted || settings.volume <= 0) return;
+
   try {
     const ctx = getAudioContext();
     if (!ctx) return;
@@ -107,13 +157,15 @@ export function playOrderReadyChime() {
       ctx.resume().catch(() => {});
     }
 
+    const volMult = settings.volume;
     const playTone = (freq: number, start: number, duration: number, volume: number = 0.35) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
       
-      gain.gain.setValueAtTime(volume, ctx.currentTime + start);
+      const effectiveVol = Math.max(0.001, volume * volMult);
+      gain.gain.setValueAtTime(effectiveVol, ctx.currentTime + start);
       gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
       
       osc.connect(gain);
@@ -129,4 +181,9 @@ export function playOrderReadyChime() {
   } catch (err) {
     console.warn('Áudio de pedido pronto não pôde ser reproduzido:', err);
   }
+}
+
+// Função para testar áudio na tela de configurações do KDS
+export function testAudioAlert() {
+  playKitchenChime();
 }

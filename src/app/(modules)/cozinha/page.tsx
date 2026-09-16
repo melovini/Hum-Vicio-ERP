@@ -5,12 +5,12 @@ import {
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
   Eye, Check, ListChecks, MessageSquare, Utensils,
-  Volume2, BellRing, User, X, Play, ArrowLeft, FileText
+  Volume2, Volume1, VolumeX, BellRing, User, X, Play, ArrowLeft, FileText
 } from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
 import SyncStatusBar from '@/components/SyncStatusBar';
-import { playKitchenChime, playCancellationWarning } from '@/lib/audio';
+import { playKitchenChime, playCancellationWarning, getAudioSettings, setAudioVolume, setAudioMuted, testAudioAlert } from '@/lib/audio';
 import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
 
 export default function CozinhaKDSPage() {
@@ -38,6 +38,38 @@ export default function CozinhaKDSPage() {
   useEffect(() => {
     setCollaboratorsList(getActiveCollaborators());
   }, []);
+
+  // Controle de Áudio KDS (Frente 4.2)
+  const [audioSettings, setAudioSettingsState] = useState({ volume: 1, muted: false });
+  const [showVolumeMenu, setShowVolumeMenu] = useState(false);
+
+  useEffect(() => {
+    setAudioSettingsState(getAudioSettings());
+  }, []);
+
+  const handleSetVolume = (vol: number, muted: boolean) => {
+    setAudioMuted(muted);
+    setAudioVolume(vol);
+    setAudioSettingsState({ volume: vol, muted });
+    if (!muted) {
+      testAudioAlert();
+    }
+  };
+
+  // Confirmação de Conclusão Segura (Bumper Bar & Teclado - Frente 4.2)
+  const [pendingConclude, setPendingConclude] = useState<{
+    index: number;
+    orderId: string;
+    timerId: any;
+  } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pendingConclude?.timerId) {
+        clearTimeout(pendingConclude.timerId);
+      }
+    };
+  }, [pendingConclude]);
 
   // Alerta Sonoro & Visual na Cozinha
   const [kitchenAlert, setKitchenAlert] = useState<{ type: 'new_order' | 'cancelled'; message: string } | null>(null);
@@ -525,7 +557,7 @@ export default function CozinhaKDSPage() {
     setSelectedDelayedSale(null);
   };
 
-  // Atalhos de Teclado Físicos (Bumper Bar Industrial / Operação sem mouse ou com luvas sujas)
+  // Atalhos de Teclado Físicos (Bumper Bar Industrial / Operação sem mouse ou com luvas sujas - Frente 4.2)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Ignora se estiver digitando em input ou textarea
@@ -544,16 +576,64 @@ export default function CozinhaKDSPage() {
         return;
       }
 
-      // [1] a [9]: Conclui o lanche correspondente na chapa
+      // [1] a [9]: Conclui o lanche correspondente na chapa com proteção contra duplo-toque acidental
       if (e.key >= '1' && e.key <= '9') {
         const index = parseInt(e.key, 10) - 1;
         if (index < productionOrders.length) {
           e.preventDefault();
           const targetOrder = productionOrders[index];
-          const startTime = new Date(targetOrder.productionStartedAt || targetOrder.date).getTime();
-          const elapsedMinutes = Math.floor(Math.max(0, Date.now() - startTime) / 60000);
-          const targetMin = targetOrder.targetPrepMinutes || targetPrepMinutes || 20;
-          handleConcludeClick(targetOrder, elapsedMinutes >= targetMin);
+
+          // Se já está aguardando confirmação PARA O MESMO PEDIDO (duplo clique da mesma tecla):
+          if (pendingConclude && pendingConclude.index === index && pendingConclude.orderId === targetOrder.id) {
+            clearTimeout(pendingConclude.timerId);
+            setPendingConclude(null);
+            const startTime = new Date(targetOrder.productionStartedAt || targetOrder.date).getTime();
+            const elapsedMinutes = Math.floor(Math.max(0, Date.now() - startTime) / 60000);
+            const targetMin = targetOrder.targetPrepMinutes || targetPrepMinutes || 20;
+            handleConcludeClick(targetOrder, elapsedMinutes >= targetMin);
+            return;
+          }
+
+          // 1º clique: ativa confirmação de 3.5 segundos com proteção visual
+          if (pendingConclude) {
+            clearTimeout(pendingConclude.timerId);
+          }
+          const timerId = setTimeout(() => {
+            setPendingConclude(null);
+          }, 3500);
+
+          setPendingConclude({
+            index,
+            orderId: targetOrder.id,
+            timerId
+          });
+        }
+        return;
+      }
+
+      // [Enter]: Confirma a conclusão do pedido pendente
+      if (e.key === 'Enter') {
+        if (pendingConclude && pendingConclude.index < productionOrders.length) {
+          e.preventDefault();
+          const targetOrder = productionOrders[pendingConclude.index];
+          if (targetOrder && targetOrder.id === pendingConclude.orderId) {
+            clearTimeout(pendingConclude.timerId);
+            setPendingConclude(null);
+            const startTime = new Date(targetOrder.productionStartedAt || targetOrder.date).getTime();
+            const elapsedMinutes = Math.floor(Math.max(0, Date.now() - startTime) / 60000);
+            const targetMin = targetOrder.targetPrepMinutes || targetPrepMinutes || 20;
+            handleConcludeClick(targetOrder, elapsedMinutes >= targetMin);
+          }
+        }
+        return;
+      }
+
+      // [Escape]: Cancela a confirmação pendente
+      if (e.key === 'Escape') {
+        if (pendingConclude) {
+          e.preventDefault();
+          clearTimeout(pendingConclude.timerId);
+          setPendingConclude(null);
         }
         return;
       }
@@ -579,7 +659,7 @@ export default function CozinhaKDSPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [queueOrders, productionOrders, updateOrderProductionStatus, completeOrderProduction, targetPrepMinutes]);
+  }, [pullableQueueOrders, productionOrders, updateOrderProductionStatus, targetPrepMinutes, pendingConclude]);
 
   // Agrupar itens do Painel de Faltas
   const groupedItems = useMemo(() => {
@@ -697,14 +777,87 @@ export default function CozinhaKDSPage() {
             <Trash2 size={16} /> Lançar Perdas
           </Link>
 
-          <button
-            type="button"
-            onClick={() => playKitchenChime()}
-            className="px-3 py-2.5 bg-slate-900 hover:bg-slate-800 text-amber-400 border border-slate-800 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all"
-            title="Clique para testar o som do KDS e habilitar áudio no navegador"
-          >
-            <Volume2 size={15} /> Som KDS
-          </button>
+          {/* CONTROLE DE VOLUME KDS (Frente 4.2) */}
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setShowVolumeMenu(prev => !prev)}
+              className={`px-3 py-2.5 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all border ${
+                audioSettings.muted
+                  ? 'bg-red-950/60 text-red-300 border-red-700/80 hover:bg-red-900/60'
+                  : 'bg-slate-900 text-amber-400 border-slate-800 hover:bg-slate-800'
+              }`}
+              title="Ajustar volume dos alertas sonoros do KDS"
+            >
+              {audioSettings.muted ? (
+                <VolumeX size={16} className="text-red-400" />
+              ) : audioSettings.volume <= 0.5 ? (
+                <Volume1 size={16} className="text-amber-400" />
+              ) : (
+                <Volume2 size={16} className="text-amber-400" />
+              )}
+              <span>Som: {audioSettings.muted ? 'Mudo' : `${Math.round(audioSettings.volume * 100)}%`}</span>
+            </button>
+
+            {showVolumeMenu && (
+              <div className="absolute right-0 top-full mt-2 w-56 bg-slate-900 border border-slate-700 rounded-2xl p-3 shadow-2xl z-50 space-y-2">
+                <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+                  <span className="text-xs font-black text-white uppercase tracking-wider">Volume do KDS</span>
+                  <button
+                    type="button"
+                    onClick={() => setShowVolumeMenu(false)}
+                    className="text-slate-400 hover:text-white cursor-pointer"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-3 gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => handleSetVolume(0, true)}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      audioSettings.muted
+                        ? 'bg-red-600 text-white font-black'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    Mudo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetVolume(0.5, false)}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      !audioSettings.muted && audioSettings.volume === 0.5
+                        ? 'bg-amber-500 text-slate-950 font-black'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    50%
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSetVolume(1.0, false)}
+                    className={`py-1.5 px-2 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                      !audioSettings.muted && audioSettings.volume === 1.0
+                        ? 'bg-emerald-600 text-white font-black'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    100%
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => testAudioAlert()}
+                  className="w-full py-2 bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 cursor-pointer transition-all"
+                >
+                  <Volume2 size={14} /> Testar Alerta Sonoro
+                </button>
+              </div>
+            )}
+          </div>
 
           <button
             type="button"
@@ -750,27 +903,48 @@ export default function CozinhaKDSPage() {
       )}
 
       {/* BARRA DE ATALHOS INDUSTRIAIS (BUMPER BAR) */}
-      <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-2.5 px-4 flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
-        <div className="flex items-center gap-2 text-amber-400 font-bold">
-          <span>⌨️ Bumper Bar Industrial (Operação sem Mouse):</span>
-        </div>
-        <div className="flex flex-wrap items-center gap-3 text-slate-300 text-[11px]">
-          <span className="flex items-center gap-1">
-            <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-300 font-black">ESPAÇO</kbd>
-            Puxar p/ Chapa ({queueOrders.length})
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400 font-black">1..9</kbd>
-            Concluir Lanche da Chapa
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-red-400 font-black">P</kbd>
-            Lançar Descarte
-          </span>
-          <span className="flex items-center gap-1">
-            <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-400 font-black">T</kbd>
-            Alternar Abas
-          </span>
+      <div className="space-y-2 mb-6">
+        {pendingConclude && (
+          <div className="w-full bg-amber-500/25 border-2 border-amber-500 text-amber-100 rounded-2xl p-3 px-4 flex flex-wrap items-center justify-between gap-3 text-xs font-mono font-black animate-pulse shadow-xl shadow-amber-500/20">
+            <span className="flex items-center gap-2">
+              <AlertTriangle size={18} className="text-amber-400 shrink-0 animate-bounce" />
+              CONFIRMAÇÃO SEGURA: Pressione [{pendingConclude.index + 1}] novamente ou [ENTER] para concluir Pedido #{pendingConclude.orderId.slice(0, 5).toUpperCase()}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                if (pendingConclude) clearTimeout(pendingConclude.timerId);
+                setPendingConclude(null);
+              }}
+              className="px-3 py-1 bg-slate-900 border border-slate-700 text-slate-200 hover:text-white rounded-xl text-[11px] cursor-pointer"
+            >
+              [ESC] Cancelar
+            </button>
+          </div>
+        )}
+
+        <div className="bg-slate-950/90 border border-slate-800 rounded-2xl p-2.5 px-4 flex flex-wrap items-center justify-between gap-2 text-xs font-mono">
+          <div className="flex items-center gap-2 text-amber-400 font-bold">
+            <span>⌨️ Bumper Bar Industrial (Operação sem Mouse):</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-3 text-slate-300 text-[11px]">
+            <span className="flex items-center gap-1">
+              <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-amber-300 font-black">ESPAÇO</kbd>
+              Puxar p/ Chapa ({queueOrders.length})
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-emerald-400 font-black">1..9</kbd>
+              Concluir Lanche (2 toques / Enter)
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-red-400 font-black">P</kbd>
+              Lançar Descarte
+            </span>
+            <span className="flex items-center gap-1">
+              <kbd className="px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-cyan-400 font-black">T</kbd>
+              Alternar Abas
+            </span>
+          </div>
         </div>
       </div>
 
@@ -1011,16 +1185,19 @@ export default function CozinhaKDSPage() {
                 const target = order.targetPrepMinutes || targetPrepMinutes || 20;
                 const isDelayed = elapsedMinutes >= target;
                 const isWarning = !isDelayed && elapsedMinutes >= Math.floor(target * 0.75);
+                const isPendingThisOrder = pendingConclude?.orderId === order.id;
 
                 return (
                   <div
                     key={order.id}
                     className={`rounded-3xl p-5 border-2 flex flex-col justify-between transition-all shadow-xl ${
-                      isDelayed
-                        ? 'bg-red-950/40 border-red-500 ring-2 ring-red-500/50 animate-pulse'
-                        : isWarning
-                          ? 'bg-amber-950/25 border-amber-500/70'
-                          : 'bg-slate-900/90 border-slate-800'
+                      isPendingThisOrder
+                        ? 'bg-amber-950/40 border-amber-400 ring-4 ring-amber-400/80 animate-pulse'
+                        : isDelayed
+                          ? 'bg-red-950/40 border-red-500 ring-2 ring-red-500/50 animate-pulse'
+                          : isWarning
+                            ? 'bg-amber-950/25 border-amber-500/70'
+                            : 'bg-slate-900/90 border-slate-800'
                     }`}
                   >
                     <div>
@@ -1069,7 +1246,7 @@ export default function CozinhaKDSPage() {
                           </p>
                         </div>
 
-                        {/* Cronômetro */}
+                        {/* Cronômetro (Independente de cores - Frente 4.2) */}
                         <div className={`text-right px-3 py-1.5 rounded-2xl font-mono ${
                           isDelayed
                             ? 'bg-red-600 text-white shadow-lg shadow-red-600/50'
@@ -1077,11 +1254,22 @@ export default function CozinhaKDSPage() {
                               ? 'bg-amber-500 text-slate-950 font-black'
                               : 'bg-slate-800 text-slate-200'
                         }`}>
-                          <div className="flex items-center gap-1.5 text-lg font-black tracking-wider">
-                            <Clock size={16} /> {formattedTimer}
+                          <div className="flex items-center gap-1.5 text-lg font-black tracking-wider justify-end">
+                            {isDelayed ? (
+                              <AlertOctagon size={16} className="shrink-0 animate-pulse" />
+                            ) : isWarning ? (
+                              <AlertTriangle size={16} className="shrink-0" />
+                            ) : (
+                              <Clock size={16} className="shrink-0" />
+                            )}
+                            <span>{formattedTimer}</span>
                           </div>
-                          <span className="text-[10px] font-bold block uppercase tracking-tighter">
-                            {isDelayed ? `ATRASADO (+${elapsedMinutes - target}m)` : `Meta: ${target}m`}
+                          <span className="text-[10px] font-black block uppercase tracking-tighter">
+                            {isDelayed 
+                              ? `⚠️ [ATRASADO +${elapsedMinutes - target}m]` 
+                              : isWarning 
+                                ? `⏳ [ATENÇÃO - Faltam ${target - elapsedMinutes}m]` 
+                                : `✓ [NO PRAZO - Meta ${target}m]`}
                           </span>
                         </div>
                       </div>
@@ -1101,41 +1289,59 @@ export default function CozinhaKDSPage() {
                         </div>
                       </div>
 
-                      {/* Callout de Pedido Modificado (Delta Diff) */}
+                      {/* Callout de Pedido Modificado (Delta Diff - Frente 4.2) */}
                       {order.orderDiff && (
-                        <div className="mb-3.5 p-3.5 rounded-2xl bg-amber-950/40 border-2 border-amber-500/60 space-y-2 text-xs">
+                        <div className={`mb-3.5 p-3.5 rounded-2xl border-2 space-y-2 text-xs ${
+                          order.isModifiedInKitchen 
+                            ? 'bg-red-950/50 border-red-500 ring-2 ring-red-500/50 shadow-lg' 
+                            : 'bg-amber-950/40 border-amber-500/60'
+                        }`}>
                           <div className="flex items-center justify-between gap-2">
-                            <span className="font-black text-amber-300 uppercase tracking-wider block text-[11px]">
-                              ⚠️ ALTERAÇÕES NO PEDIDO (DIFF):
+                            <span className="font-black text-amber-300 uppercase tracking-wider block text-[11px] flex items-center gap-1.5">
+                              <AlertTriangle size={14} className="text-amber-400 shrink-0" /> ALTERAÇÕES NO PEDIDO (DIFF):
                             </span>
-                            {order.isModifiedInKitchen && (
+                            {order.isModifiedInKitchen ? (
                               <button
                                 type="button"
                                 onClick={() => acknowledgeOrderModification(order.id)}
-                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[10px] uppercase rounded-lg shadow-md cursor-pointer transition-all flex items-center gap-1 shrink-0"
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[11px] uppercase rounded-xl shadow-lg cursor-pointer transition-all flex items-center gap-1.5 shrink-0 border border-emerald-400"
+                                title="Registrar ciência da alteração recebida após o início do preparo"
                               >
-                                <Check size={12} /> Ciente da Alteração
+                                <Check size={14} /> [✓ CIENTE DA ALTERAÇÃO]
                               </button>
+                            ) : (
+                              <span className="text-[10px] font-bold text-emerald-400 uppercase bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/40">
+                                ✓ Ciente Registrado
+                              </span>
                             )}
                           </div>
                           {order.orderDiff.added.length > 0 && (
-                            <div className="text-emerald-300 font-bold">
+                            <div className="text-emerald-300 font-bold space-y-1 bg-slate-950/70 p-2 rounded-xl border border-emerald-500/30">
                               {order.orderDiff.added.map((item, i) => (
-                                <p key={i}>+ {item.quantity}x {item.productName} (ADICIONADO)</p>
+                                <p key={i} className="flex items-center gap-1.5">
+                                  <span className="px-1.5 py-0.5 bg-emerald-600 text-white text-[10px] font-black rounded uppercase">+ ADICIONADO</span>
+                                  <span>{item.quantity}x {item.productName}</span>
+                                </p>
                               ))}
                             </div>
                           )}
                           {order.orderDiff.removed.length > 0 && (
-                            <div className="text-red-400 font-bold line-through">
+                            <div className="text-red-400 font-bold space-y-1 bg-slate-950/70 p-2 rounded-xl border border-red-500/30">
                               {order.orderDiff.removed.map((item, i) => (
-                                <p key={i}>- {item.quantity}x {item.productName} (CANCELADO)</p>
+                                <p key={i} className="flex items-center gap-1.5 line-through">
+                                  <span className="px-1.5 py-0.5 bg-red-600 text-white text-[10px] font-black rounded uppercase no-underline">- CANCELADO</span>
+                                  <span>{item.quantity}x {item.productName}</span>
+                                </p>
                               ))}
                             </div>
                           )}
                           {order.orderDiff.modified.length > 0 && (
-                            <div className="text-amber-200 font-medium">
+                            <div className="text-amber-200 font-medium space-y-1 bg-slate-950/70 p-2 rounded-xl border border-amber-500/30">
                               {order.orderDiff.modified.map((m, i) => (
-                                <p key={i}>* {m.item.quantity}x {m.item.productName}: {m.newNotes || 'Sem obs'}</p>
+                                <p key={i} className="flex items-center gap-1.5">
+                                  <span className="px-1.5 py-0.5 bg-amber-600 text-slate-950 text-[10px] font-black rounded uppercase">* OBS ALTERADA</span>
+                                  <span>{m.item.quantity}x {m.item.productName}: <strong>{m.newNotes || 'Sem obs'}</strong></span>
+                                </p>
                               ))}
                             </div>
                           )}
@@ -1222,18 +1428,32 @@ export default function CozinhaKDSPage() {
                       </div>
                     </div>
 
-                    {/* Botão de Concluir Pedido */}
-                    <button
-                      type="button"
-                      onClick={() => handleConcludeClick(order, isDelayed)}
-                      className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg active:scale-95 ${
-                        isDelayed
-                          ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30 ring-2 ring-red-400'
-                          : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
-                      }`}
-                    >
-                      <Check size={20} /> Concluir Pedido
-                    </button>
+                    {/* Botão de Concluir Pedido com Confirmação Segura (Frente 4.2) */}
+                    {isPendingThisOrder ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (pendingConclude) clearTimeout(pendingConclude.timerId);
+                          setPendingConclude(null);
+                          handleConcludeClick(order, isDelayed);
+                        }}
+                        className="w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-xl bg-amber-500 hover:bg-amber-400 text-slate-950 animate-bounce ring-4 ring-amber-400"
+                      >
+                        <Check size={20} /> CONFIRMAR: Pressione [{orderIdx + 1}] ou ENTER
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleConcludeClick(order, isDelayed)}
+                        className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg active:scale-95 ${
+                          isDelayed
+                            ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30 ring-2 ring-red-400'
+                            : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
+                        }`}
+                      >
+                        <Check size={20} /> Concluir Pedido {orderIdx < 9 ? `[${orderIdx + 1}]` : ''}
+                      </button>
+                    )}
                   </div>
                 );
               })}

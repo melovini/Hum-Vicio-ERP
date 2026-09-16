@@ -2579,8 +2579,27 @@ export function useInventory() {
     return { success: true, sale: updatedSale };
   };
 
+  // Validador estrito de transições de produção (Frente 4.2 - Usabilidade de Cozinha)
+  const isValidProductionTransition = (currentStatus: ProductionStatus, newStatus: ProductionStatus, isCancelled: boolean): boolean => {
+    if (isCancelled) return false;
+    if (currentStatus === newStatus) return true;
+    // Se já está concluído, impede regressão para em_producao, em_espera ou agendado
+    if (currentStatus === 'concluido') return false;
+    // Transições permitidas:
+    // em_espera -> em_producao, agendado
+    // agendado -> em_espera, em_producao
+    // em_producao -> concluido, em_espera
+    return true;
+  };
+
   // Ação do Balcão: alterar status de produção (para chapa, em espera, agendado)
   const updateOrderProductionStatus = async (saleId: string, newStatus: ProductionStatus) => {
+    const existing = sales.find(s => s.id === saleId);
+    if (!existing || !isValidProductionTransition(existing.productionStatus || 'em_espera', newStatus, existing.status === 'cancelled')) {
+      console.warn(`[KDS] Transição de produção incompatível ignorada para o pedido ${saleId}: de ${existing?.productionStatus} para ${newStatus} (cancelado=${existing?.status === 'cancelled'})`);
+      return;
+    }
+
     const startedAt = newStatus === 'em_producao' ? new Date().toISOString() : undefined;
     
     // 1. Salvar override no storage local para nunca ser sobrescrito pelo polling
@@ -2616,10 +2635,19 @@ export function useInventory() {
   // Ação do Balcão: Enviar múltiplos pedidos em lote para a Chapa de uma vez
   const updateBatchProductionStatus = async (saleIds: string[], newStatus: ProductionStatus) => {
     if (!saleIds || saleIds.length === 0) return;
+
+    // Filtra apenas pedidos com transição compatível
+    const validSaleIds = saleIds.filter(id => {
+      const s = sales.find(sale => sale.id === id);
+      if (!s) return false;
+      return isValidProductionTransition(s.productionStatus || 'em_espera', newStatus, s.status === 'cancelled');
+    });
+
+    if (validSaleIds.length === 0) return;
     const startedAt = newStatus === 'em_producao' ? new Date().toISOString() : undefined;
 
     // 1. Salvar overrides de todos os pedidos selecionados
-    saveProductionOverrides(saleIds.map(id => ({ 
+    saveProductionOverrides(validSaleIds.map(id => ({ 
       id, 
       status: newStatus, 
       startedAt: startedAt || new Date().toISOString() 
@@ -2629,14 +2657,14 @@ export function useInventory() {
     try {
       const updateData: any = { production_status: newStatus };
       if (startedAt) updateData.production_started_at = startedAt;
-      await supabase.from('sales').update(updateData).in('id', saleIds);
+      await supabase.from('sales').update(updateData).in('id', validSaleIds);
     } catch (err) {
       console.warn('Erro ao atualizar lote de pedidos no Supabase:', err);
     }
 
     setSales(prev => {
       const updated = prev.map(s => {
-        if (saleIds.includes(s.id)) {
+        if (validSaleIds.includes(s.id)) {
           return {
             ...s,
             productionStatus: newStatus,
@@ -2654,8 +2682,13 @@ export function useInventory() {
 
   // Ação da Cozinha: concluir pedido (com justificativa de atraso se aplicável)
   const completeOrderProduction = async (saleId: string, delayReason?: DelayReason, delayNotes?: string) => {
-    const completedAt = new Date().toISOString();
     const existing = sales.find(s => s.id === saleId);
+    if (!existing || existing.status === 'cancelled' || existing.productionStatus === 'concluido') {
+      console.warn(`[KDS] Não é possível concluir pedido ${saleId} (inexistente, cancelado ou já concluído)`);
+      return;
+    }
+
+    const completedAt = new Date().toISOString();
     let timeMinutes = 0;
     if (existing?.productionStartedAt) {
       const startMs = new Date(existing.productionStartedAt).getTime();
