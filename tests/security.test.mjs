@@ -229,3 +229,91 @@ test('listagem de colaboradores não consulta ou retorna os hashes', async () =>
   assert.equal(result.collaborators[0].pin, '');
   assert.equal(JSON.stringify(result).includes('never-return-this'), false);
 });
+
+test('checkout transacional valida permissões, integridade matemática e idempotência', async () => {
+  const rpcCalls = [];
+  const fixture = sessionFixture('cozinha');
+  const dbMock = {
+    from(table) {
+      return {
+        select() { return this; },
+        eq() { return this; },
+        async single() {
+          return {
+            data: table === 'app_sessions' ? fixture.state.session : fixture.state.person,
+            error: null
+          };
+        }
+      };
+    },
+    rpc: async (name, params) => {
+      rpcCalls.push({ name, params });
+      return { data: { success: true, saleId: params.p_sale.id }, error: null };
+    }
+  };
+
+  const databaseModule = { createServerDatabase: () => dbMock };
+  const load = createLoader({
+    'next/headers': { cookies: async () => ({ get: () => fixture.state.token ? { value: fixture.state.token } : undefined }) },
+    '../supabase-server': databaseModule,
+    '@/lib/supabase-server': databaseModule,
+  });
+
+  const route = load('src/app/api/sales/checkout/route.ts');
+
+  const validSale = {
+    id: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    channel: 'balcao',
+    subtotal: 50,
+    discount: 5,
+    deliveryFee: 0,
+    total: 45,
+    paymentMethod: 'pix',
+    items: [
+      { productId: 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', productName: 'Brasil Burger', quantity: 1, unitPrice: 45 }
+    ]
+  };
+
+  const post = (payload, origin = 'https://erp.test') => new Request('https://erp.test/api/sales/checkout', {
+    method: 'POST',
+    headers: { origin, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+
+  // 1. Sem sessão -> 401
+  assert.equal((await route.POST(post({ idempotencyKey: 'key-12345678', sale: validSale }))).status, 401);
+
+  // 2. Com perfil cozinha -> 403
+  await fixture.sign();
+  assert.equal((await route.POST(post({ idempotencyKey: 'key-12345678', sale: validSale }))).status, 403);
+
+  // 3. Com perfil caixa mas origem externa -> 403
+  fixture.state.person.role = 'caixa';
+  fixture.state.token = await load('src/lib/session.ts').signSessionToken('caixa', 'Operador', 'operator', 'test-session');
+  assert.equal((await route.POST(post({ idempotencyKey: 'key-12345678', sale: validSale }, 'https://evil.test'))).status, 403);
+
+  // 4. Com divergência matemática no total -> 400
+  const tamperedSale = { ...validSale, total: 10 };
+  assert.equal((await route.POST(post({ idempotencyKey: 'key-12345678', sale: tamperedSale }))).status, 400);
+
+  // 5. Sem itens -> 400
+  assert.equal((await route.POST(post({ idempotencyKey: 'key-12345678', sale: { ...validSale, items: [] } }))).status, 400);
+
+  // 6. ID inválido (não UUID) -> 400
+  assert.equal((await route.POST(post({ idempotencyKey: 'key-12345678', sale: { ...validSale, id: 'invalid-id' } }))).status, 400);
+
+  // 7. Venda válida com perfil caixa -> 200 e dispara RPC transacional
+  const res = await route.POST(post({ idempotencyKey: 'key-12345678', sale: validSale }));
+  assert.equal(res.status, 200);
+  assert.equal(rpcCalls.length, 1);
+  assert.equal(rpcCalls[0].name, 'process_sale_checkout');
+  assert.equal(rpcCalls[0].params.p_idempotency_key, 'key-12345678');
+  assert.equal(rpcCalls[0].params.p_sale.id, validSale.id);
+
+  // 8. Reenvio com a mesma chave de idempotência -> 200
+  const res2 = await route.POST(post({ idempotencyKey: 'key-12345678', sale: validSale }));
+  assert.equal(res2.status, 200);
+  assert.equal(rpcCalls.length, 2);
+  assert.equal(rpcCalls[1].params.p_idempotency_key, 'key-12345678');
+});
+

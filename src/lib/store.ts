@@ -152,6 +152,7 @@ export interface Sale {
   paidAt?: string;
   paidMethod?: string;
   isOfflineSynced?: boolean;
+  idempotencyKey?: string;
 }
 
 // === CUSTOS FIXOS MENSAIS ESTRUTURADOS (DRE & PONTO DE EQUILÍBRIO) ===
@@ -535,7 +536,7 @@ export function removeOfflineSaleFromQueue(saleId: string): void {
 }
 
 // Drena e sincroniza as vendas offline para o Supabase quando a conexão estiver restabelecida
-export async function syncOfflineSalesQueue(supabaseClient: any): Promise<{ syncedCount: number; errorsCount: number }> {
+export async function syncOfflineSalesQueue(supabaseClient?: any): Promise<{ syncedCount: number; errorsCount: number }> {
   const queue = getOfflineSalesQueue();
   if (!Array.isArray(queue) || queue.length === 0) return { syncedCount: 0, errorsCount: 0 };
 
@@ -544,53 +545,27 @@ export async function syncOfflineSalesQueue(supabaseClient: any): Promise<{ sync
 
   for (const sale of queue) {
     try {
-      // 1. Upsert da venda garantindo o ID da comanda
-      const { error: saleErr } = await supabaseClient.from('sales').upsert({
-        id: sale.id,
-        channel: sale.channel,
-        total: sale.total,
-        payment_method: sale.paidMethod || sale.paymentMethod,
-        customer_name: sale.customerName || 'Balcão',
-        order_type: sale.orderType || 'mesa',
-        status: sale.status || 'completed',
-        production_status: sale.productionStatus || 'em_espera',
-        production_started_at: sale.productionStartedAt || sale.date,
-        target_prep_minutes: sale.targetPrepMinutes || 20,
-        subtotal: sale.subtotal,
-        discount: sale.discount,
-        delivery_fee: sale.deliveryFee,
-        created_at: sale.date
-      }, { onConflict: 'id' });
+      const idempotencyKey = (sale as any).idempotencyKey || `sale_checkout_${sale.id}`;
+      const res = await fetch('/api/sales/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idempotencyKey, sale }),
+      });
 
-      if (saleErr) {
-        console.warn('Erro ao sincronizar venda offline no Supabase:', sale.id, saleErr);
+      if (res.ok) {
+        removeOfflineSaleFromQueue(sale.id);
+        syncedCount++;
+      } else {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn('Falha na sincronização transacional da venda offline:', sale.id, errJson);
         errorsCount++;
-        continue;
+        // Se rejeitada por validação de negócio definitiva (ex: 400), descarta da fila para não bloquear o fluxo
+        if (res.status === 400) {
+          removeOfflineSaleFromQueue(sale.id);
+        } else {
+          break; // Servidor temporariamente indisponível
+        }
       }
-
-      // 2. Insere os itens da venda
-      if (sale.items && sale.items.length > 0) {
-        const saleItems = sale.items.map(i => {
-          let displayName = i.productName;
-          if (i.combo) displayName += ` (${i.combo})`;
-          if (i.additionals && i.additionals.length > 0) {
-            displayName += ` + [${i.additionals.map((a: any) => a.name).join(', ')}]`;
-          }
-          if (i.notes) displayName += ` *Obs: ${i.notes}*`;
-          return {
-            sale_id: sale.id,
-            product_id: i.productId,
-            product_name: displayName,
-            quantity: i.quantity,
-            unit_price: i.unitPrice
-          };
-        });
-        await supabaseClient.from('sale_items').upsert(saleItems);
-      }
-
-      // Remove da fila se enviado com sucesso
-      removeOfflineSaleFromQueue(sale.id);
-      syncedCount++;
     } catch (err) {
       console.warn('Banco offline ou indisponível ao tentar drenar venda:', err);
       errorsCount++;
@@ -2168,94 +2143,92 @@ export function useInventory() {
     const initialProductionStarted = sale.productionStartedAt || new Date().toISOString();
     const initialTargetPrep = sale.targetPrepMinutes || targetPrepMinutes;
 
-    // ID gerado antecipadamente no client para permitir operação resiliente mesmo se o banco de dados cair
-    const clientGeneratedId = 'sale_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 7);
+    // UUID nativo padrão gerado no cliente
+    const clientGeneratedId = typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : ('00000000-0000-4000-8000-' + Date.now().toString(16).padStart(12, '0'));
+    const idempotencyKey = `sale_checkout_${clientGeneratedId}`;
+
+    // Configuração de Vendas a Prazo / Contas a Receber
+    const isCreditSale = sale.paymentMethod === 'consumo_funcionario' || sale.paymentMethod === 'fiado_vip';
+    const creditStatus = isCreditSale ? (sale.creditStatus || 'pendente') : undefined;
+
+    // Status de pagamento da Retirada
+    const paymentStatus: 'pago' | 'pendente_retirada' = sale.paymentStatus || (
+      sale.orderType === 'retirada' && sale.paymentMethod === 'retirada' ? 'pendente_retirada' :
+      isCreditSale ? 'pendente_retirada' : 'pago'
+    );
+
+    // Identificação de Brindes no Pedido
+    const giftItems = (sale.items || []).filter(i => i.isGift);
+    const hasGifts = giftItems.length > 0;
+    const giftsTotalValue = giftItems.reduce((acc, i) => acc + ((i.originalPrice || 0) * i.quantity), 0);
+
     let sData: any = null;
     let isOffline = false;
 
-    // Tentativa com timeout de 2.2 segundos para nunca travar a tela do caixa se o Supabase cair
+    // Execução atômica no servidor com timeout de 3.5s (tolerância para conexão lenta)
     try {
-      const insertOnline = async () => {
-        try {
-          const { data, error } = await supabase.from('sales').insert({
-            id: clientGeneratedId,
-            channel: sale.channel, 
-            total: sale.total, 
-            payment_method: sale.paidMethod || sale.paymentMethod,
-            customer_name: sale.customerName || 'Balcão',
-            order_type: sale.orderType || 'mesa',
-            status: 'completed',
-            production_status: initialProductionStatus,
-            production_started_at: initialProductionStarted,
-            target_prep_minutes: initialTargetPrep,
-            subtotal: sale.subtotal,
-            discount: sale.discount,
-            delivery_fee: sale.deliveryFee
-          }).select().single();
+      const checkoutOnline = async () => {
+        const res = await fetch('/api/sales/checkout', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            idempotencyKey,
+            sale: {
+              ...sale,
+              id: clientGeneratedId,
+              channel: sale.channel,
+              total: sale.total,
+              subtotal: sale.subtotal !== undefined ? sale.subtotal : sale.total,
+              discount: sale.discount || 0,
+              deliveryFee: sale.deliveryFee || 0,
+              storeCouponSubsidy: sale.storeCouponSubsidy || 0,
+              paymentMethod: sale.paidMethod || sale.paymentMethod,
+              paidMethod: paymentStatus === 'pago' ? (sale.paidMethod || sale.paymentMethod) : undefined,
+              paymentStatus,
+              paidAt: paymentStatus === 'pago' ? (sale.paidAt || new Date().toISOString()) : undefined,
+              customerName: sale.customerName || (sale.paymentMethod === 'consumo_funcionario' ? sale.collaboratorName : sale.creditCustomerName) || 'Balcão',
+              orderType: sale.orderType || 'mesa',
+              productionStatus: initialProductionStatus,
+              productionStartedAt: initialProductionStarted,
+              targetPrepMinutes: initialTargetPrep,
+              items: sale.items,
+              date: new Date().toISOString(),
+              collaboratorId: sale.collaboratorId,
+              collaboratorName: sale.collaboratorName,
+              creditCustomerName: sale.creditCustomerName,
+              creditDueDate: sale.creditDueDate,
+              creditNotes: sale.creditNotes,
+              creditStatus,
+            }
+          })
+        });
 
-          if (!error && data) return data;
-        } catch (e) {
-          console.warn('Tentativa 1 online falhou:', e);
+        if (res.ok) {
+          return await res.json();
         }
-
-        // Fallback mínimo caso colunas adicionais não existam
-        try {
-          const { data: minData } = await supabase.from('sales').insert({
-            id: clientGeneratedId,
-            channel: sale.channel, 
-            total: sale.total, 
-            payment_method: sale.paidMethod || sale.paymentMethod
-          }).select().single();
-          if (minData) return minData;
-        } catch (e) {
-          console.warn('Tentativa mínima online falhou:', e);
-        }
-
         return null;
       };
 
-      const timeoutRace = new Promise(resolve => setTimeout(() => resolve(null), 2200));
-      sData = await Promise.race([insertOnline(), timeoutRace]);
-    } catch {
+      const timeoutRace = new Promise(resolve => setTimeout(() => resolve(null), 3500));
+      sData = await Promise.race([checkoutOnline(), timeoutRace]);
+    } catch (e) {
+      console.warn('Tentativa online de checkout falhou:', e);
       sData = null;
     }
 
     if (!sData) {
       isOffline = true;
       setIsOnline(false);
+    } else {
+      setIsOnline(true);
     }
 
-    const saleId = sData?.id || clientGeneratedId;
+    const saleId = sData?.saleId || sData?.sale?.id || clientGeneratedId;
 
-    // Salvar itens se houver conexão com o banco
-    if (sData && sale.items && sale.items.length > 0) {
-      try {
-        const saleItems = sale.items.map(i => {
-          let displayName = i.productName;
-          if (i.combo) displayName += ` (${i.combo})`;
-          if (i.additionals && i.additionals.length > 0) {
-            displayName += ` + [${i.additionals.map(a => a.name).join(', ')}]`;
-          }
-          if (i.notes) displayName += ` *Obs: ${i.notes}*`;
-
-          return {
-            sale_id: saleId, 
-            product_id: i.productId, 
-            product_name: displayName,
-            quantity: i.quantity, 
-            unit_price: i.unitPrice
-          };
-        });
-        await supabase.from('sale_items').insert(saleItems);
-      } catch (err) {
-        console.warn('Erro ao salvar sale_items no Supabase:', err);
-      }
-    }
-
-    // Baixa local de estoque imediata & Sincronização Supabase (Explosão de Ficha Técnica)
+    // Baixa local de estoque imediata para feedback instantâneo da interface
     const newItems = [...items];
-    const deductedItems: { id: string; name: string; deducted: number; remaining: number }[] = [];
-
     sale.items.forEach(si => {
       const prod = products.find(p => p.id === si.productId);
       if (prod) {
@@ -2269,27 +2242,6 @@ export function useInventory() {
               currentStock: newStock,
               status: newStock <= 0 ? 'zerado' : (newItems[invIdx].minStock && newStock <= newItems[invIdx].minStock) ? 'acabando' : newItems[invIdx].status
             };
-            deductedItems.push({ id: r.ingredientId, name: newItems[invIdx].name, deducted: decr, remaining: newStock });
-          }
-        });
-      }
-
-      // Baixa de insumos por adicionais extras selecionados (ex: Bacon extra, Queijo extra)
-      if (si.additionals && si.additionals.length > 0) {
-        si.additionals.forEach(add => {
-          const matchedInvIdx = newItems.findIndex(inv => 
-            inv.name.toLowerCase().includes(add.name.toLowerCase()) || 
-            add.name.toLowerCase().includes(inv.name.toLowerCase())
-          );
-          if (matchedInvIdx > -1) {
-            const decr = 1 * si.quantity;
-            const newStock = Number((newItems[matchedInvIdx].currentStock - decr).toFixed(3));
-            newItems[matchedInvIdx] = {
-              ...newItems[matchedInvIdx],
-              currentStock: newStock,
-              status: newStock <= 0 ? 'zerado' : (newItems[matchedInvIdx].minStock && newStock <= newItems[matchedInvIdx].minStock) ? 'acabando' : newItems[matchedInvIdx].status
-            };
-            deductedItems.push({ id: newItems[matchedInvIdx].id, name: newItems[matchedInvIdx].name, deducted: decr, remaining: newStock });
           }
         });
       }
@@ -2297,29 +2249,7 @@ export function useInventory() {
 
     setItems(newItems);
 
-    // Sincronização assíncrona da baixa de estoque no Supabase
-    deductedItems.forEach(async dItem => {
-      try {
-        await supabase.from('inventory').update({ current_stock: dItem.remaining }).eq('id', dItem.id);
-      } catch (err) {
-        console.warn('Erro ao sincronizar baixa de estoque no Supabase:', err);
-      }
-    });
-
-    if (deductedItems.length > 0) {
-      addAuditLog(
-        'BAIXA_ESTOQUE_VENDA',
-        `Explosão de receita: baixa automática de ${deductedItems.length} insumo(s) referente ao pedido de "${sale.customerName || 'Balcão'}".`,
-        'Sistema'
-      );
-    }
-
-    // Identificação de Brindes no Pedido
-    const giftItems = (sale.items || []).filter(i => i.isGift);
-    const hasGifts = giftItems.length > 0;
-    const giftsTotalValue = giftItems.reduce((acc, i) => acc + ((i.originalPrice || 0) * i.quantity), 0);
-
-    // Auditoria automática de brindes concedidos pelo operador
+    // Auditoria de brindes concedidos pelo operador
     giftItems.forEach(g => {
       const reasonLabel = 
         g.giftReason === 'falta_pedido_anterior' ? 'Falta / Esquecimento no pedido anterior' :
@@ -2358,20 +2288,11 @@ export function useInventory() {
       );
     }
 
-    // Configuração de Vendas a Prazo / Contas a Receber
-    const isCreditSale = sale.paymentMethod === 'consumo_funcionario' || sale.paymentMethod === 'fiado_vip';
-    const creditStatus = isCreditSale ? (sale.creditStatus || 'pendente') : undefined;
-
-    // Status de pagamento da Retirada
-    const paymentStatus: 'pago' | 'pendente_retirada' = sale.paymentStatus || (
-      sale.orderType === 'retirada' && sale.paymentMethod === 'retirada' ? 'pendente_retirada' :
-      isCreditSale ? 'pendente_retirada' : 'pago'
-    );
-
     // O pedido É SEMPRE INCLUÍDO E NUNCA SE PERDE!
     const newSaleLocal: Sale = {
       ...sale,
       id: saleId,
+      idempotencyKey,
       customerName: sale.customerName || (sale.paymentMethod === 'consumo_funcionario' ? sale.collaboratorName : sale.creditCustomerName) || 'Balcão',
       orderType: sale.orderType || 'mesa',
       subtotal: sale.subtotal !== undefined ? sale.subtotal : sale.total,
@@ -2395,11 +2316,11 @@ export function useInventory() {
       creditStatus,
       creditPaidAt: sale.creditPaidAt,
       creditPaidMethod: sale.creditPaidMethod,
-      date: sData?.created_at || new Date().toISOString(),
+      date: sData?.sale?.date || new Date().toISOString(),
       status: 'completed'
     };
 
-    // Se salvou offline (banco de dados caiu ou não respondeu em 2s), adiciona na fila outbox
+    // Se salvou offline (banco de dados caiu ou não respondeu em 3.5s), adiciona na fila outbox
     if (isOffline) {
       enqueueOfflineSale(newSaleLocal);
       setOfflineQueueCount(getOfflineSalesQueue().length);

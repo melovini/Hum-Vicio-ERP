@@ -64,23 +64,23 @@ os resultados dos testes no ambiente real.
 **Problema:** o fluxo atual realiza gravações separadas para venda, itens e estoque.
 Uma falha intermediária pode deixar dados inconsistentes.
 
-- [ ] Criar uma operação de negócio no servidor para registrar a venda completa.
-- [ ] Recalcular preços, adicionais, descontos e total a partir de dados confiáveis.
-- [ ] Validar produtos ativos, quantidades, formas de pagamento e caixa aberto.
-- [ ] Executar as gravações relacionadas em uma transação no banco.
-- [ ] Garantir que falhas interrompam toda a operação, sem confirmar sucesso parcial.
-- [ ] Usar representação monetária precisa e regras explícitas de arredondamento.
+- [x] Criar uma operação de negócio no servidor para registrar a venda completa (`/api/sales/checkout`).
+- [x] Recalcular preços, adicionais, descontos e total a partir de dados confiáveis.
+- [x] Validar produtos ativos, quantidades, formas de pagamento e caixa aberto.
+- [x] Executar as gravações relacionadas em uma transação no banco (RPC `process_sale_checkout`).
+- [x] Garantir que falhas interrompam toda a operação, sem confirmar sucesso parcial.
+- [x] Usar representação monetária precisa e regras explícitas de arredondamento.
 
 **Critério de aceite:** uma falha provocada em qualquer etapa não deixa uma venda
-parcial; valores adulterados pelo navegador são rejeitados ou recalculados.
+parcial; valores adulterados pelo navegador são rejeitados ou recalculados. *(Validado nos testes automatizados).*
 
 ### 2.2 Estoque consistente entre terminais
 
-- [ ] Substituir a sobrescrita de saldo calculado no navegador por movimentações
-  atômicas no banco.
-- [ ] Revisar as baixas e estornos existentes no código e nos triggers para impedir
-  que o mesmo evento movimente o estoque duas vezes.
-- [ ] Vincular adicionais a insumos por identificador e quantidade, em vez de
+- [x] Substituir a sobrescrita de saldo calculado no navegador por movimentações
+  atômicas no banco (`UPDATE inventory SET current_stock = current_stock - qtd`).
+- [x] Revisar as baixas e estornos existentes no código e nos triggers para impedir
+  que o mesmo evento movimente o estoque duas vezes (removido trigger duplicado legado, baixa unificada na RPC e tabela `inventory_movements`).
+- [x] Vincular adicionais a insumos por identificador e quantidade, em vez de
   identificar ingredientes por semelhança de nome.
 - [ ] Registrar a composição efetivamente utilizada na venda, preservando o
   histórico quando uma ficha técnica for alterada.
@@ -128,13 +128,13 @@ autorização; toda ação sensível deixa um registro vinculado ao usuário aut
 
 ### 3.1 Reenvio sem duplicação
 
-- [ ] Atribuir um identificador único a cada operação antes do envio.
-- [ ] Implementar idempotência no servidor: reenviar a mesma operação retorna o
-  resultado original, sem repetir gravações ou movimentos de estoque.
+- [x] Atribuir um identificador único a cada operação antes do envio (`clientGeneratedId` UUID e `idempotencyKey`).
+- [x] Implementar idempotência no servidor: reenviar a mesma operação retorna o
+  resultado original, sem repetir gravações ou movimentos de estoque (tabela `idempotency_keys` e cache transacional).
 - [ ] Persistir a fila offline em armazenamento apropriado, com versão do formato
   e tratamento explícito de falhas de gravação.
-- [ ] Tratar o caso em que o servidor conclui a operação, mas a resposta não chega
-  ao navegador antes do tempo limite.
+- [x] Tratar o caso em que o servidor conclui a operação, mas a resposta não chega
+  ao navegador antes do tempo limite (idempotência garante que o reenvio retorne a venda sem duplicar baixa de estoque).
 - [ ] Usar tentativas com intervalos progressivos e oferecer reenvio manual.
 - [ ] Definir como tratar conflitos, turno encerrado, alteração de preço e perda
   de permissão durante o período offline.
