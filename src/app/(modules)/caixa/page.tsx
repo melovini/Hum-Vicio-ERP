@@ -1408,24 +1408,25 @@ export default function CaixaPage() {
     e.preventDefault();
     if (!saleToCancel) return;
 
-    const validPassword = process.env.NEXT_PUBLIC_ADMIN_PASSWORD || 'admin';
-    if (cancelPasswordInput.trim() !== validPassword) {
-      setCancelError('Senha de supervisor incorreta. O estorno não foi autorizado.');
-      return;
-    }
-
-    await cancelSale(
+    setCancelError('');
+    const res = await cancelSale(
       saleToCancel.id, 
       cancelReasonInput, 
-      'Admin / Supervisor', 
-      cancelNotesInput.trim() || undefined
+      undefined, 
+      cancelNotesInput.trim() || undefined,
+      cancelPasswordInput.trim()
     );
+
+    if (!res.success) {
+      setCancelError(res.error || 'Senha de supervisor incorreta ou estorno não autorizado.');
+      return;
+    }
 
     sendOwnerSecurityAlert({
       type: 'CANCELAMENTO_VENDA',
       title: `Estorno de Pedido #${saleToCancel.id.slice(0, 5).toUpperCase()}`,
       message: `Venda estornada no valor de R$ ${saleToCancel.total.toFixed(2)}. Motivo: ${cancelReasonInput}. Obs: ${cancelNotesInput.trim() || 'Nenhuma'}`,
-      operator: 'Admin / Supervisor',
+      operator: 'Supervisor Autorizado',
       amount: saleToCancel.total,
       details: {
         pedidoId: saleToCancel.id,

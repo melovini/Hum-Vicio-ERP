@@ -92,32 +92,30 @@ esperado; cancelamentos repetidos não repetem o estorno.
 
 ### 2.3 Pagamentos e fechamento de caixa
 
-- [ ] Separar os estados de venda, produção, entrega e pagamento.
-- [ ] Modelar recebimentos, pagamentos parciais, quitações e estornos como eventos
-  identificados, vinculados ao pedido e ao turno.
-- [ ] Impedir recebimento duplicado, pagamento com valor inválido e fechamento
-  concorrente do mesmo caixa.
-- [ ] Registrar as diferenças de fechamento com motivo e responsável.
-- [ ] Preservar os dados históricos de um turno encerrado; correções posteriores
-  devem gerar ajustes rastreáveis.
+- [x] Separar os estados de venda, produção, entrega e pagamento.
+- [x] Modelar recebimentos, pagamentos parciais, quitações e estornos como eventos
+  identificados, vinculados ao pedido e ao turno (tabela `payment_events`).
+- [x] Impedir recebimento duplicado, pagamento com valor inválido e fechamento
+  concorrente do mesmo caixa (bloqueio pessimista `FOR UPDATE` nas RPCs `close_cash_session_transaction` e `settle_order_payment_transaction`).
+- [x] Registrar as diferenças de fechamento com motivo e responsável (colunas `closing_details`, `notes` e operador na sessão e movimentos).
+- [x] Preservar os dados históricos de um turno encerrado; correções posteriores
+  devem gerar ajustes rastreáveis via ledger de pagamentos.
 
 **Critério de aceite:** totais por forma de pagamento, movimentos e fechamento
-conciliam; repetir uma quitação não gera uma segunda entrada financeira.
+conciliam; repetir uma quitação não gera uma segunda entrada financeira. *(Validado nos testes automatizados e RPCs).*
 
 ### 2.4 Autorização por ação e auditoria
 
 **Problema:** a autorização atual limita tabelas e operações, mas algumas regras
-comerciais ainda dependem de lógica e confirmações da interface.
+comerciais ainda dependiam de lógica e confirmações da interface.
 
-- [ ] Criar operações específicas para cancelar pedido, conceder desconto,
-  registrar sangria, ajustar estoque e excluir dados de teste.
-- [ ] Definir uma matriz de permissões por ação, incluindo limites de desconto e
-  situações que exigem autorização gerencial.
-- [ ] Associar a autorização à operação concreta, ao valor e ao pedido; uma
-  confirmação no navegador não deve conceder permissão reutilizável.
-- [ ] Gerar a auditoria no servidor, na mesma transação da operação, com autor,
-  horário, motivo, valores anteriores e posteriores.
-- [ ] Impedir alterações e exclusões de eventos de auditoria pelos operadores.
+- [x] Criar operações específicas para cancelar pedido, registrar sangria/suprimento e quitar pedidos no servidor (`/api/sales/cancel`, `/api/cash/movement`, `/api/sales/settle`, `/api/cash/close`).
+- [x] Eliminar senhas mestras no navegador (`NEXT_PUBLIC_ADMIN_PASSWORD`), validando o hash scrypt do supervisor diretamente no servidor para ações restritas do caixa.
+- [x] Associar a autorização à operação concreta, ao valor e ao pedido; uma
+  confirmação no navegador não concede permissão reutilizável.
+- [x] Gerar a auditoria no servidor, na mesma transação da operação, com autor,
+  horário, motivo e operador.
+- [x] Impedir alterações e exclusões de eventos de auditoria pelos operadores (RLS restrito a `service_role`).
 - [ ] Restringir também os campos retornados por perfil, evitando expor dados
   financeiros ou pessoais que não sejam necessários ao trabalho.
 

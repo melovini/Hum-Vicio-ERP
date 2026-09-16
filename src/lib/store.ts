@@ -1879,16 +1879,24 @@ export function useInventory() {
 
     if (activeCashSession) {
       try {
-        await supabase.from('cash_sessions').update({
-          status: 'closed',
-          final_amount: finalAmount,
-          expected_amount: expectedAmount,
-          variance_amount: variance,
-          closed_by: operatorName,
-          closed_at: now
-        }).eq('id', activeCashSession.id);
+        const res = await fetch('/api/cash/close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: activeCashSession.id,
+            finalAmount,
+            expectedAmount,
+            varianceAmount: variance,
+            closingDetails,
+            notes: closingDetails?.notes
+          })
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          console.error('Erro ao fechar caixa no servidor:', errData);
+        }
       } catch (err) {
-        console.error('Erro ao fechar caixa no banco:', err);
+        console.error('Erro de conexão ao fechar caixa no servidor:', err);
       }
 
       setAllCashSessions(prev => prev.map(s => {
@@ -2388,11 +2396,22 @@ export function useInventory() {
     }
 
     try {
-      await supabase.from('sales').update({
-        payment_method: paymentMethod
-      }).eq('id', saleId);
+      const res = await fetch('/api/sales/settle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          saleId,
+          sessionId: activeCashSession?.id,
+          paymentMethod,
+          settlementType: 'retirada'
+        })
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn('Erro na quitação transacional de retirada no servidor:', errJson);
+      }
     } catch (err) {
-      console.warn('Erro ao atualizar quitação de retirada no Supabase:', err);
+      console.warn('Erro de conexão ao quitar retirada no servidor:', err);
     }
 
     setSales(prev => {
@@ -2402,23 +2421,6 @@ export function useInventory() {
       }
       return updated;
     });
-
-    // Se recebido em dinheiro físico, insere suprimento na gaveta do caixa ativo
-    if (paymentMethod === 'dinheiro') {
-      await addMovement({
-        type: 'suprimento',
-        amount: target.total,
-        description: `Recebimento Retirada #${saleId.slice(0, 5).toUpperCase()} (${target.customerName || 'Cliente'})`
-      });
-    }
-
-    addAuditLog(
-      'LIQUIDACAO_RETIRADA',
-      `Pagamento do pedido para retirada #${saleId.slice(0, 6).toUpperCase()} confirmado no valor de R$ ${target.total.toFixed(2)} via ${paymentMethod.toUpperCase()} (${target.customerName || 'Cliente'}).`,
-      operatorName || 'Operador',
-      'pendente_retirada',
-      'pago'
-    );
 
     return { success: true, sale: updatedSale };
   };
@@ -2442,6 +2444,25 @@ export function useInventory() {
       creditPaidMethod: paymentMethod
     });
 
+    try {
+      const res = await fetch('/api/sales/settle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          saleId,
+          sessionId: activeCashSession?.id,
+          paymentMethod,
+          settlementType: 'fiado'
+        })
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        console.warn('Erro na quitação transacional de fiado no servidor:', errJson);
+      }
+    } catch (err) {
+      console.warn('Erro de conexão ao quitar fiado no servidor:', err);
+    }
+
     setSales(prev => {
       const updated = prev.map(s => s.id === saleId ? updatedSale : s);
       if (typeof window !== 'undefined') {
@@ -2449,23 +2470,6 @@ export function useInventory() {
       }
       return updated;
     });
-
-    // Se o cliente quitou em dinheiro físico no balcão, insere suprimento na gaveta do caixa ativo
-    if (paymentMethod === 'dinheiro') {
-      await addMovement({
-        type: 'suprimento',
-        amount: target.total,
-        description: `Recebimento Quitação ${target.paymentMethod === 'consumo_funcionario' ? 'Consumo Equipe' : 'Fiado VIP'} #${saleId.slice(0, 5).toUpperCase()} (${target.customerName || target.collaboratorName || 'Cliente'})`
-      });
-    }
-
-    addAuditLog(
-      'LIQUIDACAO_FIADO',
-      `Conta a Receber #${saleId.slice(0, 6).toUpperCase()} liquidada no valor de R$ ${target.total.toFixed(2)} via ${paymentMethod.toUpperCase()} (${target.customerName || target.collaboratorName || 'Cliente'}).`,
-      operatorName || 'Operador',
-      'pendente',
-      'quitado'
-    );
 
     return { success: true, sale: updatedSale };
   };
@@ -2596,69 +2600,81 @@ export function useInventory() {
     });
   };
 
-  const cancelSale = async (id: string, reason?: string, authorizedBy?: string, notes?: string) => {
+  const cancelSale = async (
+    id: string, 
+    reason?: string, 
+    authorizedBy?: string, 
+    notes?: string,
+    supervisorPassword?: string
+  ): Promise<{ success: boolean; error?: string }> => {
     // Salvar override no storage local
     saveProductionOverrides([{ id, status: 'concluido' }]);
 
     const existingSale = sales.find(s => s.id === id);
-    const cancellationReason = reason || 'Cancelamento manual pelo operador';
-    const cancelledBy = authorizedBy || 'Supervisor / Admin';
+    const cancellationReason = reason || 'Desistência do cliente antes do preparo';
     const now = new Date().toISOString();
 
     try {
-      await supabase.from('sales').update({ 
-        status: 'cancelled',
-        cancellation_reason: cancellationReason,
-        cancelled_by: cancelledBy,
-        cancelled_at: now
-      }).eq('id', id);
-    } catch (err) {
-      console.warn('Erro ao cancelar venda no Supabase:', err);
-    }
-    
-    // Estornar estoque localmente
-    const saleToCancel = existingSale;
-    if (saleToCancel && saleToCancel.items) {
-      const restoredItems = [...items];
-      saleToCancel.items.forEach(si => {
-        const prod = products.find(p => p.id === si.productId);
-        if (prod) {
-          prod.recipe.forEach(r => {
-            const invIdx = restoredItems.findIndex(inv => inv.id === r.ingredientId);
-            if (invIdx > -1) {
-              restoredItems[invIdx] = { 
-                ...restoredItems[invIdx], 
-                currentStock: restoredItems[invIdx].currentStock + (r.quantity * si.quantity) 
-              };
-            }
-          });
-        }
+      const res = await fetch('/api/sales/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          saleId: id,
+          reason: cancellationReason,
+          notes,
+          supervisorPassword
+        })
       });
-      setItems(restoredItems);
-    }
 
-    setSales(prev => {
-      const updated = prev.map(s => s.id === id ? { 
-        ...s, 
-        status: 'cancelled' as const,
-        cancellationReason,
-        cancelledBy,
-        cancelledAt: now,
-        cancellationNotes: notes
-      } : s);
-      if (typeof window !== 'undefined') {
-        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        return { success: false, error: errJson.message || 'Falha ao cancelar pedido no servidor.' };
       }
-      return updated;
-    });
 
-    addAuditLog(
-      'CANCELAMENTO_VENDA',
-      `Venda #${id.slice(0, 5).toUpperCase()} no valor de R$ ${existingSale?.total.toFixed(2) || '0.00'} foi estornada por ${cancelledBy}. Motivo: ${cancellationReason}.${notes ? ` Obs: ${notes}` : ''}`,
-      cancelledBy,
-      'Concluída',
-      'Cancelada'
-    );
+      const resData = await res.json();
+      const confirmedCancelledBy = resData.cancelledBy || authorizedBy || 'Supervisor / Admin';
+
+      // Estornar estoque localmente na interface
+      const saleToCancel = existingSale;
+      if (saleToCancel && saleToCancel.items) {
+        const restoredItems = [...items];
+        saleToCancel.items.forEach(si => {
+          const prod = products.find(p => p.id === si.productId);
+          if (prod) {
+            prod.recipe.forEach(r => {
+              const invIdx = restoredItems.findIndex(inv => inv.id === r.ingredientId);
+              if (invIdx > -1) {
+                restoredItems[invIdx] = { 
+                  ...restoredItems[invIdx], 
+                  currentStock: restoredItems[invIdx].currentStock + (r.quantity * si.quantity) 
+                };
+              }
+            });
+          }
+        });
+        setItems(restoredItems);
+      }
+
+      setSales(prev => {
+        const updated = prev.map(s => s.id === id ? { 
+          ...s, 
+          status: 'cancelled' as const,
+          cancellationReason,
+          cancelledBy: confirmedCancelledBy,
+          cancelledAt: now,
+          cancellationNotes: notes
+        } : s);
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+        }
+        return updated;
+      });
+
+      return { success: true };
+    } catch (err: any) {
+      console.warn('Erro de rede ao cancelar venda:', err);
+      return { success: false, error: 'Falha de conexão com o servidor.' };
+    }
   };
 
   // Reabertura de Pedido Fechado para Edição com Preservação de Identidade
@@ -2861,38 +2877,47 @@ export function useInventory() {
   };
 
   const addMovement = async (mov: Omit<CashMovement, 'id' | 'date'>) => {
+    let createdMov: CashMovement | null = null;
+
     try {
-      const { data } = await supabase.from('cash_movements').insert({
-        type: mov.type,
-        amount: mov.amount,
-        description: mov.description
-      }).select().single();
+      const res = await fetch('/api/cash/movement', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: activeCashSession?.id,
+          type: mov.type,
+          amount: mov.amount,
+          description: mov.description
+        })
+      });
 
-      const newMov: CashMovement = {
-        id: data ? data.id : Math.random().toString(36).substr(2, 9),
-        type: mov.type,
-        amount: mov.amount,
-        description: mov.description,
-        date: data ? data.created_at : new Date().toISOString()
-      };
-
-      setMovements([newMov, ...movements]);
-    } catch {
-      const fallbackMov: CashMovement = {
-        id: Math.random().toString(36).substr(2, 9),
-        type: mov.type,
-        amount: mov.amount,
-        description: mov.description,
-        date: new Date().toISOString()
-      };
-      setMovements([fallbackMov, ...movements]);
+      if (res.ok) {
+        const data = await res.json();
+        createdMov = {
+          id: data.id,
+          type: mov.type,
+          amount: mov.amount,
+          description: mov.description,
+          date: data.createdAt || new Date().toISOString()
+        };
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        console.warn('Erro ao registrar movimentação de caixa no servidor:', errData);
+      }
+    } catch (err) {
+      console.warn('Falha de rede ao registrar movimentação de caixa:', err);
     }
 
-    addAuditLog(
-      mov.type === 'sangria' ? 'SANGRIA' : 'SUPRIMENTO',
-      `${mov.type.toUpperCase()}: R$ ${mov.amount.toFixed(2)} — ${mov.description}`,
-      'Operador do Caixa'
-    );
+    const fallbackMov: CashMovement = createdMov || {
+      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substr(2, 9),
+      type: mov.type,
+      amount: mov.amount,
+      description: mov.description,
+      date: new Date().toISOString()
+    };
+
+    setMovements(prev => [fallbackMov, ...prev]);
+    return fallbackMov;
   };
 
   // --- CHECKLIST ACTIONS (COM ATRIBUIÇÃO FLEXÍVEL E TOGGLE BIDIRECIONAL) ---

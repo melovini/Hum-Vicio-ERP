@@ -317,3 +317,152 @@ test('checkout transacional valida permissões, integridade matemática e idempo
   assert.equal(rpcCalls[1].params.p_idempotency_key, 'key-12345678');
 });
 
+test('fechamento de caixa e movimentações validam dados e sessão', async () => {
+  const rpcCalls = [];
+  const fixture = sessionFixture('caixa');
+  await fixture.sign();
+
+  const dbMock = {
+    from(table) {
+      return {
+        select() { return this; },
+        eq() { return this; },
+        async single() {
+          return { data: table === 'app_sessions' ? fixture.state.session : fixture.state.person, error: null };
+        }
+      };
+    },
+    rpc: async (name, params) => {
+      rpcCalls.push({ name, params });
+      return { data: { success: true }, error: null };
+    }
+  };
+
+  const databaseModule = { createServerDatabase: () => dbMock };
+  const load = createLoader({
+    'next/headers': { cookies: async () => ({ get: () => fixture.state.token ? { value: fixture.state.token } : undefined }) },
+    '../supabase-server': databaseModule,
+    '@/lib/supabase-server': databaseModule,
+  });
+
+  const closeRoute = load('src/app/api/cash/close/route.ts');
+  const movRoute = load('src/app/api/cash/movement/route.ts');
+
+  const post = (url, body) => new Request(url, {
+    method: 'POST',
+    headers: { origin: 'https://erp.test', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  // Fechamento de caixa com ID inválido -> 400
+  assert.equal((await closeRoute.POST(post('https://erp.test/api/cash/close', { sessionId: 'invalid', finalAmount: 100 }))).status, 400);
+
+  // Fechamento de caixa com valor negativo -> 400
+  assert.equal((await closeRoute.POST(post('https://erp.test/api/cash/close', { sessionId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', finalAmount: -50 }))).status, 400);
+
+  // Fechamento válido -> 200
+  const closeRes = await closeRoute.POST(post('https://erp.test/api/cash/close', {
+    sessionId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    finalAmount: 150,
+    expectedAmount: 150
+  }));
+  assert.equal(closeRes.status, 200);
+  assert.equal(rpcCalls[0].name, 'close_cash_session_transaction');
+
+  // Sangria com valor zero ou negativo -> 400
+  assert.equal((await movRoute.POST(post('https://erp.test/api/cash/movement', { type: 'sangria', amount: 0, description: 'Sangria' }))).status, 400);
+
+  // Sangria sem descrição -> 400
+  assert.equal((await movRoute.POST(post('https://erp.test/api/cash/movement', { type: 'sangria', amount: 100, description: ' ' }))).status, 400);
+
+  // Sangria válida -> 200
+  const movRes = await movRoute.POST(post('https://erp.test/api/cash/movement', {
+    type: 'sangria',
+    amount: 100,
+    description: 'Pagamento Fornecedor Pães'
+  }));
+  assert.equal(movRes.status, 200);
+  assert.equal(rpcCalls[1].name, 'record_cash_movement_transaction');
+});
+
+test('cancelamento e quitação de pedidos validam supervisor e impedem fraudes', async () => {
+  const rpcCalls = [];
+  const fixture = sessionFixture('caixa');
+  await fixture.sign();
+
+  const hashedSupPin = await hashCredential('supervisor123456');
+
+  const dbMock = {
+    from(table) {
+      const builder = {
+        select() { return this; },
+        eq() { return this; },
+        in() { return this; },
+        async single() {
+          return { data: table === 'app_sessions' ? fixture.state.session : fixture.state.person, error: null };
+        },
+        then(resolve) {
+          resolve({
+            data: table === 'collaborators'
+              ? [{ id: 'sup1', name: 'Gerente Carlos', role: 'gerente', pin: hashedSupPin, is_active: true }]
+              : [],
+            error: null
+          });
+        }
+      };
+      return builder;
+    },
+    rpc: async (name, params) => {
+      rpcCalls.push({ name, params });
+      return { data: { success: true }, error: null };
+    }
+  };
+
+  const databaseModule = { createServerDatabase: () => dbMock };
+  const load = createLoader({
+    'next/headers': { cookies: async () => ({ get: () => fixture.state.token ? { value: fixture.state.token } : undefined }) },
+    '../supabase-server': databaseModule,
+    '@/lib/supabase-server': databaseModule,
+  });
+
+  const cancelRoute = load('src/app/api/sales/cancel/route.ts');
+  const settleRoute = load('src/app/api/sales/settle/route.ts');
+
+  const post = (url, body) => new Request(url, {
+    method: 'POST',
+    headers: { origin: 'https://erp.test', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  // Cancelamento por caixa sem senha de supervisor -> 403
+  assert.equal((await cancelRoute.POST(post('https://erp.test/api/sales/cancel', {
+    saleId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    reason: 'Erro'
+  }))).status, 403);
+
+  // Cancelamento por caixa com senha errada de supervisor -> 403
+  assert.equal((await cancelRoute.POST(post('https://erp.test/api/sales/cancel', {
+    saleId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    reason: 'Erro',
+    supervisorPassword: 'senha-incorreta'
+  }))).status, 403);
+
+  // Cancelamento por caixa com senha correta de supervisor -> 200 e chama RPC
+  const cancelRes = await cancelRoute.POST(post('https://erp.test/api/sales/cancel', {
+    saleId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    reason: 'Desistência do cliente',
+    supervisorPassword: 'supervisor123456'
+  }));
+  assert.equal(cancelRes.status, 200);
+  assert.equal(rpcCalls[0].name, 'cancel_order_transaction');
+
+  // Quitação de pedido com parâmetros válidos -> 200
+  const settleRes = await settleRoute.POST(post('https://erp.test/api/sales/settle', {
+    saleId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    paymentMethod: 'pix',
+    settlementType: 'retirada'
+  }));
+  assert.equal(settleRes.status, 200);
+  assert.equal(rpcCalls[1].name, 'settle_order_payment_transaction');
+});
+
