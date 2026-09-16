@@ -1,25 +1,52 @@
 @import "tailwindcss";
 
 @theme {
-  /* Tokens de Superfície (Contraste por Camadas - Dark Neutral Slate) */
+  /* Superfícies */
   --color-surface-ground: #090A0F;
   --color-surface-card: #12141C;
   --color-surface-elevated: #1A1D27;
+  --color-surface-overlay: #20232F;
   --color-surface-border: #242838;
   --color-surface-border-hover: #373D54;
 
-  /* Tokens de Marca (Ação Primária Industrial & Acento Técnico) */
+  /* Texto */
+  --color-text-primary: #F8FAFC;
+  --color-text-secondary: #CBD5E1;
+  --color-text-muted: #94A3B8;
+  --color-text-inverse: #090A0F;
+
+  /* Marca e ações */
   --color-brand-primary: #F97316;
   --color-brand-primary-hover: #EA580C;
+  --color-brand-primary-active: #C2410C;
   --color-brand-accent: #38BDF8;
+  --color-action-secondary: #242838;
+  --color-action-secondary-hover: #373D54;
 
-  /* Tokens de Estado Semântico */
+  /* Bordas e foco */
+  --color-border-default: #242838;
+  --color-border-strong: #373D54;
+  --color-border-focus: #F97316;
+
+  /* Estados semânticos */
+  --color-status-success: #10B981;
+  --color-status-warning: #F59E0B;
+  --color-status-info: #38BDF8;
+  --color-status-danger: #EF4444;
+  --color-status-neutral: #64748B;
+
+  /* Estados operacionais legados */
   --color-status-free: #10B981;
   --color-status-occupied: #F59E0B;
   --color-status-partial: #8B5CF6;
   --color-status-paid: #06B6D4;
-  --color-status-danger: #EF4444;
-  --color-status-neutral: #64748B;
+
+  /* Escalas do sistema */
+  --radius-control: 0.5rem;
+  --radius-card: 0.75rem;
+  --radius-dialog: 1rem;
+  --shadow-elevated: 0 16px 48px rgb(0 0 0 / 0.32);
+  --ease-interface: cubic-bezier(0.4, 0, 0.2, 1);
 
   /* Compatibilidade Legada Suave */
   --color-background: #090A0F;
@@ -47,8 +74,8 @@
   /* Superfícies Padronizadas */
   .surface-card {
     background-color: var(--color-surface-card);
-    border: 1px solid var(--color-surface-border);
-    border-radius: 0.75rem;
+    border: 1px solid var(--color-border-default);
+    border-radius: var(--radius-card);
   }
 
   .surface-elevated {
@@ -61,11 +88,11 @@
     background-color: var(--color-surface-ground);
     border: 1px solid var(--color-surface-border);
     color: #f8fafc;
-    border-radius: 0.5rem;
+    border-radius: var(--radius-control);
     padding: 0.5rem 0.75rem;
     font-size: 0.875rem;
     outline: none;
-    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
+    transition: border-color 150ms var(--ease-interface), box-shadow 150ms var(--ease-interface);
   }
   .input-util:focus {
     border-color: var(--color-brand-primary);
@@ -83,6 +110,22 @@
     backdrop-filter: blur(16px);
     border: 1px solid rgba(36, 40, 56, 0.9);
   }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-border-focus);
+  outline-offset: 2px;
 }
 
 html,
