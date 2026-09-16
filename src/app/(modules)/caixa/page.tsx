@@ -15,6 +15,7 @@ import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
 import RouteManifestModal from '@/components/RouteManifestModal';
 import SlidingSheet from '@/components/ui/SlidingSheet';
+import SyncStatusBar from '@/components/SyncStatusBar';
 import { playOrderReadyChime } from '@/lib/audio';
 import MapaMesasCanvas from '@/components/MapaMesasCanvas';
 import { 
@@ -56,7 +57,8 @@ export default function CaixaPage() {
     movements, addMovement,
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus,
     settleCreditSale,
-    settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow
+    settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow,
+    connectionStatus, lastServerSync, offlineSalesList
   } = useInventory();
 
   const [activeTab, setActiveTab] = useState<'pdv' | 'mesas' | 'producao' | 'rotas' | 'historico' | 'sangria' | 'contas_receber'>('pdv');
@@ -1289,6 +1291,12 @@ export default function CaixaPage() {
     e.preventDefault();
     if (!operatorCloseInput.trim()) return;
 
+    // Bloqueio de segurança contábil: não permitir fechar caixa com vendas pendentes na fila ou sem comunicação
+    if (connectionStatus !== 'connected' || offlineQueueCount > 0) {
+      alert(`Fechamento de Caixa bloqueado no modo offline.\n\nExistem ${offlineQueueCount} pedido(s) pendente(s) de sincronização ou o servidor está inacessível. Por integridade contábil, aguarde a conexão retornar e todos os pedidos serem transmitidos antes de fechar o turno.`);
+      return;
+    }
+
     const countedCash = Number(countedAmountInput) || 0;
     const countedDebito = Number(countedDebitoInput) || 0;
     const countedCredito = Number(countedCreditoInput) || 0;
@@ -1408,6 +1416,11 @@ export default function CaixaPage() {
     e.preventDefault();
     if (!saleToCancel) return;
 
+    if (connectionStatus !== 'connected') {
+      setCancelError('Cancelamento gerencial bloqueado no modo offline. A verificação segura da senha do supervisor exige comunicação com o servidor.');
+      return;
+    }
+
     setCancelError('');
     const res = await cancelSale(
       saleToCancel.id, 
@@ -1490,29 +1503,8 @@ export default function CaixaPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            {/* Indicador de Resiliência Offline & Fila Supabase */}
-            {offlineQueueCount > 0 ? (
-              <button
-                type="button"
-                onClick={async () => {
-                  const res = await syncOfflineQueueNow();
-                  alert(`Sincronização concluída: ${res.syncedCount} pedido(s) sincronizados com sucesso.`);
-                }}
-                className="px-3.5 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/50 rounded-2xl font-bold flex items-center gap-2 text-xs animate-pulse cursor-pointer shadow-lg"
-                title="Clique para enviar os pedidos pendentes para o banco de dados agora"
-              >
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-400 animate-ping" />
-                <span>🟡 Modo Offline ({offlineQueueCount} na fila) - Sincronizar</span>
-              </button>
-            ) : (
-              <div 
-                className="px-3.5 py-2.5 bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 rounded-2xl font-bold flex items-center gap-2 text-xs"
-                title="Sistema conectado ao Supabase com proteção offline ativa"
-              >
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" />
-                <span>🟢 Online</span>
-              </div>
-            )}
+            {/* Indicador de Resiliência Offline & Contingência */}
+            <SyncStatusBar />
             <button 
               type="button"
               onClick={() => {
@@ -4717,9 +4709,17 @@ export default function CaixaPage() {
                                   {sale.paymentStatus === 'pendente_retirada' ? '⚠️ NÃO PAGO (Cobrar na Retirada)' : `✅ PAGO (${sale.paidMethod || sale.paymentMethod})`}
                                 </span>
                               )}
-                              {!sale.isOfflineSynced && (
-                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40" title="Venda gravada localmente. Sincronização pendente.">
-                                  ⏳ Offline
+                              {sale.syncStatus === 'failed' ? (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/40" title={sale.syncError || 'Erro na validação do pedido no servidor'}>
+                                  ❌ Falha no Envio
+                                </span>
+                              ) : (sale.syncStatus === 'pending' || (!sale.isOfflineSynced && sale.syncStatus !== 'synced')) ? (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40" title="Venda gravada com segurança neste aparelho. Aguardando sincronização com o servidor.">
+                                  ⏳ Salvo no Aparelho
+                                </span>
+                              ) : (
+                                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20" title="Venda confirmada e sincronizada no servidor">
+                                  ✅ Confirmado
                                 </span>
                               )}
                               {sale.customerName && (

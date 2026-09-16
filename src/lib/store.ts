@@ -152,6 +152,8 @@ export interface Sale {
   paidAt?: string;
   paidMethod?: string;
   isOfflineSynced?: boolean;
+  syncStatus?: 'synced' | 'pending' | 'failed';
+  syncError?: string;
   idempotencyKey?: string;
 }
 
@@ -524,9 +526,15 @@ export function enqueueOfflineSale(sale: Sale): void {
   const current = getOfflineSalesQueue();
   const exists = current.some(s => s.id === sale.id);
   if (!exists) {
-    current.push(sale);
+    current.push({ ...sale, syncStatus: 'pending', isOfflineSynced: false });
     saveOfflineSalesQueue(current);
   }
+}
+
+export function updateOfflineSaleInQueue(saleId: string, updates: Partial<Sale>): void {
+  const current = getOfflineSalesQueue();
+  const updated = current.map(s => s.id === saleId ? { ...s, ...updates } : s);
+  saveOfflineSalesQueue(updated);
 }
 
 export function removeOfflineSaleFromQueue(saleId: string): void {
@@ -544,6 +552,9 @@ export async function syncOfflineSalesQueue(supabaseClient?: any): Promise<{ syn
   let errorsCount = 0;
 
   for (const sale of queue) {
+    // Pula vendas marcadas com falha definitiva de validação para permitir que outras prossigam
+    if (sale.syncStatus === 'failed') continue;
+
     try {
       const idempotencyKey = (sale as any).idempotencyKey || `sale_checkout_${sale.id}`;
       const res = await fetch('/api/sales/checkout', {
@@ -559,11 +570,14 @@ export async function syncOfflineSalesQueue(supabaseClient?: any): Promise<{ syn
         const errJson = await res.json().catch(() => ({}));
         console.warn('Falha na sincronização transacional da venda offline:', sale.id, errJson);
         errorsCount++;
-        // Se rejeitada por validação de negócio definitiva (ex: 400), descarta da fila para não bloquear o fluxo
+        // Se rejeitada por validação de negócio definitiva (ex: 400), marca como falha para inspeção do operador
         if (res.status === 400) {
-          removeOfflineSaleFromQueue(sale.id);
+          updateOfflineSaleInQueue(sale.id, {
+            syncStatus: 'failed',
+            syncError: errJson.error || 'Validação de pedido falhou no servidor'
+          });
         } else {
-          break; // Servidor temporariamente indisponível
+          break; // Servidor temporariamente indisponível ou fora do ar
         }
       }
     } catch (err) {
@@ -586,6 +600,8 @@ function getSavedFixedExpensesConfig(): FixedExpensesConfig {
   } catch {}
   return DEFAULT_FIXED_EXPENSES;
 }
+
+export type ConnectionStatus = 'connected' | 'server_unreachable' | 'offline';
 
 export function useInventory() {
   const [items, setItems] = useState<InventoryItem[]>([]);
@@ -639,38 +655,118 @@ export function useInventory() {
 
   // Resiliência Offline & Fila de Sincronização (Quando o Banco de Dados Cai)
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
+  const [offlineSalesList, setOfflineSalesList] = useState<Sale[]>([]);
   const [isOnline, setIsOnline] = useState<boolean>(true);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connected');
+  const [lastServerSync, setLastServerSync] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('hum_vicio_last_server_sync') || null;
+    }
+    return null;
+  });
+
+  // Verificação ativa de comunicação efetiva com o servidor (diferenciando Wi-Fi de resposta da API)
+  const checkServerHealth = async (): Promise<ConnectionStatus> => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      setConnectionStatus('offline');
+      setIsOnline(false);
+      return 'offline';
+    }
+
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 3500);
+      const res = await fetch('/api/health', {
+        method: 'GET',
+        cache: 'no-store',
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok) {
+        setConnectionStatus('connected');
+        setIsOnline(true);
+        const nowIso = new Date().toISOString();
+        setLastServerSync(nowIso);
+        try { localStorage.setItem('hum_vicio_last_server_sync', nowIso); } catch {}
+        return 'connected';
+      } else {
+        setConnectionStatus('server_unreachable');
+        setIsOnline(false);
+        return 'server_unreachable';
+      }
+    } catch {
+      const status = typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable';
+      setConnectionStatus(status);
+      setIsOnline(false);
+      return status;
+    }
+  };
 
   // Monitor de Auto-Sincronização e Drenagem da Fila Offline
   const syncOfflineQueueNow = async () => {
     const res = await syncOfflineSalesQueue(supabase);
-    setOfflineQueueCount(getOfflineSalesQueue().length);
-    if (res.syncedCount > 0) {
+    const queue = getOfflineSalesQueue();
+    setOfflineQueueCount(queue.length);
+    setOfflineSalesList(queue);
+
+    if (res.syncedCount > 0 || res.errorsCount === 0) {
+      setConnectionStatus('connected');
       setIsOnline(true);
+      const nowIso = new Date().toISOString();
+      setLastServerSync(nowIso);
+      try { localStorage.setItem('hum_vicio_last_server_sync', nowIso); } catch {}
+
+      // Atualizar status das vendas sincronizadas na memória e cache local
+      const queuedIds = new Set(queue.map(q => q.id));
+      setSales(prev => {
+        const updated = prev.map(s => {
+          if (!queuedIds.has(s.id) && (s.syncStatus === 'pending' || !s.isOfflineSynced)) {
+            return { ...s, syncStatus: 'synced' as const, isOfflineSynced: true };
+          }
+          return s;
+        });
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+        }
+        return updated;
+      });
+    } else if (res.errorsCount > 0) {
+      setConnectionStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable');
     }
     return res;
   };
 
   useEffect(() => {
-    setOfflineQueueCount(getOfflineSalesQueue().length);
+    const initialQueue = getOfflineSalesQueue();
+    setOfflineQueueCount(initialQueue.length);
+    setOfflineSalesList(initialQueue);
+
+    void checkServerHealth();
 
     const handleOnline = () => {
-      setIsOnline(true);
-      syncOfflineQueueNow();
+      void checkServerHealth().then(status => {
+        if (status === 'connected') {
+          syncOfflineQueueNow();
+        }
+      });
     };
     const handleOffline = () => {
+      setConnectionStatus('offline');
       setIsOnline(false);
     };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Heartbeat a cada 15 segundos para tentar drenar a fila caso a conexão volte silenciosamente
+    // Heartbeat a cada 20 segundos para drenar a fila e manter a conexão viva
     const interval = setInterval(() => {
       if (getOfflineSalesQueue().length > 0) {
         syncOfflineQueueNow();
+      } else {
+        void checkServerHealth();
       }
-    }, 15000);
+    }, 20000);
 
     return () => {
       window.removeEventListener('online', handleOnline);
@@ -2313,6 +2409,7 @@ export function useInventory() {
       paidAt: paymentStatus === 'pago' ? (sale.paidAt || new Date().toISOString()) : undefined,
       paidMethod: paymentStatus === 'pago' ? (sale.paidMethod || sale.paymentMethod) : undefined,
       isOfflineSynced: !isOffline,
+      syncStatus: isOffline ? 'pending' : 'synced',
       productionStatus: initialProductionStatus,
       productionStartedAt: initialProductionStarted,
       targetPrepMinutes: initialTargetPrep,
@@ -2331,7 +2428,15 @@ export function useInventory() {
     // Se salvou offline (banco de dados caiu ou não respondeu em 3.5s), adiciona na fila outbox
     if (isOffline) {
       enqueueOfflineSale(newSaleLocal);
-      setOfflineQueueCount(getOfflineSalesQueue().length);
+      const q = getOfflineSalesQueue();
+      setOfflineQueueCount(q.length);
+      setOfflineSalesList(q);
+      setConnectionStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable');
+    } else {
+      const nowIso = new Date().toISOString();
+      setLastServerSync(nowIso);
+      try { localStorage.setItem('hum_vicio_last_server_sync', nowIso); } catch {}
+      setConnectionStatus('connected');
     }
 
     // Salvar override do pedido para persistir localmente e nunca voltar para espera
@@ -3021,6 +3126,7 @@ export function useInventory() {
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus, completeOrderProduction,
     auditLogs, addAuditLog,
     fixedExpensesConfig, saveFixedExpensesConfig, settleCreditSale,
-    settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow
+    settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow,
+    connectionStatus, lastServerSync, offlineSalesList, checkServerHealth
   };
 }

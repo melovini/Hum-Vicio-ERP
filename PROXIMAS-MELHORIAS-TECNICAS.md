@@ -145,17 +145,17 @@ do navegador com itens pendentes.
 
 ### 3.2 Estado visível e contingência
 
-- [ ] Mostrar por pedido: salvo neste aparelho, aguardando envio, confirmado ou
-  com falha.
-- [ ] Exibir quantidade de pendências e horário da última confirmação do servidor.
-- [ ] Diferenciar conexão com a internet de comunicação efetiva com o sistema.
-- [ ] Definir quais ações podem ocorrer offline; alterações de acesso e
-  autorizações sensíveis devem continuar dependendo do servidor.
-- [ ] Definir um procedimento operacional quando a cozinha não receber o pedido,
-  com identificação que permita reconciliar o atendimento posteriormente.
+- [x] Mostrar por pedido: salvo neste aparelho, aguardando envio, confirmado ou
+  com falha (badges explicativos `✅ Confirmado`, `⏳ Salvo no Aparelho`, `❌ Falha no Envio`).
+- [x] Exibir quantidade de pendências e horário da última confirmação do servidor (componente `<SyncStatusBar />` com painel e modal de contingência).
+- [x] Diferenciar conexão com a internet de comunicação efetiva com o sistema (status `connected`, `server_unreachable`, `offline` com healthcheck `/api/health`).
+- [x] Definir quais ações podem ocorrer offline; alterações de acesso e
+  autorizações sensíveis continuam dependendo do servidor (fechamento de caixa e cancelamento gerencial bloqueados offline com orientações claras).
+- [x] Definir um procedimento operacional quando a cozinha não receber o pedido,
+  com identificação que permita reconciliar o atendimento posteriormente (passo a passo de contingência via comanda física impressa e botão `+ Comanda Manual` na chapa).
 
 **Critério de aceite:** o operador identifica se a cozinha recebeu o pedido e
-qual providência tomar em caso de falha, sem depender de mensagens técnicas.
+qual providência tomar em caso de falha, sem depender de mensagens técnicas. *(Validado no Caixa, Cozinha e testes).*
 
 ### 3.3 Backup e restauração
 

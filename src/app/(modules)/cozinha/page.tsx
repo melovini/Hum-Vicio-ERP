@@ -5,16 +5,17 @@ import {
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
   Eye, Check, ListChecks, MessageSquare, Utensils,
-  Volume2, BellRing, User, X, Play, ArrowLeft
+  Volume2, BellRing, User, X, Play, ArrowLeft, FileText
 } from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
+import SyncStatusBar from '@/components/SyncStatusBar';
 import { playKitchenChime, playCancellationWarning } from '@/lib/audio';
 import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
 
 export default function CozinhaKDSPage() {
   const { 
-    sales, items, products, updateStatus, isLoaded, 
+    sales, items, products, updateStatus, isLoaded, addSale,
     checklist, toggleChecklistTask, signChecklist,
     targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus, updateBatchProductionStatus,
     acknowledgeOrderModification,
@@ -49,6 +50,43 @@ export default function CozinhaKDSPage() {
   const [selectedReason, setSelectedReason] = useState<DelayReason>('erro_producao');
   const [delayNotes, setDelayNotes] = useState('');
   const [isSubmittingDelay, setIsSubmittingDelay] = useState(false);
+
+  // Modal de Comanda Manual de Contingência (quando os terminais estão sem rede entre si)
+  const [showManualTicketModal, setShowManualTicketModal] = useState(false);
+  const [manualTicketNumber, setManualTicketNumber] = useState('');
+  const [manualTicketCustomer, setManualTicketCustomer] = useState('');
+  const [manualTicketBurger, setManualTicketBurger] = useState('');
+  const [manualTicketNotes, setManualTicketNotes] = useState('');
+
+  const handleCreateManualContingencyOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualTicketNumber.trim() && !manualTicketBurger.trim()) return;
+
+    await addSale({
+      customerName: manualTicketCustomer.trim() || `Contingência #${manualTicketNumber.trim()}`,
+      orderType: 'mesa',
+      channel: 'balcao',
+      paymentMethod: 'dinheiro',
+      total: 0,
+      items: [
+        {
+          productId: 'manual_contingency',
+          productName: manualTicketBurger.trim() || `Comanda Física #${manualTicketNumber.trim()}`,
+          quantity: 1,
+          unitPrice: 0,
+          notes: manualTicketNotes.trim() ? manualTicketNotes.trim().toUpperCase() : undefined
+        }
+      ],
+      productionStatus: 'em_producao',
+      productionStartedAt: new Date().toISOString()
+    });
+
+    setShowManualTicketModal(false);
+    setManualTicketNumber('');
+    setManualTicketCustomer('');
+    setManualTicketBurger('');
+    setManualTicketNotes('');
+  };
 
   // Timer ao vivo para o cronômetro da chapa (atualiza a cada segundo)
   useEffect(() => {
@@ -597,6 +635,7 @@ export default function CozinhaKDSPage() {
                   Caixa Fechado (Aguardando Abertura)
                 </span>
               )}
+              <SyncStatusBar compact />
             </div>
           </div>
         </div>
@@ -665,6 +704,15 @@ export default function CozinhaKDSPage() {
             title="Clique para testar o som do KDS e habilitar áudio no navegador"
           >
             <Volume2 size={15} /> Som KDS
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowManualTicketModal(true)}
+            className="px-3 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+            title="Lançar comanda física na chapa durante contingência operacional"
+          >
+            <FileText size={15} /> + Comanda Manual
           </button>
 
           <LogoutButton />
@@ -1008,6 +1056,11 @@ export default function CozinhaKDSPage() {
                             ) : order.orderDiff ? (
                               <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-amber-300 border border-amber-500/30">
                                 📝 MODIFICADO (CIENTE)
+                              </span>
+                            ) : null}
+                            {order.syncStatus === 'pending' || (!order.isOfflineSynced && order.syncStatus !== 'synced') ? (
+                              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40" title="Pedido registrado em contingência local">
+                                📦 CONTINGÊNCIA
                               </span>
                             ) : null}
                           </div>
@@ -1689,6 +1742,103 @@ export default function CozinhaKDSPage() {
               </button>
             </div>
 
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE COMANDA MANUAL DE CONTINGÊNCIA */}
+      {showManualTicketModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2 text-amber-400 font-extrabold text-base">
+                <FileText size={20} /> Lançar Comanda Manual (Contingência)
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowManualTicketModal(false)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Use este recurso caso o Caixa tenha emitido uma comanda física em papel durante uma queda de rede e ela ainda não tenha aparecido na tela.
+            </p>
+
+            <form onSubmit={handleCreateManualContingencyOrder} className="space-y-3">
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Número da Comanda / Senha:
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: 104 ou C-A1B2"
+                  value={manualTicketNumber}
+                  onChange={e => setManualTicketNumber(e.target.value.toUpperCase())}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-sm font-mono font-bold outline-none focus:border-amber-500 uppercase"
+                  autoFocus
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Nome do Cliente / Mesa (Opcional):
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: Mesa 04 ou João"
+                  value={manualTicketCustomer}
+                  onChange={e => setManualTicketCustomer(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-xs outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Lanche(s) a Preparar:
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: 2x Hum Vício Burguer + 1x Bacon"
+                  value={manualTicketBurger}
+                  onChange={e => setManualTicketBurger(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-xs font-bold outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  Observações / Ponto da Carne:
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: SEM CEBOLA, CARNE AO PONTO"
+                  value={manualTicketNotes}
+                  onChange={e => setManualTicketNotes(e.target.value.toUpperCase())}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-white text-xs font-mono outline-none focus:border-amber-500 uppercase"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setShowManualTicketModal(false)}
+                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-xs uppercase tracking-wider transition-all shadow-lg shadow-amber-500/20"
+                >
+                  Colocar na Chapa
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
