@@ -8,7 +8,9 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test:security": "node --test --experimental-test-isolation=none tests/security.test.mjs",
-    "security:setup": "node --env-file=.env.local scripts/security-setup.mjs"
+    "security:setup": "node --env-file=.env.local scripts/security-setup.mjs",
+    "backup": "node --env-file=.env.local scripts/backup.mjs",
+    "backup:verify": "node --env-file=.env.local scripts/restore-verify.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",

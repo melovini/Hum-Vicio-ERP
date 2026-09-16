@@ -466,3 +466,81 @@ test('cancelamento e quitação de pedidos validam supervisor e impedem fraudes'
   assert.equal(rpcCalls[1].name, 'settle_order_payment_transaction');
 });
 
+test('backup e restauração preservam integridade relacional, financeira e credenciais scrypt', async () => {
+  const { createDatabaseBackup } = await import('../scripts/backup.mjs');
+  const { verifySnapshotIntegrity } = await import('../scripts/restore-verify.mjs');
+
+  const hashedAdmin = await hashCredential('admin12345678');
+  const validSaleId = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+  const validSessionId = 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22';
+
+  const mockDb = {
+    from(table) {
+      return {
+        select: async () => {
+          if (table === 'collaborators') {
+            return { data: [{ id: 'colab1', name: 'Admin', role: 'admin', pin: hashedAdmin, is_active: true }], error: null };
+          }
+          if (table === 'products') {
+            return { data: [{ id: 'prod1', name: 'Hum Vício Burguer', price_balcao: 30 }], error: null };
+          }
+          if (table === 'inventory') {
+            return { data: [{ id: 'ing1', name: 'Carne 160g', current_stock: 50 }], error: null };
+          }
+          if (table === 'recipes') {
+            return { data: [{ id: 'rec1', product_id: 'prod1', ingredient_id: 'ing1', quantity: 1 }], error: null };
+          }
+          if (table === 'cash_sessions') {
+            return { data: [{ id: validSessionId, opened_by: 'Admin', status: 'closed' }], error: null };
+          }
+          if (table === 'sales') {
+            return { data: [{ id: validSaleId, total: 35, subtotal: 30, delivery_fee: 5, discount: 0, status: 'completed' }], error: null };
+          }
+          if (table === 'sale_items') {
+            return { data: [{ id: 'item1', sale_id: validSaleId, product_id: 'prod1', quantity: 1, unit_price: 30 }], error: null };
+          }
+          if (table === 'payment_events') {
+            return { data: [{ id: 'pay1', sale_id: validSaleId, session_id: validSessionId, event_type: 'pagamento_venda', amount: 35 }], error: null };
+          }
+          if (table === 'cash_movements') {
+            return { data: [{ id: 'mov1', session_id: validSessionId, type: 'sangria', amount: 50, reason: 'Sangria' }], error: null };
+          }
+          return { data: [], error: null };
+        }
+      };
+    }
+  };
+
+  // 1. Gera snapshot via createDatabaseBackup com dryRun: true
+  const snapshot = await createDatabaseBackup(mockDb, { dryRun: true });
+  assert.ok(snapshot.globalChecksum);
+  assert.equal(snapshot.tableCounts.collaborators, 1);
+  assert.equal(snapshot.tableCounts.sales, 1);
+
+  // 2. Valida integridade do snapshot íntegro
+  const report = verifySnapshotIntegrity(snapshot);
+  assert.equal(report.valid, true);
+  assert.equal(report.issues.length, 0);
+
+  // 3. Testa detecção de adulteração de hash SHA-256
+  const tamperedSnapshot = JSON.parse(JSON.stringify(snapshot));
+  tamperedSnapshot.tables.sales[0].total = 999;
+  const tamperedReport = verifySnapshotIntegrity(tamperedSnapshot);
+  assert.equal(tamperedReport.valid, false);
+  assert.ok(tamperedReport.issues.some(i => i.includes('SHA-256 divergente') || i.includes('divergência matemática')));
+
+  // 4. Testa detecção de PIN em texto puro (falha de segurança em credencial)
+  const leakSnapshot = JSON.parse(JSON.stringify(snapshot));
+  leakSnapshot.tables.collaborators[0].pin = 'senha123_sem_hash';
+  const leakReport = verifySnapshotIntegrity(leakSnapshot);
+  assert.equal(leakReport.valid, false);
+  assert.ok(leakReport.issues.some(i => i.includes('fora do padrão seguro scrypt')));
+
+  // 5. Testa detecção de quebra de integridade referencial (item com sale_id órfão)
+  const orphanSnapshot = JSON.parse(JSON.stringify(snapshot));
+  orphanSnapshot.tables.sale_items[0].sale_id = 'venda_inexistente';
+  const orphanReport = verifySnapshotIntegrity(orphanSnapshot);
+  assert.equal(orphanReport.valid, false);
+  assert.ok(orphanReport.issues.some(i => i.includes('referencia venda inexistente')));
+});
+

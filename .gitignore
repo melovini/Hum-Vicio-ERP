@@ -42,6 +42,7 @@ next-env.d.ts
 
 # local persistent data
 /data
+/backups/
 
 # private operational manuals and sensitive audit docs
 /docs

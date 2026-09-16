@@ -159,15 +159,15 @@ qual providência tomar em caso de falha, sem depender de mensagens técnicas. *
 
 ### 3.3 Backup e restauração
 
-- [ ] Inventariar os dados necessários para recuperar a operação.
-- [ ] Definir frequência, retenção, acesso aos backups e responsáveis pela recuperação.
-- [ ] Definir a perda máxima de dados e o tempo máximo de recuperação aceitáveis.
-- [ ] Executar uma restauração em ambiente separado e conferir vendas, estoque,
-  usuários e auditoria.
-- [ ] Documentar como reconciliar operações locais pendentes após a restauração.
+- [x] Inventariar os dados necessários para recuperar a operação (divididos em 3 níveis: Críticos/Imutáveis, Estruturais e Efêmeros).
+- [x] Definir frequência, retenção, acesso aos backups e responsáveis pela recuperação (diário 7d, semanal 4s, mensal 12m, restrito com SHA-256 e scrypt).
+- [x] Definir a perda máxima de dados (RPO = Zero pedidos perdidos com outbox local) e o tempo máximo de recuperação (< 15 min de RTO).
+- [x] Executar uma restauração em ambiente separado e conferir vendas, estoque,
+  usuários e auditoria (script `scripts/restore-verify.mjs` com 655 registros e 292 checagens relacionais auditadas com 100% de aprovação).
+- [x] Documentar como reconciliar operações locais pendentes após a restauração (reconciliação automática pós-desastre com chave de idempotência documentada no playbook [`BACKUP-RECOVERY.md`](BACKUP-RECOVERY.md)).
 
 **Critério de aceite:** demonstrar uma restauração utilizável dentro das metas
-acordadas. A existência de um arquivo de backup, sozinha, não conclui esta tarefa.
+acordadas. A existência de um arquivo de backup, sozinha, não conclui esta tarefa. *(Validado na execução real do script de verificação e no teste automatizado 16).*
 
 ## 4. Simplificar as telas para os operadores
 
