@@ -28,8 +28,9 @@ export default function LoginPage() {
         setError(res.error || 'Credencial inválida.');
         setLoading(false);
       }
-    } catch {
-      setError('Falha de conexão com o servidor.');
+    } catch (err: any) {
+      console.error('Falha de login:', err);
+      setError(err?.message && !err.message.includes('digest') ? err.message : 'Falha de comunicação com o servidor. Atualize a página (Ctrl+F5) e tente novamente.');
       setLoading(false);
     }
   };

@@ -29,7 +29,8 @@ export async function loginAction(pinOrPassword: string): Promise<{ success: boo
     });
     cookieStore.delete('hum_vicio_role');
     return { success: true, redirectUrl: ['admin', 'gerente'].includes(person.role) ? '/' : '/' + person.role };
-  } catch {
+  } catch (err) {
+    console.error('Erro no loginAction:', err);
     return { success: false, error: 'Não foi possível validar o acesso. Verifique a configuração de segurança com o administrador.' };
   }
 }
