@@ -21,6 +21,11 @@ import SyncStatusBar from '@/components/SyncStatusBar';
 import TrainingBanner from '@/components/TrainingBanner';
 import TrainingExercisesModal from '@/components/TrainingExercisesModal';
 import QuickHelpModal from '@/components/QuickHelpModal';
+import ParkedOrdersBar from '@/components/ParkedOrdersBar';
+import { 
+  ParkedDraft, getParkedDrafts, saveParkedDraft, createNewParkedDraft, 
+  deleteParkedDraft, getActiveDraftId, setActiveDraftId, createDefaultDraft 
+} from '@/lib/parked-orders';
 import { isTrainingModeActive, setTrainingModeActive } from '@/lib/training';
 import { playOrderReadyChime } from '@/lib/audio';
 import MapaMesasCanvas from '@/components/MapaMesasCanvas';
@@ -85,6 +90,7 @@ export default function CaixaPage() {
   const [routeSearchQuery, setRouteSearchQuery] = useState('');
   const [selectedRouteToPrint, setSelectedRouteToPrint] = useState<DeliveryRouteBlock | null>(null);
   const [historyScope, setHistoryScope] = useState<'turno' | 'todos'>('turno');
+  const [historyLimit, setHistoryLimit] = useState(30);
 
   // Isolamento estrito de pedidos por turno de caixa
   const sessionStartTime = useMemo(() => {
@@ -502,67 +508,203 @@ export default function CaixaPage() {
     }
   };
 
-  // 1. Preservação de Rascunho do Carrinho (Frente 4.3 - Acessibilidade e Salvamento)
-  useEffect(() => {
-    if (cart.length > 0 || customerName.trim().length > 0) {
-      try {
-        const draft = {
-          cart,
-          customerName,
-          orderType,
-          pickupPaymentTiming,
-          deliveryFeeInput,
-          discountInput,
-          saleChannel,
-          saleMethod,
-          timestamp: Date.now()
-        };
-        localStorage.setItem('hum_vicio_cart_draft', JSON.stringify(draft));
-      } catch {}
-    } else {
-      try {
-        localStorage.removeItem('hum_vicio_cart_draft');
-      } catch {}
-    }
-  }, [cart, customerName, orderType, pickupPaymentTiming, deliveryFeeInput, discountInput, saleChannel, saleMethod]);
+  // Gestão de Múltiplos Atendimentos Simultâneos / Pedidos em Espera (Frente 5 - Parked Orders)
+  const [parkedDrafts, setParkedDrafts] = useState<ParkedDraft[]>([]);
+  const [activeDraftId, setActiveDraftIdState] = useState<string | null>(null);
+  const isSwitchingDraftRef = useRef(false);
 
-  // 2. Restauração Automática do Rascunho na Montagem
+  // 1. Inicialização e Hidratação de Atendimentos na Montagem
   useEffect(() => {
-    try {
-      const rawDraft = localStorage.getItem('hum_vicio_cart_draft');
-      if (rawDraft) {
-        const parsed = JSON.parse(rawDraft);
-        const isRecent = parsed?.timestamp && (Date.now() - parsed.timestamp) < 12 * 3600 * 1000;
-        if (isRecent && parsed.cart && Array.isArray(parsed.cart) && parsed.cart.length > 0) {
-          setCart(parsed.cart);
-          if (parsed.customerName) setCustomerName(parsed.customerName);
-          if (parsed.orderType) setOrderType(parsed.orderType);
-          if (parsed.pickupPaymentTiming) setPickupPaymentTiming(parsed.pickupPaymentTiming);
-          if (parsed.deliveryFeeInput) setDeliveryFeeInput(parsed.deliveryFeeInput);
-          if (parsed.discountInput) setDiscountInput(parsed.discountInput);
-          if (parsed.saleChannel) setSaleChannel(parsed.saleChannel);
-          if (parsed.saleMethod) setSaleMethod(parsed.saleMethod);
-          setDraftRestoredToast(true);
-        }
+    let loadedDrafts = getParkedDrafts();
+    let activeId = getActiveDraftId();
+    let currentDraft: ParkedDraft | undefined;
+
+    if (loadedDrafts.length > 0) {
+      currentDraft = loadedDrafts.find(d => d.id === activeId) || loadedDrafts[0];
+      activeId = currentDraft.id;
+    } else {
+      currentDraft = createDefaultDraft('balcao', 1);
+      saveParkedDraft(currentDraft);
+      activeId = currentDraft.id;
+      loadedDrafts = [currentDraft];
+    }
+
+    setParkedDrafts(loadedDrafts);
+    setActiveDraftIdState(activeId);
+
+    if (currentDraft) {
+      isSwitchingDraftRef.current = true;
+      setCart(currentDraft.cart || []);
+      setCustomerName(currentDraft.customerName || '');
+      setSaleChannel(currentDraft.saleChannel || 'balcao');
+      setOrderType(currentDraft.orderType || 'retirada');
+      setPickupPaymentTiming(currentDraft.pickupPaymentTiming || 'antecipado');
+      setDeliveryFeeInput(currentDraft.deliveryFeeInput || '');
+      setDiscountInput(currentDraft.discountInput || '');
+      setSaleMethod(currentDraft.saleMethod || 'dinheiro');
+      setCartStep(currentDraft.cartStep || 'produtos');
+      if (currentDraft.cart && currentDraft.cart.length > 0) {
+        setDraftRestoredToast(true);
       }
-    } catch {}
+      setTimeout(() => {
+        isSwitchingDraftRef.current = false;
+      }, 60);
+    }
+
+    const handleDraftsChanged = () => {
+      const fresh = getParkedDrafts();
+      setParkedDrafts(fresh);
+      const freshActiveId = getActiveDraftId();
+      setActiveDraftIdState(freshActiveId);
+    };
+
+    window.addEventListener('hum_vicio_parked_drafts_changed', handleDraftsChanged);
+    return () => window.removeEventListener('hum_vicio_parked_drafts_changed', handleDraftsChanged);
   }, []);
 
-  // 3. Descarte Seguro de Rascunho com Confirmação Prévia
+  // 2. Persistência Automática com Debounce do Atendimento Ativo (Frente 5.2 - Otimização)
+  useEffect(() => {
+    if (isSwitchingDraftRef.current || !activeDraftId) return;
+
+    const timer = setTimeout(() => {
+      const draftToSave: ParkedDraft = {
+        id: activeDraftId,
+        label: customerName.trim() ? customerName.trim() : 'Atendimento',
+        customerName,
+        saleChannel,
+        orderType,
+        pickupPaymentTiming,
+        cart,
+        deliveryFeeInput,
+        discountInput,
+        saleMethod,
+        cartStep,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      saveParkedDraft(draftToSave);
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [activeDraftId, cart, customerName, saleChannel, orderType, pickupPaymentTiming, deliveryFeeInput, discountInput, saleMethod, cartStep]);
+
+  // 3. Alternar Atendimento Selecionado
+  const handleSelectDraft = (targetId: string) => {
+    if (targetId === activeDraftId) return;
+    const currentList = getParkedDrafts();
+
+    if (activeDraftId) {
+      const currentSnapshot: ParkedDraft = {
+        id: activeDraftId,
+        label: customerName.trim() ? customerName.trim() : 'Atendimento',
+        customerName,
+        saleChannel,
+        orderType,
+        pickupPaymentTiming,
+        cart,
+        deliveryFeeInput,
+        discountInput,
+        saleMethod,
+        cartStep,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      saveParkedDraft(currentSnapshot);
+    }
+
+    const targetDraft = currentList.find(d => d.id === targetId);
+    if (targetDraft) {
+      isSwitchingDraftRef.current = true;
+      setActiveDraftId(targetDraft.id);
+      setActiveDraftIdState(targetDraft.id);
+      setCart(targetDraft.cart || []);
+      setCustomerName(targetDraft.customerName || '');
+      setSaleChannel(targetDraft.saleChannel || 'balcao');
+      setOrderType(targetDraft.orderType || 'retirada');
+      setPickupPaymentTiming(targetDraft.pickupPaymentTiming || 'antecipado');
+      setDeliveryFeeInput(targetDraft.deliveryFeeInput || '');
+      setDiscountInput(targetDraft.discountInput || '');
+      setSaleMethod(targetDraft.saleMethod || 'dinheiro');
+      setCartStep(targetDraft.cartStep || 'produtos');
+      setDraftRestoredToast(false);
+      setTimeout(() => {
+        isSwitchingDraftRef.current = false;
+      }, 60);
+    }
+  };
+
+  // 4. Criar Novo Atendimento Limpo (Ex: Cliente presencial chegou no balcão)
+  const handleCreateNewDraft = () => {
+    if (activeDraftId) {
+      const currentSnapshot: ParkedDraft = {
+        id: activeDraftId,
+        label: customerName.trim() ? customerName.trim() : 'Atendimento',
+        customerName,
+        saleChannel,
+        orderType,
+        pickupPaymentTiming,
+        cart,
+        deliveryFeeInput,
+        discountInput,
+        saleMethod,
+        cartStep,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      saveParkedDraft(currentSnapshot);
+    }
+
+    const newDraft = createNewParkedDraft(saleChannel);
+    isSwitchingDraftRef.current = true;
+    setActiveDraftIdState(newDraft.id);
+    setCart([]);
+    setCustomerName('');
+    setDeliveryFeeInput('');
+    setDiscountInput('');
+    setSaleMethod('dinheiro');
+    setCartStep('produtos');
+    setDraftRestoredToast(false);
+    setTimeout(() => {
+      isSwitchingDraftRef.current = false;
+    }, 60);
+  };
+
+  // 5. Descarte Seguro de Atendimento Individual
+  const handleDeleteDraft = (draftId: string) => {
+    const draftToDelete = parkedDrafts.find(d => d.id === draftId);
+    const hasContent = draftToDelete && (draftToDelete.cart.length > 0 || draftToDelete.customerName.trim().length > 0);
+    if (hasContent) {
+      if (!window.confirm(`Deseja realmente descartar o atendimento "${draftToDelete.customerName || draftToDelete.label}"?`)) {
+        return;
+      }
+    }
+
+    const nextId = deleteParkedDraft(draftId);
+    if (draftId === activeDraftId) {
+      if (nextId) {
+        handleSelectDraft(nextId);
+      } else {
+        handleCreateNewDraft();
+      }
+    }
+  };
+
+  // 6. Descarte Seguro do Rascunho Ativo (Botão 'Limpar' ou banner)
   const handleDiscardDraft = () => {
     if (cart.length > 0 || customerName.trim().length > 0) {
       if (!window.confirm('Atenção: Deseja realmente descartar todos os dados preenchidos deste pedido?')) {
         return;
       }
     }
-    setCart([]);
-    setCustomerName('');
-    setDeliveryFeeInput('');
-    setDiscountInput('');
-    setDraftRestoredToast(false);
-    try {
-      localStorage.removeItem('hum_vicio_cart_draft');
-    } catch {}
+    if (activeDraftId) {
+      handleDeleteDraft(activeDraftId);
+    } else {
+      setCart([]);
+      setCustomerName('');
+      setDeliveryFeeInput('');
+      setDiscountInput('');
+      setDraftRestoredToast(false);
+    }
   };
 
   // Cupom iFood Custeado pela Loja (Cupom Hits)
@@ -1385,22 +1527,52 @@ export default function CaixaPage() {
         setTrocoDetails(null);
       }
 
-      // SUCESSO: Só agora limpamos o carrinho e os campos!
+      // SUCESSO: Remove o atendimento concluído e ativa o próximo em espera se houver (Frente 5)
       setSelectedTable(null);
-      setCart([]);
-      setCustomerName('');
       setFiscalCpfInput('');
-      setDiscountInput('');
-      setDeliveryFeeInput('');
       setHasStoreCoupon(false);
       setOrderProductionStatus('em_espera');
-      setPickupPaymentTiming('imediato');
       setSelectedCollaboratorId('');
       setCreditCustomerInput('');
       setCreditDueDateInput('');
       setCreditNotesInput('');
       setCashReceivedInput('');
-      setCartStep('produtos');
+
+      if (activeDraftId) {
+        const nextDraftId = deleteParkedDraft(activeDraftId);
+        if (nextDraftId) {
+          const remainingDrafts = getParkedDrafts();
+          const nextDraft = remainingDrafts.find(d => d.id === nextDraftId);
+          if (nextDraft && nextDraft.cart.length > 0) {
+            // Reativa imediatamente o atendimento em espera (ex: pedido online que estava aguardando)
+            isSwitchingDraftRef.current = true;
+            setActiveDraftIdState(nextDraft.id);
+            setCart(nextDraft.cart || []);
+            setCustomerName(nextDraft.customerName || '');
+            setSaleChannel(nextDraft.saleChannel || 'balcao');
+            setOrderType(nextDraft.orderType || 'retirada');
+            setPickupPaymentTiming(nextDraft.pickupPaymentTiming || 'antecipado');
+            setDeliveryFeeInput(nextDraft.deliveryFeeInput || '');
+            setDiscountInput(nextDraft.discountInput || '');
+            setSaleMethod(nextDraft.saleMethod || 'dinheiro');
+            setCartStep(nextDraft.cartStep || 'produtos');
+            setTimeout(() => {
+              isSwitchingDraftRef.current = false;
+            }, 60);
+          } else {
+            handleCreateNewDraft();
+          }
+        } else {
+          handleCreateNewDraft();
+        }
+      } else {
+        setCart([]);
+        setCustomerName('');
+        setDiscountInput('');
+        setDeliveryFeeInput('');
+        setPickupPaymentTiming('imediato');
+        setCartStep('produtos');
+      }
 
       if (createdSale) {
         setLastCompletedSale(createdSale);
@@ -2977,6 +3149,15 @@ export default function CaixaPage() {
                   {/* Carrinho de Pedidos */}
                   <div className="lg:col-span-5 glass-card rounded-3xl p-6 border-t-4 border-emerald-500 flex flex-col justify-between">
                     <div>
+                      {/* BARRA DE ATENDIMENTOS CONCORRENTES (Parked Orders - Frente 5) */}
+                      <ParkedOrdersBar
+                        drafts={parkedDrafts}
+                        activeDraftId={activeDraftId}
+                        onSelectDraft={handleSelectDraft}
+                        onNewDraft={handleCreateNewDraft}
+                        onDeleteDraft={handleDeleteDraft}
+                      />
+
                       <div className="flex justify-between items-center mb-4 pb-3 border-b border-slate-800">
                         <h2 className="text-lg font-bold text-white flex items-center gap-2">
                           <CartIcon size={20} className="text-emerald-400" /> Carrinho do Pedido
@@ -4984,7 +5165,8 @@ export default function CaixaPage() {
 
               {/* ABA HISTÓRICO DE VENDAS */}
               {activeTab === 'historico' && (() => {
-                const displayedHistorySales = historyScope === 'turno' ? currentSessionSales : sales;
+                const fullHistorySales = historyScope === 'turno' ? currentSessionSales : sales;
+                const displayedHistorySales = fullHistorySales.slice(0, historyLimit);
                 return (
                   <div className="glass-card rounded-3xl p-8 border-t-4 border-blue-500">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 pb-4 border-b border-slate-800">
@@ -4999,7 +5181,10 @@ export default function CaixaPage() {
                       <div className="flex items-center gap-1.5 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
                         <button
                           type="button"
-                          onClick={() => setHistoryScope('turno')}
+                          onClick={() => {
+                            setHistoryScope('turno');
+                            setHistoryLimit(30);
+                          }}
                           className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                             historyScope === 'turno'
                               ? 'bg-blue-600 text-white font-black shadow-md'
@@ -5010,7 +5195,10 @@ export default function CaixaPage() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setHistoryScope('todos')}
+                          onClick={() => {
+                            setHistoryScope('todos');
+                            setHistoryLimit(30);
+                          }}
                           className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
                             historyScope === 'todos'
                               ? 'bg-blue-600 text-white font-black shadow-md'
@@ -5027,8 +5215,9 @@ export default function CaixaPage() {
                         {historyScope === 'turno' ? 'Nenhuma venda registrada no turno atual.' : 'Nenhuma venda registrada ainda.'}
                       </p>
                     ) : (
-                      <div className="space-y-4">
-                        {displayedHistorySales.map((sale) => (
+                      <>
+                        <div className="space-y-4">
+                          {displayedHistorySales.map((sale) => (
                         <div key={sale.id} className={`p-5 rounded-2xl border transition-all ${
                           sale.status === 'cancelled' 
                             ? 'bg-red-500/5 border-red-500/20 opacity-70' 
@@ -5153,7 +5342,20 @@ export default function CaixaPage() {
                         </div>
                       ))}
                     </div>
-                  )}
+
+                    {fullHistorySales.length > historyLimit && (
+                      <div className="pt-6 text-center border-t border-slate-800/80 mt-4">
+                        <button
+                          type="button"
+                          onClick={() => setHistoryLimit(prev => prev + 30)}
+                          className="px-6 py-2.5 min-h-[44px] bg-slate-900 hover:bg-slate-800 text-blue-300 hover:text-white border border-slate-700 hover:border-blue-500/50 rounded-2xl font-bold text-xs transition-all cursor-pointer shadow-md focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-blue-400 active:scale-95"
+                        >
+                          Carregar Mais Vendas ({fullHistorySales.length - historyLimit} restantes)
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
                 </div>
               );
             })()}

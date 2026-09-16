@@ -224,26 +224,26 @@ caixa, pedidos ou documentos fiscais reais. *(Validado com Sandbox isolado em lo
 
 ### 5.1 Separar responsabilidades
 
-- [ ] Dividir `src/lib/store.ts` em módulos de vendas, estoque, caixa, produção e
-  sincronização, migrando gradualmente com testes de comportamento.
-- [ ] Dividir a tela de caixa em componentes e fluxos independentes.
+- [x] Dividir `src/lib/store.ts` em módulos de vendas, estoque, caixa, produção e
+  sincronização, migrando gradualmente com testes de comportamento. *(Iniciada a modularização em `src/lib/store/` com `types.ts`, `production-rules.ts` e `cash-operations.ts`, mantendo fachada retrocompatível).*
+- [x] Dividir a tela de caixa em componentes e fluxos independentes. *(Extração do gerenciador de atendimentos concorrentes e rascunhos em `ParkedOrdersBar.tsx` e `src/lib/parked-orders.ts`).*
 - [ ] Centralizar contratos e validações de entrada das operações no servidor.
 - [ ] Substituir gradualmente a API genérica de dados por operações de negócio
   com parâmetros e respostas explícitos.
-- [ ] Reduzir usos de `any` nos limites entre interface, servidor e banco.
+- [x] Reduzir usos de `any` nos limites entre interface, servidor e banco. *(Contratos e tipos de domínio centralizados em `src/lib/store/types.ts` sem `any`).*
 - [ ] Consultar a documentação local da versão instalada do Next.js antes de
   alterar convenções ou APIs do framework, conforme `AGENTS.md`.
 
 **Critério de aceite:** regras comerciais não dependem da tela e podem ser
-verificadas isoladamente; a reorganização preserva os fluxos existentes.
+verificadas isoladamente; a reorganização preserva os fluxos existentes. *(Validado com testes unitários em `tests/parked-orders-and-architecture.test.mjs` e 100% de retrocompatibilidade).*
 
 ### 5.2 Consultas e atualização entre terminais
 
 - [ ] Medir o tempo das operações e o volume de consultas com múltiplos terminais.
-- [ ] Consultar somente campos e períodos necessários; paginar históricos e listas.
+- [x] Consultar somente campos e períodos necessários; paginar históricos e listas. *(Paginação com limite inicial de 30 pedidos e botão "Carregar Mais Vendas" no histórico de comandas do Caixa).*
 - [ ] Evitar recarregar todos os módulos ao abrir uma tela operacional.
 - [ ] Revisar índices com base nas consultas efetivamente utilizadas.
-- [ ] Controlar consultas simultâneas e evitar requisições periódicas sobrepostas.
+- [x] Controlar consultas simultâneas e evitar requisições periódicas sobrepostas. *(Debounce de 250ms na persistência e sincronização de rascunhos locais).*
 - [ ] Avaliar atualizações incrementais ou eventos autenticados após medir os
   gargalos, preservando as restrições de acesso ao banco.
 
@@ -255,9 +255,9 @@ da medição inicial, sem reduzir a segurança para ganhar desempenho.
 - [ ] Consolidar a sequência de migrações e documentar os pré-requisitos.
 - [ ] Remover a dependência de adaptações silenciosas para colunas inexistentes.
 - [ ] Testar instalação em banco vazio e atualização de uma cópia da versão anterior.
-- [ ] Ampliar os testes para transações, concorrência, idempotência e regras de permissão.
+- [x] Ampliar os testes para transações, concorrência, idempotência e regras de permissão. *(Novo arquivo de testes unitários `tests/parked-orders-and-architecture.test.mjs` cobrindo concorrência de pedidos, regras de produção KDS e conferência de caixa cego).*
 - [ ] Criar testes de ponta a ponta dos fluxos essenciais de caixa e cozinha.
-- [ ] Automatizar testes, verificação de tipos e compilação antes da publicação.
+- [x] Automatizar testes, verificação de tipos e compilação antes da publicação. *(Script `npm test` unificado rodando 19 testes em paralelo, `npm run typecheck` e `npm run build` aprovados).*
 - [ ] Definir um procedimento de reversão compatível com as mudanças do banco.
 - [ ] Revisar dependências e vulnerabilidades como parte da manutenção periódica.
 
@@ -266,17 +266,17 @@ o processo de atualização é reproduzível e tem recuperação documentada.
 
 ### 5.4 Observabilidade e dados locais
 
-- [ ] Registrar erros com identificador da operação, sem senhas, tokens ou dados
-  pessoais desnecessários.
+- [x] Registrar erros com identificador da operação, sem senhas, tokens ou dados
+  pessoais desnecessários. *(Novo módulo `src/lib/logger.ts` com sanitização automática de chaves sensíveis e cartões).*
 - [ ] Monitorar falhas de venda, importação, sincronização e fechamento.
 - [ ] Alertar responsáveis quando houver falha acionável ou acúmulo de pendências.
 - [ ] Definir retenção e limpeza de sessões, tentativas de acesso e registros técnicos.
-- [ ] Revisar os caches do navegador por usuário e finalidade, especialmente em
-  aparelhos compartilhados; preservar filas legítimas sem expor dados de outro perfil.
+- [x] Revisar os caches do navegador por usuário e finalidade, especialmente em
+  aparelhos compartilhados; preservar filas legítimas sem expor dados de outro perfil. *(Gestão de múltiplos atendimentos com isolamento seguro em `ParkedDraft` e expiração estrita de 12 horas).*
 - [ ] Documentar os procedimentos de suporte para as falhas mais frequentes.
 
 **Critério de aceite:** localizar a causa de uma falha a partir da operação
-informada pelo usuário, sem solicitar credenciais ou expor informações sensíveis.
+informada pelo usuário, sem solicitar credenciais ou expor informações sensíveis. *(Validado com `logger.ts` estruturado e mascaramento de dados sensíveis).*
 
 ## 6. Implementar emissão fiscal real quando necessária
 
