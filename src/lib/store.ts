@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 30933)
-Total output lines: 3292
-
 'use client';
 import { useState, useEffect, useSyncExternalStore } from 'react';
 import { createClient } from '@/lib/supabase';
@@ -1638,7 +1635,109 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
         console.error('Erro ao registrar perda:', wErr);
       }
 
-      const newStock = Math.max(0, ing.curr…933 tokens truncated… || !targets || targets.length === 0) return { success: false, error: 'Dados insuficientes' };
+      const newStock = Math.max(0, ing.currentStock - quantity);
+      await updateInventoryItem(ingredientId, { currentStock: newStock });
+
+      const newRecord: WasteRecord = {
+        id: wData ? wData.id : Math.random().toString(36).substring(2, 9),
+        ingredientId,
+        ingredientName: ing.name,
+        quantity,
+        unit: ing.unit,
+        costAtTime,
+        totalLoss,
+        reason,
+        responsibleName,
+        createdAt: wData ? wData.created_at : new Date().toISOString()
+      };
+
+      setWasteRecords([newRecord, ...wasteRecords]);
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  };
+
+  const getTotalWasteCost = () => {
+    return wasteRecords.reduce((acc, w) => acc + (w.totalLoss || 0), 0);
+  };
+
+  // --- PRODUTOS ACTIONS ---
+  const addProduct = async (prod: Omit<Product, 'id'>) => {
+    const { data: pData } = await supabase.from('products').insert({
+      name: prod.name, category: prod.category, price_balcao: prod.priceBalcao, price_ifood: prod.priceIfood
+    }).select().single();
+
+    if (pData) {
+      if (prod.recipe && prod.recipe.length > 0) {
+        const recipeInserts = prod.recipe.map(r => ({
+          product_id: pData.id, ingredient_id: r.ingredientId, quantity: r.quantity
+        }));
+        await supabase.from('recipes').insert(recipeInserts);
+      }
+      setProducts([...products, { ...prod, id: pData.id, isActive: true }]);
+
+      addAuditLog(
+        'CADASTRO_PRODUTO',
+        `Produto "${prod.name}" cadastrado na categoria "${prod.category}". Preço Balcão: R$ ${prod.priceBalcao.toFixed(2)}`,
+        'Admin'
+      );
+    }
+  };
+
+  const updateProduct = async (id: string, updates: Partial<Product>) => {
+    const existing = products.find(p => p.id === id);
+
+    await supabase.from('products').update({
+      name: updates.name, category: updates.category,
+      price_balcao: updates.priceBalcao, price_ifood: updates.priceIfood
+    }).eq('id', id);
+
+    if (updates.recipe) {
+      await supabase.from('recipes').delete().eq('product_id', id);
+      if (updates.recipe.length > 0) {
+        const recipeInserts = updates.recipe.map(r => ({
+          product_id: id, ingredient_id: r.ingredientId, quantity: r.quantity
+        }));
+        await supabase.from('recipes').insert(recipeInserts);
+      }
+    }
+
+    if (existing && (updates.priceBalcao !== undefined || updates.priceIfood !== undefined)) {
+      if (updates.priceBalcao !== existing.priceBalcao || updates.priceIfood !== existing.priceIfood) {
+        addAuditLog(
+          'ALTERACAO_PRECO',
+          `Preço do produto "${existing.name}" alterado. Balcão: R$ ${existing.priceBalcao.toFixed(2)} -> R$ ${(updates.priceBalcao ?? existing.priceBalcao).toFixed(2)} | iFood: R$ ${existing.priceIfood.toFixed(2)} -> R$ ${(updates.priceIfood ?? existing.priceIfood).toFixed(2)}`,
+          'Admin'
+        );
+      }
+    }
+
+    setProducts(products.map(p => p.id === id ? { ...p, ...updates } : p));
+  };
+
+  const removeProduct = async (id: string) => {
+    const prod = products.find(p => p.id === id);
+    try {
+      await supabase.from('products').update({ is_active: false }).eq('id', id);
+    } catch {
+      await supabase.from('products').delete().eq('id', id);
+    }
+    setProducts(products.map(p => p.id === id ? { ...p, isActive: false } : p));
+
+    addAuditLog(
+      'DESATIVACAO_PRODUTO',
+      `Produto "${prod?.name || id}" desativado do cardápio.`,
+      'Admin'
+    );
+  };
+
+  // Vínculo em lote de um insumo/adicional à ficha técnica de múltiplos produtos (hambúrgueres)
+  const batchAddIngredientToProducts = async (
+    ingredientId: string,
+    targets: { productId: string; quantity: number }[]
+  ) => {
+    if (!ingredientId || !targets || targets.length === 0) return { success: false, error: 'Dados insuficientes' };
 
     try {
       const targetProductIds = targets.map(t => t.productId);

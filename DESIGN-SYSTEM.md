@@ -53,4 +53,10 @@ O cadastro de fornecedor usa Dialog, FormField e controles padronizados, preserv
 
 ## Pendências
 
-Este bloco não conclui P0: faltam adoção de toasts nos módulos, navegação, glossário completo e testes de interface automatizados. Testes de negócio e build não certificam aparência ou acessibilidade.
+Este bloco não conclui P0: faltam adoção de toasts nos demais módulos, glossário completo e testes de interface automatizados. Testes de negócio e build não certificam aparência ou acessibilidade.
+
+## Navegação administrativa
+
+As rotas /admin compartilham um layout persistente. No desktop, a navegação pode ser recolhida e a preferência fica salva no navegador. No celular, abre como gaveta modal. A rota atual usa aria-current; há atalho “Pular para o conteúdo”; Colaboradores e Auditoria só aparecem para administradores, mantendo as mesmas restrições do proxy.
+
+Termos adotados na navegação: Dashboard, Clientes, Fiscal e NFC-e, Fichas técnicas, Engenharia de cardápio, Precificação, Simulador, Insumos, Compras, Fornecedores, Inventário físico, Layout do salão, Checklists, Colaboradores e Auditoria. Caixa e Cozinha continuam fora do shell administrativo por terem contextos operacionais próprios.
