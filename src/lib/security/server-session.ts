@@ -39,8 +39,10 @@ export function apiError(error: unknown) {
 
 export function requireSameOrigin(request: Request) {
   const origin = request.headers.get('origin');
-  const expected = process.env.APP_ORIGIN || new URL(request.url).origin;
-  if (origin !== expected || request.headers.get('sec-fetch-site') === 'cross-site') {
+  const requestOrigin = new URL(request.url).origin;
+  const configuredOrigin = process.env.APP_ORIGIN;
+  const isAllowed = origin && (origin === requestOrigin || (configuredOrigin && origin === configuredOrigin));
+  if (!isAllowed || request.headers.get('sec-fetch-site') === 'cross-site') {
     throw new AccessError(403, 'Origem da solicitação não permitida.');
   }
 }
