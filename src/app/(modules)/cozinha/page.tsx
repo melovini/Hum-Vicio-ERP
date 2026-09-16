@@ -18,6 +18,310 @@ import TrainingExercisesModal from '@/components/TrainingExercisesModal';
 import QuickHelpModal from '@/components/QuickHelpModal';
 import { isTrainingModeActive, setTrainingModeActive } from '@/lib/training';
 
+interface KitchenProductionOrderCardProps {
+  order: Sale;
+  orderIdx: number;
+  targetPrepMinutes: number;
+  isPendingThisOrder: boolean;
+  onConcludeClick: (order: Sale, isDelayed: boolean) => void;
+  onConfirmPendingConclude: () => void;
+  onAcknowledgeMod: (orderId: string) => void;
+  getItemStationDetails: (item: SaleItem) => any;
+}
+
+function KitchenProductionOrderCard({
+  order,
+  orderIdx,
+  targetPrepMinutes,
+  isPendingThisOrder,
+  onConcludeClick,
+  onConfirmPendingConclude,
+  onAcknowledgeMod,
+  getItemStationDetails,
+}: KitchenProductionOrderCardProps) {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const startTime = new Date(order.productionStartedAt || order.date).getTime();
+  const elapsedSeconds = Math.max(0, Math.floor((now - startTime) / 1000));
+  const elapsedMinutes = Math.floor(elapsedSeconds / 60);
+  const secondsRemainder = elapsedSeconds % 60;
+  const formattedTimer = `${String(elapsedMinutes).padStart(2, '0')}:${String(secondsRemainder).padStart(2, '0')}`;
+
+  const target = order.targetPrepMinutes || targetPrepMinutes || 20;
+  const isDelayed = elapsedMinutes >= target;
+  const isWarning = !isDelayed && elapsedMinutes >= Math.floor(target * 0.75);
+
+  return (
+    <div
+      className={`rounded-3xl p-5 border-2 flex flex-col justify-between transition-all shadow-xl ${
+        isPendingThisOrder
+          ? 'bg-amber-950/40 border-amber-400 ring-4 ring-amber-400/80 animate-pulse'
+          : isDelayed
+            ? 'bg-red-950/40 border-red-500 ring-2 ring-red-500/50 animate-pulse'
+            : isWarning
+              ? 'bg-amber-950/25 border-amber-500/70'
+              : 'bg-slate-900/90 border-slate-800'
+      }`}
+    >
+      <div>
+        {/* Topo do Card: Pedido #, Modalidade e Cronômetro */}
+        <div className="flex justify-between items-start pb-3 mb-3 border-b border-slate-800">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="font-mono font-black text-xl text-white">
+                #{order.id.slice(0, 5).toUpperCase()}
+              </span>
+              {orderIdx < 9 && (
+                <span className="px-1.5 py-0.5 rounded bg-slate-800 text-emerald-300 border border-slate-700 font-mono font-black text-[11px]" title={`Pressione a tecla ${orderIdx + 1} para concluir`}>
+                  [{orderIdx + 1}]
+                </span>
+              )}
+              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
+                order.orderType === 'delivery' 
+                  ? 'bg-blue-600 text-white' 
+                  : order.orderType === 'retirada' 
+                    ? 'bg-amber-600 text-white' 
+                    : 'bg-emerald-600 text-white'
+              }`}>
+                {order.orderType === 'delivery' 
+                  ? (order.channel === 'ifood' ? '🛵 IFOOD ENTREGA' : '🛵 DELIVERY') 
+                  : order.orderType === 'retirada' 
+                    ? (order.channel === 'ifood' ? '🥡 IFOOD RETIRADA' : '🥡 RETIRADA') 
+                    : '🍽️ MESA'}
+              </span>
+              {order.isModifiedInKitchen ? (
+                <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-red-600 text-white animate-pulse border border-red-400 shadow-md">
+                  ⚠️ ALTERAÇÃO PENDENTE
+                </span>
+              ) : order.orderDiff ? (
+                <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-amber-300 border border-amber-500/30">
+                  📝 MODIFICADO (CIENTE)
+                </span>
+              ) : null}
+              {order.syncStatus === 'pending' || (!order.isOfflineSynced && order.syncStatus !== 'synced') ? (
+                <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40" title="Pedido registrado em contingência local">
+                  📦 CONTINGÊNCIA
+                </span>
+              ) : null}
+            </div>
+            <p className="text-sm font-extrabold text-amber-300 mt-1 uppercase">
+              {order.customerName || 'Cliente'}
+            </p>
+          </div>
+
+          {/* Cronômetro (Independente de cores - Frente 4.2) */}
+          <div className={`text-right px-3 py-1.5 rounded-2xl font-mono ${
+            isDelayed
+              ? 'bg-red-600 text-white shadow-lg shadow-red-600/50'
+              : isWarning
+                ? 'bg-amber-500 text-slate-950 font-black'
+                : 'bg-slate-800 text-slate-200'
+          }`}>
+            <div className="flex items-center gap-1.5 text-lg font-black tracking-wider justify-end">
+              {isDelayed ? (
+                <AlertOctagon size={16} className="shrink-0 animate-pulse" />
+              ) : isWarning ? (
+                <AlertTriangle size={16} className="shrink-0" />
+              ) : (
+                <Clock size={16} className="shrink-0" />
+              )}
+              <span>{formattedTimer}</span>
+            </div>
+            <span className="text-[10px] font-black block uppercase tracking-tighter">
+              {isDelayed 
+                ? `⚠️ [ATRASADO +${elapsedMinutes - target}m]` 
+                : isWarning 
+                  ? `⏳ [ATENÇÃO - Faltam ${target - elapsedMinutes}m]` 
+                  : `✓ [NO PRAZO - Meta ${target}m]`}
+            </span>
+          </div>
+        </div>
+
+        {/* NOME DO CLIENTE EM DESTAQUE MÁXIMO PARA IDENTIFICAÇÃO NA EMBALAGEM */}
+        <div className="mb-3.5 p-3 rounded-2xl bg-amber-500/15 border-2 border-amber-500/60 shadow-inner flex items-center gap-3">
+          <div className="p-2 bg-amber-500 text-slate-950 rounded-xl font-black shrink-0 shadow-md">
+            <User size={20} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <span className="text-[10px] uppercase font-black tracking-widest text-amber-400 block">
+              Escrever na Embalagem:
+            </span>
+            <p className="text-lg md:text-xl font-black text-white uppercase tracking-wide truncate">
+              {order.customerName || 'CLIENTE BALCÃO'}
+            </p>
+          </div>
+        </div>
+
+        {/* Callout de Pedido Modificado (Delta Diff - Frente 4.2) */}
+        {order.orderDiff && (
+          <div className={`mb-3.5 p-3.5 rounded-2xl border-2 space-y-2 text-xs ${
+            order.isModifiedInKitchen 
+              ? 'bg-red-950/50 border-red-500 ring-2 ring-red-500/50 shadow-lg' 
+              : 'bg-amber-950/40 border-amber-500/60'
+          }`}>
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-black text-amber-300 uppercase tracking-wider block text-[11px] flex items-center gap-1.5">
+                <AlertTriangle size={14} className="text-amber-400 shrink-0" /> ALTERAÇÕES NO PEDIDO (DIFF):
+              </span>
+              {order.isModifiedInKitchen ? (
+                <button
+                  type="button"
+                  onClick={() => onAcknowledgeMod(order.id)}
+                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[11px] uppercase rounded-xl shadow-lg cursor-pointer transition-all flex items-center gap-1.5 shrink-0 border border-emerald-400"
+                  title="Registrar ciência da alteração recebida após o início do preparo"
+                >
+                  <Check size={14} /> [✓ CIENTE DA ALTERAÇÃO]
+                </button>
+              ) : (
+                <span className="text-[10px] font-bold text-emerald-400 uppercase bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/40">
+                  ✓ Ciente Registrado
+                </span>
+              )}
+            </div>
+            {order.orderDiff.added.length > 0 && (
+              <div className="text-emerald-300 font-bold space-y-1 bg-slate-950/70 p-2 rounded-xl border border-emerald-500/30">
+                {order.orderDiff.added.map((item, i) => (
+                  <p key={i} className="flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 bg-emerald-600 text-white text-[10px] font-black rounded uppercase">+ ADICIONADO</span>
+                    <span>{item.quantity}x {item.productName}</span>
+                  </p>
+                ))}
+              </div>
+            )}
+            {order.orderDiff.removed.length > 0 && (
+              <div className="text-red-400 font-bold space-y-1 bg-slate-950/70 p-2 rounded-xl border border-red-500/30">
+                {order.orderDiff.removed.map((item, i) => (
+                  <p key={i} className="flex items-center gap-1.5 line-through">
+                    <span className="px-1.5 py-0.5 bg-red-600 text-white text-[10px] font-black rounded uppercase no-underline">- CANCELADO</span>
+                    <span>{item.quantity}x {item.productName}</span>
+                  </p>
+                ))}
+              </div>
+            )}
+            {order.orderDiff.modified.length > 0 && (
+              <div className="text-amber-200 font-medium space-y-1 bg-slate-950/70 p-2 rounded-xl border border-amber-500/30">
+                {order.orderDiff.modified.map((m, i) => (
+                  <p key={i} className="flex items-center gap-1.5">
+                    <span className="px-1.5 py-0.5 bg-amber-600 text-slate-950 text-[10px] font-black rounded uppercase">* OBS ALTERADA</span>
+                    <span>{m.item.quantity}x {m.item.productName}: <strong>{m.newNotes || 'Sem obs'}</strong></span>
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Lista de Itens da Comanda com Badges de Estação */}
+        <div className="space-y-3 mb-4">
+          {order.items?.map((item, idx) => {
+            const details = getItemStationDetails(item);
+            return (
+              <div key={idx} className="bg-slate-950/70 p-3.5 rounded-2xl border border-slate-800/80 space-y-1.5">
+                <div className="flex justify-between items-start">
+                  <span className="font-extrabold text-base text-white leading-snug">
+                    [{item.quantity}x] {item.productName}
+                  </span>
+                </div>
+
+                {/* Badges de Estação Direta no Item (Chapa / Fritadeira / Pontos) */}
+                <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                  {details.chapaPatties > 0 && (
+                    <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] font-black rounded-lg flex items-center gap-1">
+                      🔥 CHAPA: {details.chapaPatties}x {details.chapaPatties > 1 ? (details.isDouble ? 'Carnes (Duplo)' : 'Carnes') : 'Carne'}
+                    </span>
+                  )}
+                  {details.meatPoint && (
+                    <span className="px-2 py-0.5 bg-red-600/30 text-red-200 border border-red-500/50 text-[11px] font-black rounded-lg">
+                      🥩 {details.meatPoint}
+                    </span>
+                  )}
+                  {details.fryerChicken > 0 && (
+                    <span className="px-2 py-0.5 bg-orange-500/20 text-orange-300 border border-orange-500/40 text-[11px] font-black rounded-lg">
+                      🍗 FRITADEIRA: {details.fryerChicken}x Frango Empanado
+                    </span>
+                  )}
+                  {details.fryerCheese > 0 && (
+                    <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
+                      🧀 FRITADEIRA: {details.fryerCheese}x Queijo Empanado
+                    </span>
+                  )}
+                  {details.fryerBatatasCombo > 0 && (
+                    <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
+                      🍟 FRITADEIRA: {details.fryerBatatasCombo}x Batata (Combo)
+                    </span>
+                  )}
+                  {details.fryerBatatasAvulsa > 0 && (
+                    <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
+                      🍟 FRITADEIRA: {details.fryerBatatasAvulsa}x Porção Batata
+                    </span>
+                  )}
+                  {details.fryerOnionsCombo > 0 && (
+                    <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
+                      🧅 FRITADEIRA: {details.fryerOnionsCombo}x Onion (Combo)
+                    </span>
+                  )}
+                  {details.fryerOnionsAvulsa > 0 && (
+                    <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
+                      🧅 FRITADEIRA: {details.fryerOnionsAvulsa}x Porção Onion
+                    </span>
+                  )}
+                </div>
+
+                {item.combo && (
+                  <p className="text-xs font-bold text-amber-400 pl-1">
+                    + COMBO: {item.combo.toUpperCase()}
+                  </p>
+                )}
+
+                {item.additionals && item.additionals.length > 0 && (
+                  <p className="text-xs font-semibold text-emerald-300 pl-1">
+                    + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
+                  </p>
+                )}
+
+                {item.notes && (
+                  <div className="mt-1.5 p-2 bg-amber-500/25 border-2 border-amber-500/60 rounded-xl text-xs font-black text-amber-200 flex items-center gap-2 uppercase tracking-wide shadow-sm">
+                    <AlertOctagon size={16} className="text-amber-400 shrink-0 animate-pulse" />
+                    <span>*** OBS: {item.notes.toUpperCase()} ***</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Botão de Concluir Pedido com Confirmação Segura (Frente 4.2) */}
+      {isPendingThisOrder ? (
+        <button
+          type="button"
+          onClick={onConfirmPendingConclude}
+          className="w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-xl bg-amber-500 hover:bg-amber-400 text-slate-950 animate-bounce ring-4 ring-amber-400"
+        >
+          <Check size={20} /> CONFIRMAR: Pressione [{orderIdx + 1}] ou ENTER
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onConcludeClick(order, isDelayed)}
+          className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg active:scale-95 ${
+            isDelayed
+              ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30 ring-2 ring-red-400'
+              : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
+          }`}
+        >
+          <Check size={20} /> Concluir Pedido {orderIdx < 9 ? `[${orderIdx + 1}]` : ''}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function CozinhaKDSPage() {
   const { 
     sales, items, products, updateStatus, isLoaded, addSale,
@@ -25,10 +329,9 @@ export default function CozinhaKDSPage() {
     targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus, updateBatchProductionStatus,
     acknowledgeOrderModification,
     activeCashSession, isOpen
-  } = useInventory();
+  } = useInventory('cozinha');
 
   const [activeTab, setActiveTab] = useState<'chapa' | 'previsao' | 'faltas' | 'checklist'>('chapa');
-  const [now, setNow] = useState(Date.now());
 
   // Horário de abertura do turno ativo para isolamento estrito
   const sessionStartTime = useMemo(() => {
@@ -139,11 +442,6 @@ export default function CozinhaKDSPage() {
     setManualTicketNotes('');
   };
 
-  // Timer ao vivo para o cronômetro da chapa (atualiza a cada segundo)
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
 
   // Monitorar novas remessas liberadas para a chapa, cancelamentos e alterações em pedidos no fogo
   useEffect(() => {
@@ -1244,289 +1542,27 @@ export default function CozinhaKDSPage() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
-              {productionOrders.map((order, orderIdx) => {
-                const startTime = new Date(order.productionStartedAt || order.date).getTime();
-                const elapsedSeconds = Math.max(0, Math.floor((now - startTime) / 1000));
-                const elapsedMinutes = Math.floor(elapsedSeconds / 60);
-                const secondsRemainder = elapsedSeconds % 60;
-                const formattedTimer = `${String(elapsedMinutes).padStart(2, '0')}:${String(secondsRemainder).padStart(2, '0')}`;
-
-                const target = order.targetPrepMinutes || targetPrepMinutes || 20;
-                const isDelayed = elapsedMinutes >= target;
-                const isWarning = !isDelayed && elapsedMinutes >= Math.floor(target * 0.75);
-                const isPendingThisOrder = pendingConclude?.orderId === order.id;
-
-                return (
-                  <div
+                {productionOrders.map((order, orderIdx) => (
+                  <KitchenProductionOrderCard
                     key={order.id}
-                    className={`rounded-3xl p-5 border-2 flex flex-col justify-between transition-all shadow-xl ${
-                      isPendingThisOrder
-                        ? 'bg-amber-950/40 border-amber-400 ring-4 ring-amber-400/80 animate-pulse'
-                        : isDelayed
-                          ? 'bg-red-950/40 border-red-500 ring-2 ring-red-500/50 animate-pulse'
-                          : isWarning
-                            ? 'bg-amber-950/25 border-amber-500/70'
-                            : 'bg-slate-900/90 border-slate-800'
-                    }`}
-                  >
-                    <div>
-                      {/* Topo do Card: Pedido #, Modalidade e Cronômetro */}
-                      <div className="flex justify-between items-start pb-3 mb-3 border-b border-slate-800">
-                        <div>
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-black text-xl text-white">
-                              #{order.id.slice(0, 5).toUpperCase()}
-                            </span>
-                            {orderIdx < 9 && (
-                              <span className="px-1.5 py-0.5 rounded bg-slate-800 text-emerald-300 border border-slate-700 font-mono font-black text-[11px]" title={`Pressione a tecla ${orderIdx + 1} para concluir`}>
-                                [{orderIdx + 1}]
-                              </span>
-                            )}
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
-                              order.orderType === 'delivery' 
-                                ? 'bg-blue-600 text-white' 
-                                : order.orderType === 'retirada' 
-                                  ? 'bg-amber-600 text-white' 
-                                  : 'bg-emerald-600 text-white'
-                            }`}>
-                              {order.orderType === 'delivery' 
-                                ? (order.channel === 'ifood' ? '🛵 IFOOD ENTREGA' : '🛵 DELIVERY') 
-                                : order.orderType === 'retirada' 
-                                  ? (order.channel === 'ifood' ? '🥡 IFOOD RETIRADA' : '🥡 RETIRADA') 
-                                  : '🍽️ MESA'}
-                            </span>
-                            {order.isModifiedInKitchen ? (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-red-600 text-white animate-pulse border border-red-400 shadow-md">
-                                ⚠️ ALTERAÇÃO PENDENTE
-                              </span>
-                            ) : order.orderDiff ? (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider bg-slate-800 text-amber-300 border border-amber-500/30">
-                                📝 MODIFICADO (CIENTE)
-                              </span>
-                            ) : null}
-                            {order.syncStatus === 'pending' || (!order.isOfflineSynced && order.syncStatus !== 'synced') ? (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/40" title="Pedido registrado em contingência local">
-                                📦 CONTINGÊNCIA
-                              </span>
-                            ) : null}
-                          </div>
-                          <p className="text-sm font-extrabold text-amber-300 mt-1 uppercase">
-                            {order.customerName || 'Cliente'}
-                          </p>
-                        </div>
-
-                        {/* Cronômetro (Independente de cores - Frente 4.2) */}
-                        <div className={`text-right px-3 py-1.5 rounded-2xl font-mono ${
-                          isDelayed
-                            ? 'bg-red-600 text-white shadow-lg shadow-red-600/50'
-                            : isWarning
-                              ? 'bg-amber-500 text-slate-950 font-black'
-                              : 'bg-slate-800 text-slate-200'
-                        }`}>
-                          <div className="flex items-center gap-1.5 text-lg font-black tracking-wider justify-end">
-                            {isDelayed ? (
-                              <AlertOctagon size={16} className="shrink-0 animate-pulse" />
-                            ) : isWarning ? (
-                              <AlertTriangle size={16} className="shrink-0" />
-                            ) : (
-                              <Clock size={16} className="shrink-0" />
-                            )}
-                            <span>{formattedTimer}</span>
-                          </div>
-                          <span className="text-[10px] font-black block uppercase tracking-tighter">
-                            {isDelayed 
-                              ? `⚠️ [ATRASADO +${elapsedMinutes - target}m]` 
-                              : isWarning 
-                                ? `⏳ [ATENÇÃO - Faltam ${target - elapsedMinutes}m]` 
-                                : `✓ [NO PRAZO - Meta ${target}m]`}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* NOME DO CLIENTE EM DESTAQUE MÁXIMO PARA IDENTIFICAÇÃO NA EMBALAGEM */}
-                      <div className="mb-3.5 p-3 rounded-2xl bg-amber-500/15 border-2 border-amber-500/60 shadow-inner flex items-center gap-3">
-                        <div className="p-2 bg-amber-500 text-slate-950 rounded-xl font-black shrink-0 shadow-md">
-                          <User size={20} />
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <span className="text-[10px] uppercase font-black tracking-widest text-amber-400 block">
-                            Escrever na Embalagem:
-                          </span>
-                          <p className="text-lg md:text-xl font-black text-white uppercase tracking-wide truncate">
-                            {order.customerName || 'CLIENTE BALCÃO'}
-                          </p>
-                        </div>
-                      </div>
-
-                      {/* Callout de Pedido Modificado (Delta Diff - Frente 4.2) */}
-                      {order.orderDiff && (
-                        <div className={`mb-3.5 p-3.5 rounded-2xl border-2 space-y-2 text-xs ${
-                          order.isModifiedInKitchen 
-                            ? 'bg-red-950/50 border-red-500 ring-2 ring-red-500/50 shadow-lg' 
-                            : 'bg-amber-950/40 border-amber-500/60'
-                        }`}>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="font-black text-amber-300 uppercase tracking-wider block text-[11px] flex items-center gap-1.5">
-                              <AlertTriangle size={14} className="text-amber-400 shrink-0" /> ALTERAÇÕES NO PEDIDO (DIFF):
-                            </span>
-                            {order.isModifiedInKitchen ? (
-                              <button
-                                type="button"
-                                onClick={() => acknowledgeOrderModification(order.id)}
-                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white font-black text-[11px] uppercase rounded-xl shadow-lg cursor-pointer transition-all flex items-center gap-1.5 shrink-0 border border-emerald-400"
-                                title="Registrar ciência da alteração recebida após o início do preparo"
-                              >
-                                <Check size={14} /> [✓ CIENTE DA ALTERAÇÃO]
-                              </button>
-                            ) : (
-                              <span className="text-[10px] font-bold text-emerald-400 uppercase bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/40">
-                                ✓ Ciente Registrado
-                              </span>
-                            )}
-                          </div>
-                          {order.orderDiff.added.length > 0 && (
-                            <div className="text-emerald-300 font-bold space-y-1 bg-slate-950/70 p-2 rounded-xl border border-emerald-500/30">
-                              {order.orderDiff.added.map((item, i) => (
-                                <p key={i} className="flex items-center gap-1.5">
-                                  <span className="px-1.5 py-0.5 bg-emerald-600 text-white text-[10px] font-black rounded uppercase">+ ADICIONADO</span>
-                                  <span>{item.quantity}x {item.productName}</span>
-                                </p>
-                              ))}
-                            </div>
-                          )}
-                          {order.orderDiff.removed.length > 0 && (
-                            <div className="text-red-400 font-bold space-y-1 bg-slate-950/70 p-2 rounded-xl border border-red-500/30">
-                              {order.orderDiff.removed.map((item, i) => (
-                                <p key={i} className="flex items-center gap-1.5 line-through">
-                                  <span className="px-1.5 py-0.5 bg-red-600 text-white text-[10px] font-black rounded uppercase no-underline">- CANCELADO</span>
-                                  <span>{item.quantity}x {item.productName}</span>
-                                </p>
-                              ))}
-                            </div>
-                          )}
-                          {order.orderDiff.modified.length > 0 && (
-                            <div className="text-amber-200 font-medium space-y-1 bg-slate-950/70 p-2 rounded-xl border border-amber-500/30">
-                              {order.orderDiff.modified.map((m, i) => (
-                                <p key={i} className="flex items-center gap-1.5">
-                                  <span className="px-1.5 py-0.5 bg-amber-600 text-slate-950 text-[10px] font-black rounded uppercase">* OBS ALTERADA</span>
-                                  <span>{m.item.quantity}x {m.item.productName}: <strong>{m.newNotes || 'Sem obs'}</strong></span>
-                                </p>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Lista de Itens da Comanda com Badges de Estação */}
-                      <div className="space-y-3 mb-4">
-                        {order.items?.map((item, idx) => {
-                          const details = getItemStationDetails(item);
-                          return (
-                            <div key={idx} className="bg-slate-950/70 p-3.5 rounded-2xl border border-slate-800/80 space-y-1.5">
-                              <div className="flex justify-between items-start">
-                                <span className="font-extrabold text-base text-white leading-snug">
-                                  [{item.quantity}x] {item.productName}
-                                </span>
-                              </div>
-
-                              {/* Badges de Estação Direta no Item (Chapa / Fritadeira / Pontos) */}
-                              <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                                {details.chapaPatties > 0 && (
-                                  <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] font-black rounded-lg flex items-center gap-1">
-                                    🔥 CHAPA: {details.chapaPatties}x {details.chapaPatties > 1 ? (details.isDouble ? 'Carnes (Duplo)' : 'Carnes') : 'Carne'}
-                                  </span>
-                                )}
-                                {details.meatPoint && (
-                                  <span className="px-2 py-0.5 bg-red-600/30 text-red-200 border border-red-500/50 text-[11px] font-black rounded-lg">
-                                    🥩 {details.meatPoint}
-                                  </span>
-                                )}
-                                {details.fryerChicken > 0 && (
-                                  <span className="px-2 py-0.5 bg-orange-500/20 text-orange-300 border border-orange-500/40 text-[11px] font-black rounded-lg">
-                                    🍗 FRITADEIRA: {details.fryerChicken}x Frango Empanado
-                                  </span>
-                                )}
-                                {details.fryerCheese > 0 && (
-                                  <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
-                                    🧀 FRITADEIRA: {details.fryerCheese}x Queijo Empanado
-                                  </span>
-                                )}
-                                {details.fryerBatatasCombo > 0 && (
-                                  <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
-                                    🍟 FRITADEIRA: {details.fryerBatatasCombo}x Batata (Combo)
-                                  </span>
-                                )}
-                                {details.fryerBatatasAvulsa > 0 && (
-                                  <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
-                                    🍟 FRITADEIRA: {details.fryerBatatasAvulsa}x Porção Batata
-                                  </span>
-                                )}
-                                {details.fryerOnionsCombo > 0 && (
-                                  <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
-                                    🧅 FRITADEIRA: {details.fryerOnionsCombo}x Onion (Combo)
-                                  </span>
-                                )}
-                                {details.fryerOnionsAvulsa > 0 && (
-                                  <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
-                                    🧅 FRITADEIRA: {details.fryerOnionsAvulsa}x Porção Onion
-                                  </span>
-                                )}
-                              </div>
-
-                              {item.combo && (
-                                <p className="text-xs font-bold text-amber-400 pl-1">
-                                  + COMBO: {item.combo.toUpperCase()}
-                                </p>
-                              )}
-
-                              {item.additionals && item.additionals.length > 0 && (
-                                <p className="text-xs font-semibold text-emerald-300 pl-1">
-                                  + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
-                                </p>
-                              )}
-
-                              {item.notes && (
-                                <div className="mt-1.5 p-2 bg-amber-500/25 border-2 border-amber-500/60 rounded-xl text-xs font-black text-amber-200 flex items-center gap-2 uppercase tracking-wide shadow-sm">
-                                  <AlertOctagon size={16} className="text-amber-400 shrink-0 animate-pulse" />
-                                  <span>*** OBS: {item.notes.toUpperCase()} ***</span>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-
-                    {/* Botão de Concluir Pedido com Confirmação Segura (Frente 4.2) */}
-                    {isPendingThisOrder ? (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (pendingConclude) clearTimeout(pendingConclude.timerId);
-                          setPendingConclude(null);
-                          handleConcludeClick(order, isDelayed);
-                        }}
-                        className="w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-xl bg-amber-500 hover:bg-amber-400 text-slate-950 animate-bounce ring-4 ring-amber-400"
-                      >
-                        <Check size={20} /> CONFIRMAR: Pressione [{orderIdx + 1}] ou ENTER
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => handleConcludeClick(order, isDelayed)}
-                        className={`w-full py-4 rounded-2xl font-black text-sm uppercase tracking-wider flex items-center justify-center gap-2 cursor-pointer transition-all shadow-lg active:scale-95 ${
-                          isDelayed
-                            ? 'bg-red-600 hover:bg-red-500 text-white shadow-red-600/30 ring-2 ring-red-400'
-                            : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-600/30'
-                        }`}
-                      >
-                        <Check size={20} /> Concluir Pedido {orderIdx < 9 ? `[${orderIdx + 1}]` : ''}
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                    order={order}
+                    orderIdx={orderIdx}
+                    targetPrepMinutes={targetPrepMinutes}
+                    isPendingThisOrder={pendingConclude?.orderId === order.id}
+                    onConcludeClick={(ord, isDelayed) => handleConcludeClick(ord, isDelayed)}
+                    onConfirmPendingConclude={() => {
+                      if (pendingConclude) clearTimeout(pendingConclude.timerId);
+                      setPendingConclude(null);
+                      const startTime = new Date(order.productionStartedAt || order.date).getTime();
+                      const elapsedMinutes = Math.floor(Math.max(0, Date.now() - startTime) / 60000);
+                      const targetMin = order.targetPrepMinutes || targetPrepMinutes || 20;
+                      handleConcludeClick(order, elapsedMinutes >= targetMin);
+                    }}
+                    onAcknowledgeMod={(orderId) => acknowledgeOrderModification(orderId)}
+                    getItemStationDetails={getItemStationDetails}
+                  />
+                ))}
+              </div>
           </div>
         )}
         </div>

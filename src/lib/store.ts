@@ -404,7 +404,10 @@ function updateGlobalStore(partial: Partial<GlobalStoreState> | ((prev: GlobalSt
 
 let activeLoadPromise: Promise<void> | null = null;
 
-export async function executeParallelLoadData(supabaseClient: any): Promise<void> {
+export async function executeParallelLoadData(
+  supabaseClient: any,
+  scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all'
+): Promise<void> {
   if (activeLoadPromise) {
     return activeLoadPromise;
   }
@@ -428,10 +431,10 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
       let subData: any = null;
       let logsData: any = null;
 
-      // 1. Tentar bootstrap unificado ultrarrápido (1 única requisição HTTP com dados já autorizados pelo perfil)
+      // 1. Tentar bootstrap unificado ultrarrápido com escopo específico por módulo
       let bootstrapLoaded = false;
       try {
-        const bRes = await fetch('/api/bootstrap', { cache: 'no-store', credentials: 'include' });
+        const bRes = await fetch(`/api/bootstrap?scope=${scope}`, { cache: 'no-store', credentials: 'include' });
         if (bRes.ok) {
           const bData = await bRes.json();
           invData = bData.inventory || [];
@@ -529,6 +532,16 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
         const pickupMap = getSavedPickupPendingSalesMap();
         let overridesCleaned = false;
         const saleItemsList = (saleItemsData as any[]) || [];
+        const itemsBySale = new Map<string, any[]>();
+        for (const item of saleItemsList) {
+          if (!item.sale_id) continue;
+          let list = itemsBySale.get(item.sale_id);
+          if (!list) {
+            list = [];
+            itemsBySale.set(item.sale_id, list);
+          }
+          list.push(item);
+        }
 
         const remoteSales: Sale[] = (salesData as any[]).map(s => {
           const override = overrides[s.id];
@@ -555,6 +568,7 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
           }
 
           const paymentStatus = pickupInfo.paymentStatus || s.payment_status || (s.payment_method === 'consumo_funcionario' || s.payment_method === 'fiado_vip' ? 'pendente_retirada' : 'pago');
+          const sItems = itemsBySale.get(s.id) || [];
 
           return {
             id: s.id, 
@@ -586,15 +600,15 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
             creditStatus: creditInfo.creditStatus || s.credit_status || (s.payment_method === 'consumo_funcionario' || s.payment_method === 'fiado_vip' ? 'pendente' : undefined),
             creditPaidAt: creditInfo.creditPaidAt || s.credit_paid_at || undefined,
             creditPaidMethod: creditInfo.creditPaidMethod || s.credit_paid_method || undefined,
-            items: saleItemsList.filter(i => i.sale_id === s.id).map(i => ({
+            items: sItems.map(i => ({
               id: i.id,
               productId: i.product_id, 
               productName: i.product_name, 
               quantity: Number(i.quantity) || 0, 
-              unitPrice: Number(i.unit_price) || 0,
-              combo: i.combo || undefined,
-              notes: i.notes ? i.notes.trim().toUpperCase() : undefined,
-              additionals: Array.isArray(i.additionals) ? i.additionals : undefined
+              unitPrice: Number(i.unit_price) || 0, 
+              combo: i.combo || undefined, 
+              notes: i.notes ? i.notes.trim().toUpperCase() : undefined, 
+              additionals: Array.isArray(i.additionals) ? i.additionals : undefined 
             }))
           };
         });
@@ -792,113 +806,166 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
   return activeLoadPromise;
 }
 
-// Poller em segundo plano singleton com contagem de referências
+// Poller em segundo plano singleton com contagem de referências, mutex e prevenção de sobreposição
 let pollerCount = 0;
 let pollerTimer: any = null;
+let isPollerBusy = false;
+
+async function executePollCycle(supabaseClient: any) {
+  if (isPollerBusy) return;
+  if (typeof document !== 'undefined' && document.hidden) return;
+
+  isPollerBusy = true;
+  try {
+    const { data: latestSales } = await supabaseClient
+      .from('sales')
+      .select('*')
+      .is('deleted_at', null)
+      .order('created_at', { ascending: false })
+      .limit(60);
+
+    if (latestSales && latestSales.length > 0) {
+      const saleIds = latestSales.map((s: any) => s.id);
+      const { data: latestItems } = await supabaseClient
+        .from('sale_items')
+        .select('*')
+        .in('sale_id', saleIds);
+
+      const itemsBySale = new Map<string, any[]>();
+      for (const item of (latestItems || [])) {
+        if (!item.sale_id) continue;
+        let list = itemsBySale.get(item.sale_id);
+        if (!list) {
+          list = [];
+          itemsBySale.set(item.sale_id, list);
+        }
+        list.push(item);
+      }
+
+      const overrides = getSavedProductionOverrides();
+      let overridesCleaned = false;
+      const prev = globalStore.sales;
+      const localOnly = prev.filter(p => p.id.startsWith('local_') && !latestSales.some((ls: any) => ls.id === p.id));
+      const remoteMapped: Sale[] = (latestSales as any[]).map(s => {
+        const existing = prev.find(p => p.id === s.id);
+        const override = overrides[s.id];
+        const prodStatus = (s.production_status || override?.status || existing?.productionStatus || 'em_producao') as ProductionStatus;
+        const prodStarted = s.production_started_at || override?.startedAt || existing?.productionStartedAt || s.created_at;
+
+        if (override && s.production_status) {
+          delete overrides[s.id];
+          overridesCleaned = true;
+        }
+
+        let parsedDiff = existing?.orderDiff;
+        let parsedIsModified = existing?.isModifiedInKitchen || false;
+
+        if (s.delay_notes && typeof s.delay_notes === 'string' && s.delay_notes.includes('KITCHEN_DIFF')) {
+          try {
+            const parsed = JSON.parse(s.delay_notes);
+            if (parsed.tag === 'KITCHEN_DIFF') {
+              parsedDiff = parsed.orderDiff;
+              parsedIsModified = true;
+            }
+          } catch {}
+        } else if (s.delay_notes === null && existing?.isModifiedInKitchen) {
+          parsedIsModified = false;
+        }
+
+        const sItems = itemsBySale.get(s.id) || [];
+
+        return {
+          id: s.id,
+          customerName: s.customer_name || 'Balcão',
+          orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
+          channel: s.channel,
+          subtotal: Number(s.subtotal) || existing?.subtotal || 0,
+          discount: Number(s.discount) || existing?.discount || 0,
+          deliveryFee: Number(s.delivery_fee) || existing?.deliveryFee || 0,
+          total: Number(s.total) || 0,
+          paymentMethod: s.payment_method,
+          date: s.created_at,
+          status: s.status,
+          productionStatus: prodStatus,
+          productionStartedAt: prodStarted,
+          productionCompletedAt: s.production_completed_at || undefined,
+          productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
+          targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
+          delayReason: s.delay_reason || undefined,
+          delayNotes: s.delay_notes || undefined,
+          orderDiff: parsedDiff,
+          isModifiedInKitchen: parsedIsModified,
+          items: sItems.map(i => ({
+            id: i.id,
+            productId: i.product_id,
+            productName: i.product_name,
+            quantity: Number(i.quantity) || 0,
+            unitPrice: Number(i.unit_price) || 0,
+            combo: i.combo || undefined,
+            notes: i.notes ? i.notes.trim().toUpperCase() : undefined,
+            additionals: Array.isArray(i.additionals) ? i.additionals : undefined
+          }))
+        };
+      });
+
+      const nextSales = [...localOnly, ...remoteMapped];
+
+      // Reconciliação inteligente: notificar o store somente se houver alteração real
+      const hasChanged = 
+        prev.length !== nextSales.length ||
+        nextSales.some((ns, idx) => {
+          const ps = prev[idx];
+          if (!ps) return true;
+          return ps.id !== ns.id || 
+                 ps.productionStatus !== ns.productionStatus || 
+                 ps.status !== ns.status ||
+                 ps.isModifiedInKitchen !== ns.isModifiedInKitchen ||
+                 ps.total !== ns.total;
+        });
+
+      if (hasChanged) {
+        updateGlobalStore({ sales: nextSales });
+      }
+
+      if (overridesCleaned && typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(overrides)); } catch {}
+      }
+    } else if (Array.isArray(latestSales) && latestSales.length === 0) {
+      const localOnly = globalStore.sales.filter(p => p.id.startsWith('local_'));
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem('hum_vicio_cached_sales');
+          localStorage.removeItem('hum_vicio_prod_status_map');
+        } catch {}
+      }
+      updateGlobalStore({ sales: localOnly });
+    }
+  } catch {} finally {
+    isPollerBusy = false;
+  }
+}
+
+function scheduleNextPoller(supabaseClient: any, delayMs: number = 3500) {
+  if (pollerCount <= 0) return;
+  if (pollerTimer) clearTimeout(pollerTimer);
+  pollerTimer = setTimeout(async () => {
+    await executePollCycle(supabaseClient);
+    scheduleNextPoller(supabaseClient, 3500);
+  }, delayMs);
+}
 
 function startBackgroundPoller(supabaseClient: any) {
   pollerCount++;
   if (pollerCount === 1) {
-    pollerTimer = setInterval(async () => {
-      try {
-        const { data: latestSales } = await supabaseClient
-          .from('sales')
-          .select('*')
-          .is('deleted_at', null)
-          .order('created_at', { ascending: false })
-          .limit(60);
-        const { data: latestItems } = await supabaseClient.from('sale_items').select('*').not('sale_id', 'is', null);
-        if (latestSales && latestSales.length > 0) {
-          const overrides = getSavedProductionOverrides();
-          let overridesCleaned = false;
-          const prev = globalStore.sales;
-          const localOnly = prev.filter(p => p.id.startsWith('local_') && !latestSales.some((ls: any) => ls.id === p.id));
-          const remoteMapped: Sale[] = (latestSales as any[]).map(s => {
-            const existing = prev.find(p => p.id === s.id);
-            const override = overrides[s.id];
-            const prodStatus = (s.production_status || override?.status || existing?.productionStatus || 'em_producao') as ProductionStatus;
-            const prodStarted = s.production_started_at || override?.startedAt || existing?.productionStartedAt || s.created_at;
-
-            if (override && s.production_status) {
-              delete overrides[s.id];
-              overridesCleaned = true;
-            }
-
-            let parsedDiff = existing?.orderDiff;
-            let parsedIsModified = existing?.isModifiedInKitchen || false;
-
-            if (s.delay_notes && typeof s.delay_notes === 'string' && s.delay_notes.includes('KITCHEN_DIFF')) {
-              try {
-                const parsed = JSON.parse(s.delay_notes);
-                if (parsed.tag === 'KITCHEN_DIFF') {
-                  parsedDiff = parsed.orderDiff;
-                  parsedIsModified = true;
-                }
-              } catch {}
-            } else if (s.delay_notes === null && existing?.isModifiedInKitchen) {
-              parsedIsModified = false;
-            }
-
-            return {
-              id: s.id,
-              customerName: s.customer_name || 'Balcão',
-              orderType: (s.order_type || (s.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
-              channel: s.channel,
-              subtotal: Number(s.subtotal) || existing?.subtotal || 0,
-              discount: Number(s.discount) || existing?.discount || 0,
-              deliveryFee: Number(s.delivery_fee) || existing?.deliveryFee || 0,
-              total: Number(s.total) || 0,
-              paymentMethod: s.payment_method,
-              date: s.created_at,
-              status: s.status,
-              productionStatus: prodStatus,
-              productionStartedAt: prodStarted,
-              productionCompletedAt: s.production_completed_at || undefined,
-              productionTimeMinutes: s.production_time_minutes ? Number(s.production_time_minutes) : undefined,
-              targetPrepMinutes: s.target_prep_minutes ? Number(s.target_prep_minutes) : 20,
-              delayReason: s.delay_reason || undefined,
-              delayNotes: s.delay_notes || undefined,
-              orderDiff: parsedDiff,
-              isModifiedInKitchen: parsedIsModified,
-              items: ((latestItems as any[]) || []).filter(i => i.sale_id === s.id).map(i => ({
-                id: i.id,
-                productId: i.product_id,
-                productName: i.product_name,
-                quantity: Number(i.quantity) || 0,
-                unitPrice: Number(i.unit_price) || 0,
-                combo: i.combo || undefined,
-                notes: i.notes ? i.notes.trim().toUpperCase() : undefined,
-                additionals: Array.isArray(i.additionals) ? i.additionals : undefined
-              }))
-            };
-          });
-          updateGlobalStore({ sales: [...localOnly, ...remoteMapped] });
-          if (overridesCleaned && typeof window !== 'undefined') {
-            try { localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(overrides)); } catch {}
-          }
-        } else if (Array.isArray(latestSales) && latestSales.length === 0) {
-          const localOnly = globalStore.sales.filter(p => p.id.startsWith('local_'));
-          if (typeof window !== 'undefined') {
-            try {
-              localStorage.removeItem('hum_vicio_cached_sales');
-              localStorage.removeItem('hum_vicio_prod_status_map');
-            } catch {}
-          }
-          updateGlobalStore({ sales: localOnly });
-        }
-      } catch {}
-    }, 3500);
+    scheduleNextPoller(supabaseClient, 1500);
   }
 }
 
 function stopBackgroundPoller() {
-  pollerCount--;
-  if (pollerCount <= 0) {
-    pollerCount = 0;
-    if (pollerTimer) {
-      clearInterval(pollerTimer);
-      pollerTimer = null;
-    }
+  pollerCount = Math.max(0, pollerCount - 1);
+  if (pollerCount === 0 && pollerTimer) {
+    clearTimeout(pollerTimer);
+    pollerTimer = null;
   }
 }
 
@@ -912,7 +979,7 @@ const subscribeToStore = (callback: () => void) => {
 const getStoreSnapshot = () => globalStore;
 const getServerStoreSnapshot = () => serverInitialState;
 
-export function useInventory() {
+export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all') {
   const store = useSyncExternalStore(subscribeToStore, getStoreSnapshot, getServerStoreSnapshot);
   const supabase = createClient();
 
@@ -1217,9 +1284,9 @@ export function useInventory() {
   };
 
   useEffect(() => {
-    // 1. Carga de dados rápida em paralelo: se não carregou ou dados com mais de 60s
+    // 1. Carga de dados rápida em paralelo com escopo: se não carregou ou dados com mais de 60s
     if (!globalStore.isLoaded || Date.now() - globalStore.lastFetchedAt > 60000) {
-      void executeParallelLoadData(supabase);
+      void executeParallelLoadData(supabase, scope);
     }
 
     // 2. Inicia poller singleton em segundo plano (3.5s) com contagem de referências

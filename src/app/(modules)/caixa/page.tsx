@@ -72,7 +72,7 @@ export default function CaixaPage() {
     connectionStatus, lastServerSync, offlineSalesList,
     isTrainingMode, setTrainingMode, resetTrainingSandbox,
     isLoaded
-  } = useInventory();
+  } = useInventory('caixa');
 
   // Modais de Ajuda e Treinamento (Frentes 4.3 e 4.4)
   const [showHelpModal, setShowHelpModal] = useState(false);
