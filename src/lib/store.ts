@@ -431,7 +431,7 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
       // 1. Tentar bootstrap unificado ultrarrápido (1 única requisição HTTP com dados já autorizados pelo perfil)
       let bootstrapLoaded = false;
       try {
-        const bRes = await fetch('/api/bootstrap', { cache: 'no-store' });
+        const bRes = await fetch('/api/bootstrap', { cache: 'no-store', credentials: 'include' });
         if (bRes.ok) {
           const bData = await bRes.json();
           invData = bData.inventory || [];

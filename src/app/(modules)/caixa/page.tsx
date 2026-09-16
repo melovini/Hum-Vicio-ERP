@@ -70,7 +70,8 @@ export default function CaixaPage() {
     settleCreditSale,
     settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow,
     connectionStatus, lastServerSync, offlineSalesList,
-    isTrainingMode, setTrainingMode, resetTrainingSandbox
+    isTrainingMode, setTrainingMode, resetTrainingSandbox,
+    isLoaded
   } = useInventory();
 
   // Modais de Ajuda e Treinamento (Frentes 4.3 e 4.4)
@@ -2794,7 +2795,15 @@ export default function CaixaPage() {
           </div>
         )}
 
-        {!isOpen ? (
+        {!isLoaded ? (
+          <div className="glass-card rounded-3xl p-16 text-center border border-slate-800 flex flex-col items-center justify-center min-h-[400px]">
+            <div className="w-12 h-12 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin mb-6"></div>
+            <h2 className="text-2xl font-bold text-white mb-2">Carregando Frente de Caixa...</h2>
+            <p className="text-slate-400 text-sm animate-pulse max-w-md">
+              Sincronizando turno, produtos e pedidos com o servidor.
+            </p>
+          </div>
+        ) : !isOpen ? (
           <div className="glass-card rounded-3xl p-16 text-center border border-slate-800 flex flex-col items-center justify-center">
             <Lock size={64} className="text-slate-600 mb-6" />
             <h2 className="text-3xl font-bold text-white mb-4">O Caixa está Fechado</h2>
