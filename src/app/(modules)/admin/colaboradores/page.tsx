@@ -279,7 +279,7 @@ export default function ColaboradoresPage() {
     setEditingCollab(collab);
     setNameInput(collab.name);
     setRoleInput(collab.role);
-    setPinInput(collab.pin);
+    setPinInput('');
     setPhoneInput(collab.phone || '');
     setShiftInput(collab.shift || 'integral');
     setIsActiveInput(collab.isActive);
@@ -296,21 +296,13 @@ export default function ColaboradoresPage() {
       showFeedback('O nome do colaborador é obrigatório.', 'error');
       return;
     }
-    if (!pinInput.trim()) {
+    if (!editingCollab && !pinInput.trim()) {
       showFeedback('O PIN ou senha individual é obrigatório.', 'error');
       return;
     }
 
     // Validar se o PIN já existe em outro colaborador
     const pinClean = pinInput.trim();
-    const existing = collaborators.find(
-      c => c.pin.trim() === pinClean && (!editingCollab || c.id !== editingCollab.id)
-    );
-    if (existing) {
-      showFeedback(`O PIN "${pinClean}" já está em uso por ${existing.name}. Escolha outro PIN.`, 'error');
-      return;
-    }
-
     const itemToSave: Collaborator = {
       id: editingCollab ? editingCollab.id : 'collab_' + Date.now().toString(36),
       name: nameInput.trim(),
@@ -367,6 +359,8 @@ export default function ColaboradoresPage() {
         setLocalCollaboratorsCache(res.updatedList);
         setIsCloudSynced(res.isCloudSynced);
         showFeedback(`Colaborador ${name} ${currentlyActive ? 'desativado' : 'reativado'}!`);
+      } else {
+        showFeedback(res.error || 'Não foi possível alterar o colaborador.', 'error');
       }
     } catch {
       showFeedback(`Falha ao alterar status de ${name}.`, 'error');
@@ -383,6 +377,8 @@ export default function ColaboradoresPage() {
           setLocalCollaboratorsCache(res.updatedList);
           setIsCloudSynced(res.isCloudSynced);
           showFeedback(`Colaborador ${name} excluído com sucesso!`);
+        } else {
+          showFeedback(res.error || 'Não foi possível excluir o colaborador.', 'error');
         }
       } catch {
         showFeedback(`Falha ao excluir ${name}.`, 'error');
@@ -391,52 +387,7 @@ export default function ColaboradoresPage() {
   };
 
   const handleCopySql = () => {
-    const sql = `-- HUM VÍCIO ERP: TABELA DE COLABORADORES & DIÁRIAS
-CREATE TABLE IF NOT EXISTS collaborators (
-    id VARCHAR(100) PRIMARY KEY,
-    name VARCHAR(150) NOT NULL,
-    role VARCHAR(30) NOT NULL CHECK (role IN ('admin', 'gerente', 'caixa', 'cozinha')),
-    pin VARCHAR(50) NOT NULL,
-    phone VARCHAR(30),
-    shift VARCHAR(30) DEFAULT 'integral' CHECK (shift IN ('manha', 'tarde', 'noite', 'integral')),
-    pay_type VARCHAR(30) DEFAULT 'mensalista',
-    daily_rate NUMERIC(10, 2) DEFAULT 0,
-    weekly_schedule TEXT DEFAULT '[]',
-    is_active BOOLEAN DEFAULT TRUE NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    deleted_at TIMESTAMPTZ
-);
-
-ALTER TABLE collaborators ADD COLUMN IF NOT EXISTS pay_type VARCHAR(30) DEFAULT 'mensalista';
-ALTER TABLE collaborators ADD COLUMN IF NOT EXISTS daily_rate NUMERIC(10, 2) DEFAULT 0;
-ALTER TABLE collaborators ADD COLUMN IF NOT EXISTS weekly_schedule TEXT DEFAULT '[]';
-
-CREATE TABLE IF NOT EXISTS collaborator_diarias (
-    id VARCHAR(100) PRIMARY KEY,
-    collaborator_id VARCHAR(100) NOT NULL,
-    collaborator_name VARCHAR(150) NOT NULL,
-    date DATE NOT NULL,
-    type VARCHAR(30) NOT NULL CHECK (type IN ('diaria', 'diaria_extra', 'agrado', 'pagamento_acerto')),
-    amount NUMERIC(10, 2) NOT NULL,
-    notes TEXT,
-    payment_method VARCHAR(50),
-    registered_by VARCHAR(100),
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_collaborators_pin ON collaborators(pin);
-CREATE INDEX IF NOT EXISTS idx_collaborators_role ON collaborators(role);
-CREATE INDEX IF NOT EXISTS idx_diarias_collab ON collaborator_diarias(collaborator_id);
-CREATE INDEX IF NOT EXISTS idx_diarias_date ON collaborator_diarias(date);
-
-ALTER TABLE collaborators ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "collaborators_all" ON collaborators;
-CREATE POLICY "collaborators_all" ON collaborators FOR ALL USING (true);
-
-ALTER TABLE collaborator_diarias ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "diarias_all" ON collaborator_diarias;
-CREATE POLICY "diarias_all" ON collaborator_diarias FOR ALL USING (true);`;
+    const sql = 'Configuração de segurança: consulte SECURITY-SETUP.md no projeto. A migração deve ser aplicada pelo responsável técnico em uma janela de manutenção.';
 
     navigator.clipboard.writeText(sql);
     setCopiedSql(true);
@@ -725,16 +676,8 @@ CREATE POLICY "diarias_all" ON collaborator_diarias FOR ALL USING (true);`;
                         <div className="inline-flex items-center gap-2 bg-surface-ground px-2.5 py-1 rounded-md border border-surface-border font-mono tabular-nums">
                           <KeyRound size={12} className="text-brand-accent" />
                           <span className="text-slate-200 font-bold tracking-widest">
-                            {isPinVisible ? c.pin : '••••'}
+                            {'Protegida'}
                           </span>
-                          <button
-                            type="button"
-                            onClick={() => setShowPinId(isPinVisible ? null : c.id)}
-                            className="text-slate-500 hover:text-slate-300 cursor-pointer p-0.5 ml-1"
-                            title={isPinVisible ? 'Ocultar PIN' : 'Visualizar PIN'}
-                          >
-                            {isPinVisible ? <EyeOff size={13} /> : <Eye size={13} />}
-                          </button>
                         </div>
                       </td>
 
@@ -1286,18 +1229,19 @@ CREATE POLICY "diarias_all" ON collaborator_diarias FOR ALL USING (true);`;
           {/* PIN de Acesso */}
           <div>
             <label className="block text-slate-300 font-semibold mb-1">
-              PIN / Senha de Acesso Individual *
+              Nova credencial de acesso
             </label>
             <input
               type="password"
-              required
-              placeholder="Ex: 1234, 9876"
-              value={pinInput}
+              required={!editingCollab}
+              maxLength={128}
+              placeholder={editingCollab ? "Deixe vazio para manter a credencial" : "6 caracteres; gestores: 12 caracteres"}
+              value={pinInput} autoComplete="new-password"
               onChange={e => setPinInput(e.target.value)}
               className="w-full input-util font-mono tabular-nums text-sm tracking-widest text-brand-accent font-bold"
             />
             <span className="text-[10px] text-slate-500 mt-1 block">
-              Este é o código pessoal que o colaborador digitará na tela de login para iniciar seu turno.
+              Operadores: mínimo de 6 caracteres. Gestores: mínimo de 12. Ao editar, deixe vazio para manter a credencial atual.
             </span>
           </div>
 
@@ -1373,7 +1317,7 @@ CREATE POLICY "diarias_all" ON collaborator_diarias FOR ALL USING (true);`;
                   Ativar Sincronização na Nuvem (Supabase)
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  Suas senhas e colaboradores já estão seguros e salvos no servidor local. Para sincronizar em tempo real com celulares, tablets da cozinha e múltiplos computadores, crie a tabela no Supabase.
+                  Não foi possível confirmar a conexão segura com o banco. Solicite ao responsável técnico a configuração do servidor antes de cadastrar colaboradores.
                 </p>
               </div>
               <button
@@ -1387,63 +1331,18 @@ CREATE POLICY "diarias_all" ON collaborator_diarias FOR ALL USING (true);`;
 
             {/* Passo a Passo Rápido */}
             <div className="bg-surface-ground p-3.5 rounded-xl border border-surface-border text-xs space-y-2 text-slate-300">
-              <p className="font-semibold text-white">Como ativar em 3 passos simples:</p>
+              <p className="font-semibold text-white">Preparação pelo responsável técnico:</p>
               <ol className="list-decimal list-inside space-y-1 text-slate-400">
-                <li>Abra o painel do seu projeto no <strong className="text-slate-200">Supabase</strong>.</li>
-                <li>Clique no menu <strong className="text-slate-200">SQL Editor</strong> no menu lateral esquerdo.</li>
-                <li>Cole o código SQL abaixo e clique em <strong className="text-emerald-400">Run</strong>.</li>
+                <li>Faça backup e programe uma janela de manutenção.</li>
+                <li>Configure o acesso privado e aplique a migração de segurança.</li>
+                <li>Prepare as credenciais e valide os acessos antes de reabrir o caixa.</li>
               </ol>
             </div>
 
             {/* Bloco de Código SQL com Botão Copiar */}
             <div className="relative">
               <pre className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-[11px] font-mono text-emerald-300 max-h-48 overflow-y-auto leading-relaxed select-all">
-{`-- HUM VÍCIO ERP: TABELA DE COLABORADORES & DIÁRIAS
-CREATE TABLE IF NOT EXISTS collaborators (
-    id VARCHAR(100) PRIMARY KEY,
-    name VARCHAR(150) NOT NULL,
-    role VARCHAR(30) NOT NULL CHECK (role IN ('admin', 'gerente', 'caixa', 'cozinha')),
-    pin VARCHAR(50) NOT NULL,
-    phone VARCHAR(30),
-    shift VARCHAR(30) DEFAULT 'integral' CHECK (shift IN ('manha', 'tarde', 'noite', 'integral')),
-    pay_type VARCHAR(30) DEFAULT 'mensalista',
-    daily_rate NUMERIC(10, 2) DEFAULT 0,
-    weekly_schedule TEXT DEFAULT '[]',
-    is_active BOOLEAN DEFAULT TRUE NOT NULL,
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    updated_at TIMESTAMPTZ DEFAULT NOW() NOT NULL,
-    deleted_at TIMESTAMPTZ
-);
-
-ALTER TABLE collaborators ADD COLUMN IF NOT EXISTS pay_type VARCHAR(30) DEFAULT 'mensalista';
-ALTER TABLE collaborators ADD COLUMN IF NOT EXISTS daily_rate NUMERIC(10, 2) DEFAULT 0;
-ALTER TABLE collaborators ADD COLUMN IF NOT EXISTS weekly_schedule TEXT DEFAULT '[]';
-
-CREATE TABLE IF NOT EXISTS collaborator_diarias (
-    id VARCHAR(100) PRIMARY KEY,
-    collaborator_id VARCHAR(100) NOT NULL,
-    collaborator_name VARCHAR(150) NOT NULL,
-    date DATE NOT NULL,
-    type VARCHAR(30) NOT NULL CHECK (type IN ('diaria', 'diaria_extra', 'agrado', 'pagamento_acerto')),
-    amount NUMERIC(10, 2) NOT NULL,
-    notes TEXT,
-    payment_method VARCHAR(50),
-    registered_by VARCHAR(100),
-    created_at TIMESTAMPTZ DEFAULT NOW() NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_collaborators_pin ON collaborators(pin);
-CREATE INDEX IF NOT EXISTS idx_collaborators_role ON collaborators(role);
-CREATE INDEX IF NOT EXISTS idx_diarias_collab ON collaborator_diarias(collaborator_id);
-CREATE INDEX IF NOT EXISTS idx_diarias_date ON collaborator_diarias(date);
-
-ALTER TABLE collaborators ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "collaborators_all" ON collaborators;
-CREATE POLICY "collaborators_all" ON collaborators FOR ALL USING (true);
-
-ALTER TABLE collaborator_diarias ENABLE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS "diarias_all" ON collaborator_diarias;
-CREATE POLICY "diarias_all" ON collaborator_diarias FOR ALL USING (true);`}
+{'Consulte o procedimento de ativação de segurança do projeto. Não execute scripts antigos que liberem o acesso público ao banco.'}
               </pre>
 
               <button
@@ -1452,7 +1351,7 @@ CREATE POLICY "diarias_all" ON collaborator_diarias FOR ALL USING (true);`}
                 className="absolute top-3 right-3 py-1.5 px-3 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
               >
                 {copiedSql ? <Check size={14} /> : <Sparkles size={14} />}
-                {copiedSql ? 'Copiado!' : 'Copiar Código SQL'}
+                {copiedSql ? 'Copiado!' : 'Copiar orientação'}
               </button>
             </div>
 

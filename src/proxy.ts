@@ -2,14 +2,13 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { verifySessionToken, SESSION_COOKIE_NAME } from '@/lib/session';
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Ignorar arquivos estáticos e internos do Next.js
   if (
     pathname.startsWith('/_next') ||
-    pathname.startsWith('/favicon.ico') ||
-    pathname.includes('.')
+    pathname.startsWith('/favicon.ico')
   ) {
     return NextResponse.next();
   }
@@ -19,10 +18,8 @@ export async function middleware(request: NextRequest) {
 
   // Se estiver na tela de login
   if (pathname === '/login') {
-    if (session.valid && session.role) {
-      const dest = (session.role === 'admin' || session.role === 'gerente') ? '/' : `/${session.role}`;
-      return NextResponse.redirect(new URL(dest, request.url));
-    }
+    // A assinatura sozinha não confirma se a sessão ainda está ativa no banco.
+    // Permitir novo login evita ciclos de redirecionamento após revogação.
     return NextResponse.next();
   }
 
@@ -72,3 +69,4 @@ export const config = {
     '/((?!api|_next/static|_next/image|favicon.ico).*)',
   ],
 };
+

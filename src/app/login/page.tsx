@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Lock, ArrowRight, Loader2 } from 'lucide-react';
 import { loginAction } from './actions';
 
@@ -7,6 +7,11 @@ export default function LoginPage() {
   const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('logout') === 'local') {
+      setError('Você saiu deste aparelho, mas não foi possível confirmar a revogação remota da sessão. Avise o administrador.');
+    }
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -78,7 +83,7 @@ export default function LoginPage() {
           </form>
 
           <p className="mt-8 text-xs text-slate-600">
-            🔒 Autenticação protegida por criptografia de ponta a ponta.
+            🔒 Acesso individual com sessão protegida.
           </p>
         </div>
       </div>

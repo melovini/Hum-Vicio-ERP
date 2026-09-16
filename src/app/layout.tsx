@@ -2,6 +2,7 @@ import type { Metadata } from 'next'
 import './globals.css'
 
 import LogoutButton from '@/components/LogoutButton'
+import SessionGuard from '@/components/SessionGuard'
 
 export const metadata: Metadata = {
   title: 'Hum Vício - ERP',
@@ -18,6 +19,7 @@ export default function RootLayout({
       <body className="font-sans bg-slate-950 text-slate-100 min-h-screen antialiased">
         {children}
         <LogoutButton />
+        <SessionGuard />
       </body>
     </html>
   )

@@ -1,18 +1,20 @@
+import { getAuthSecret } from './security/config';
 export type UserRole = 'admin' | 'gerente' | 'caixa' | 'cozinha';
 
 export interface SessionPayload {
   role: UserRole;
   userName?: string;
   collaboratorId?: string;
+  sessionId: string;
+  version: 2;
   iat: number;
   exp: number;
 }
 
-const DEFAULT_SECRET = 'hum-vicio-erp-security-signature-key-prod-2026';
 export const SESSION_COOKIE_NAME = 'hum_vicio_session';
 
 function getSecretKey(): string {
-  return process.env.AUTH_SECRET || DEFAULT_SECRET;
+  return getAuthSecret();
 }
 
 // Codificação compatível com Edge Runtime e Node.js (sem dependência de Buffer)
@@ -76,16 +78,19 @@ async function getCryptoKey(): Promise<CryptoKey> {
  */
 export async function signSessionToken(
   role: UserRole, 
-  userName?: string, 
-  collaboratorId?: string
+  userName: string | undefined,
+  collaboratorId: string,
+  sessionId: string
 ): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const payload: SessionPayload = {
     role,
     userName,
     collaboratorId,
+    sessionId,
+    version: 2,
     iat: now,
-    exp: now + 60 * 60 * 24, // 24 horas
+    exp: now + 60 * 60 * 8,
   };
 
   const payloadStr = JSON.stringify(payload);
@@ -110,8 +115,9 @@ export async function verifySessionToken(token: string | undefined | null): Prom
   role?: UserRole;
   userName?: string;
   collaboratorId?: string;
+  sessionId?: string;
 }> {
-  if (!token) return { valid: false };
+  if (!token || token.length > 4096) return { valid: false };
 
   const parts = token.split('.');
   if (parts.length !== 2) return { valid: false };
@@ -136,13 +142,18 @@ export async function verifySessionToken(token: string | undefined | null): Prom
 
     // Checar expiração
     const now = Math.floor(Date.now() / 1000);
-    if (payload.exp < now) return { valid: false };
+    if (payload.version !== 2 || !Number.isFinite(payload.exp) || !Number.isFinite(payload.iat) ||
+        payload.exp <= now || payload.iat > now || payload.exp - payload.iat > 8 * 3600 ||
+        !['admin', 'gerente', 'caixa', 'cozinha'].includes(payload.role) ||
+        typeof payload.collaboratorId !== 'string' || !payload.collaboratorId ||
+        typeof payload.sessionId !== 'string' || !payload.sessionId) return { valid: false };
 
     return { 
       valid: true, 
       role: payload.role, 
       userName: payload.userName, 
-      collaboratorId: payload.collaboratorId 
+      collaboratorId: payload.collaboratorId,
+      sessionId: payload.sessionId
     };
   } catch {
     return { valid: false };

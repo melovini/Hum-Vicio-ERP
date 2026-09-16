@@ -32,7 +32,8 @@ import {
   getStoredFiscalConfig, simulateNfceIssue, formatCpfCnpj 
 } from '@/lib/fiscal';
 import { sendOwnerSecurityAlert } from '@/lib/notifications';
-import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
+import type { Collaborator } from '@/lib/collaborators';
+import { getOperatorDirectoryAction } from '@/app/(modules)/admin/colaboradores/actions';
 import { printThermalElement } from '@/lib/thermal-printer';
 
 export interface DeliveryRouteBlock {
@@ -158,7 +159,7 @@ export default function CaixaPage() {
   // Lista de Colaboradores Ativos para Consumo da Equipe
   const [collaboratorsList, setCollaboratorsList] = useState<Collaborator[]>([]);
   useEffect(() => {
-    setCollaboratorsList(getActiveCollaborators());
+    getOperatorDirectoryAction().then(setCollaboratorsList).catch(() => setCollaboratorsList([]));
   }, []);
 
   // Formas de Pagamento Especiais: Consumo de Funcionários & Fiado VIP

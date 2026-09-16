@@ -169,7 +169,12 @@ export function getStoredFiscalInvoices(): FiscalInvoiceRecord[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem(STORAGE_FISCAL_INVOICES_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const records: FiscalInvoiceRecord[] = raw ? JSON.parse(raw) : [];
+    // Os registros legados deste módulo foram gerados localmente, sem transmissão.
+    return records.map(record => record.id.startsWith('nfce_') ? {
+      ...record, status: 'simulada', ambiente: 'homologacao', protocolo: undefined, qrCodeUrl: undefined,
+      motivoStatus: 'SIMULAÇÃO — SEM VALOR FISCAL. Não transmitida à SEFAZ.'
+    } : record);
   } catch {
     return [];
   }
@@ -422,7 +427,6 @@ export function simulateNfceIssue(
   const nextConfig = { ...config, proximoNumeroNfce: numero + 1 };
   saveFiscalConfig(nextConfig);
 
-  const qrCodeUrl = `https://www.fazenda.mg.gov.br/nfce/qrcode?p=${chaveAcesso}|2|1|1|${config.cscId}|${config.cscToken || 'CSC_TESTE_HOMOLOGACAO'}`;
 
   const itemsSummary = (sale.items || [])
     .map(i => `${i.quantity}x ${i.productName}`)
@@ -435,15 +439,15 @@ export function simulateNfceIssue(
     numero,
     serie,
     chaveAcesso,
-    status: config.apiToken ? 'autorizada' : 'simulada',
+    status: 'simulada',
     dataEmissao: date.toISOString(),
     valorTotal: sale.total,
     destinatarioCpfCnpj: cleanCpfCnpj ? formatCpfCnpj(cleanCpfCnpj) : undefined,
     destinatarioNome: sale.customerName || undefined,
-    ambiente: config.ambiente,
-    protocolo: `${131000000000000 + Math.floor(Math.random() * 999999999)}`,
-    motivoStatus: config.apiToken ? 'Autorizado o uso da NFC-e (SEFAZ)' : 'Documento Fiscal emitido em Modo de Simulação Pré-API',
-    qrCodeUrl,
+    ambiente: 'homologacao',
+    protocolo: undefined,
+    motivoStatus: 'SIMULAÇÃO — SEM VALOR FISCAL. Não transmitida à SEFAZ.',
+    qrCodeUrl: undefined,
     formaPagamento: sefazPayment.descricao,
     itemsSummary,
     tributosAproximadosLei12741: Number((sale.total * 0.14).toFixed(2))
@@ -473,7 +477,7 @@ export function generateDanfeThermalHtml(
       </div>
 
       <div style="text-align: center; font-weight: bold; font-size: 12px; margin-bottom: 6px;">
-        DANFE NFC-e - Documento Auxiliar da Nota Fiscal de Consumidor Eletrônica
+        SIMULAÇÃO DE NFC-e — SEM VALOR FISCAL
       </div>
 
       ${invoice.ambiente === 'homologacao' ? `
@@ -532,18 +536,17 @@ export function generateDanfeThermalHtml(
       <div style="text-align: center; border-bottom: 1px dashed #000; padding-bottom: 6px; margin-bottom: 6px; font-size: 10px;">
         <div>NÚMERO: <strong>${String(invoice.numero).padStart(6, '0')}</strong> &nbsp; SÉRIE: <strong>${invoice.serie}</strong></div>
         <div>EMISSÃO: ${dateStr}</div>
-        <div>PROTOCOLO DE AUTORIZAÇÃO:</div>
-        <div style="font-weight: bold;">${invoice.protocolo || 'HOMOLOGAÇÃO / SIMULAÇÃO'}</div>
+        <div>DOCUMENTO DE SIMULAÇÃO:</div>
+        <div style="font-weight: bold;">Não transmitido à SEFAZ</div>
         <div style="margin-top: 4px; font-size: 9px;">CHAVE DE ACESSO:</div>
         <div style="font-weight: bold; font-size: 9px; letter-spacing: 0.5px;">${formattedChave}</div>
       </div>
 
       <div style="text-align: center; padding: 4px 0;">
-        <div style="font-size: 10px; font-weight: bold;">Consulta pela Chave de Acesso em:</div>
-        <div style="font-size: 9px;">www.fazenda.${config.uf.toLowerCase()}.gov.br/nfce</div>
+        <div style="font-size: 10px; font-weight: bold;">Documento de treinamento, sem consulta fiscal.</div>
         <div style="margin-top: 6px; display: inline-block; padding: 8px; border: 1px solid #000; font-size: 10px; font-weight: bold;">
-          [ QR-CODE NFC-e SEFAZ ]<br/>
-          <span style="font-size: 8px; font-weight: normal;">${invoice.status === 'simulada' ? 'Simulação de QR Code' : 'Consulta Via Celular'}</span>
+          [ SIMULAÇÃO SEM QR CODE FISCAL ]<br/>
+          <span style="font-size: 8px; font-weight: normal;">Não transmitida à SEFAZ</span>
         </div>
         <div style="font-size: 9px; margin-top: 6px; color: #333;">
           Tributos Totais Incidentes (Lei 12.741/2012): R$ ${invoice.tributosAproximadosLei12741?.toFixed(2) || '0.00'}

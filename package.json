@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test:security": "node --test --experimental-test-isolation=none tests/security.test.mjs",
+    "security:setup": "node --env-file=.env.local scripts/security-setup.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.12.4",

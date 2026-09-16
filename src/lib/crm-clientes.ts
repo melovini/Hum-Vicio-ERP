@@ -205,183 +205,37 @@ export async function pushCustomersToSupabase(
     return { success: true, count: 0 };
   }
 
-  let supabaseSuccess = false;
-  try {
-    const { createClient } = await import('./supabase');
-    const supabase = createClient();
-
-    if (mode === 'replace') {
-      await supabase.from('imported_customers').delete().neq('id', 'keep_empty');
-    }
-
-    const rows = customers.map(c => ({
-      id: c.id,
-      name: c.name,
-      phone: c.phone || null,
-      address: c.address || null,
-      number: c.number || null,
-      neighborhood: c.neighborhood || null,
-      city: c.city || null,
-      complement: c.complement || null,
-      full_address: c.fullAddress || null,
-      total_orders: c.totalOrders || 1,
-      last_order_date: c.lastOrderDate || null,
-      source: c.source || 'cardapio_web',
-      imported_at: c.importedAt || new Date().toISOString()
-    }));
-
-    const batchSize = 100;
-    for (let i = 0; i < rows.length; i += batchSize) {
-      const batch = rows.slice(i, i + batchSize);
-      const { error } = await supabase.from('imported_customers').upsert(batch, { onConflict: 'id' });
-      if (error) {
-        console.error('Erro no lote de upsert Supabase:', error);
-      }
-    }
-    supabaseSuccess = true;
-  } catch (err) {
-    console.warn('Aviso: Falha direta no Supabase, tentando via API route:', err);
-  }
-
-  // Backup / Sincronização secundária via API Next.js
   try {
     const res = await fetch('/api/crm/customers', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ customers, mode })
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customers, mode })
     });
-    if (res.ok) {
-      return { success: true, count: customers.length };
-    }
-  } catch (err: any) {
-    if (!supabaseSuccess) {
-      return { success: false, count: 0, error: err?.message || 'Erro ao sincronizar na nuvem' };
-    }
-  }
-
-  return { success: supabaseSuccess, count: customers.length };
+    const result = await res.json();
+    return { success: res.ok && result.success, count: res.ok ? customers.length : 0, error: result.message };
+  } catch { return { success: false, count: 0, error: 'Não foi possível sincronizar os clientes.' }; }
 }
-
 // Recupera todos os clientes do Supabase (com paginação automática para contornar limite de 1000)
 export async function fetchAllSupabaseCustomers(): Promise<ImportedCustomer[]> {
-  try {
-    const { createClient } = await import('./supabase');
-    const supabase = createClient();
-
-    const allRows: any[] = [];
-    let from = 0;
-    const pageSize = 1000;
-    let hasMore = true;
-
-    while (hasMore) {
-      const { data, error } = await supabase
-        .from('imported_customers')
-        .select('*')
-        .order('name', { ascending: true })
-        .range(from, from + pageSize - 1);
-
-      if (error) {
-        throw error;
-      }
-
-      if (data && data.length > 0) {
-        allRows.push(...data);
-        if (data.length < pageSize) {
-          hasMore = false;
-        } else {
-          from += pageSize;
-        }
-      } else {
-        hasMore = false;
-      }
-    }
-
-    if (allRows.length > 0) {
-      return allRows.map((c: any) => ({
-        id: c.id,
-        name: c.name,
-        phone: c.phone || undefined,
-        address: c.address || undefined,
-        number: c.number || undefined,
-        neighborhood: c.neighborhood || undefined,
-        city: c.city || undefined,
-        complement: c.complement || undefined,
-        fullAddress: c.full_address || undefined,
-        totalOrders: c.total_orders || 1,
-        lastOrderDate: c.last_order_date || undefined,
-        source: c.source || 'cardapio_web',
-        importedAt: c.imported_at || new Date().toISOString()
-      }));
-    }
-  } catch (err) {
-    // Fallback para API Next.js caso o acesso direto pelo navegador falhe
-    try {
-      const res = await fetch('/api/crm/customers', { cache: 'no-store' });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.success && Array.isArray(data.customers) && data.customers.length > 0) {
-          return data.customers;
-        }
-      }
-    } catch {}
-  }
-
-  return [];
+  const response = await fetch('/api/crm/customers', { cache: 'no-store' });
+  if (!response.ok) throw new Error('Não foi possível consultar os clientes.');
+  const result = await response.json();
+  return result.customers;
 }
 
-// Sincronização Bidirecional Inteligente (Auto-Push e Auto-Pull com Nuvem Supabase)
+// A leitura nunca publica nem substitui a base automaticamente a partir de um cache.
 export async function syncImportedCustomers(options?: {
   forcePushLocal?: boolean;
 }): Promise<{ customers: ImportedCustomer[]; syncedToCloud: boolean; count: number }> {
   const local = getStoredImportedCustomers();
-  let cloud: ImportedCustomer[] = [];
-
   try {
-    cloud = await fetchAllSupabaseCustomers();
-  } catch (err) {
-    console.warn('Erro ao buscar clientes da nuvem:', err);
-  }
-
-  // CENÁRIO 1: A Nuvem tem dados, mas este dispositivo está vazio (Outros Dispositivos / Celular / Tablet)
-  if (cloud.length > 0 && local.length === 0) {
+    if (options?.forcePushLocal && local.length) {
+      const result = await pushCustomersToSupabase(local, 'merge');
+      if (!result.success) return { customers: local, syncedToCloud: false, count: local.length };
+    }
+    const cloud = await fetchAllSupabaseCustomers();
     setStoredImportedCustomers(cloud);
     return { customers: cloud, syncedToCloud: true, count: cloud.length };
-  }
-
-  // CENÁRIO 2: O computador local tem clientes (ex: importação anterior), mas a Nuvem está vazia!
-  // CRÍTICO: Sobe automaticamente os clientes locais para a Nuvem Supabase
-  if (local.length > 0 && cloud.length === 0) {
-    console.log(`[CRM Cloud Sync] Detectados ${local.length} clientes locais pendentes de envio. Enviando para o Supabase...`);
-    const pushRes = await pushCustomersToSupabase(local, 'replace');
-    return { customers: local, syncedToCloud: pushRes.success, count: local.length };
-  }
-
-  // CENÁRIO 3: Ambos possuem dados ou forçado - faz a união sem perder nenhum cliente
-  if (cloud.length > 0 && local.length > 0) {
-    const map = new Map<string, ImportedCustomer>();
-    cloud.forEach(c => map.set(c.id, c));
-    let hasLocalOnly = false;
-    local.forEach(c => {
-      if (!map.has(c.id)) {
-        hasLocalOnly = true;
-      }
-      map.set(c.id, c);
-    });
-
-    const merged = Array.from(map.values());
-    setStoredImportedCustomers(merged);
-
-    // Se havia itens no local que não estavam na nuvem, sobe para o Supabase
-    if (hasLocalOnly || options?.forcePushLocal) {
-      await pushCustomersToSupabase(merged, 'merge');
-    }
-
-    return { customers: merged, syncedToCloud: true, count: merged.length };
-  }
-
-  return { customers: local, syncedToCloud: false, count: local.length };
+  } catch { return { customers: local, syncedToCloud: false, count: local.length }; }
 }
-
 // Sincronizar clientes importados a partir do servidor / Supabase (Retrocompatibilidade)
 export async function fetchImportedCustomersAsync(): Promise<ImportedCustomer[]> {
   const { customers } = await syncImportedCustomers();
@@ -408,64 +262,28 @@ export function saveImportedCustomers(customers: ImportedCustomer[], mode: 'repl
 // Assinatura em Tempo Real (Supabase Realtime) para refletir alterações entre múltiplos aparelhos instantaneamente
 export function subscribeToCustomerChanges(onUpdate: (customers: ImportedCustomer[]) => void): () => void {
   if (typeof window === 'undefined') return () => {};
-
-  let channel: any = null;
-  import('./supabase').then(({ createClient }) => {
+  let active = true;
+  const timer = setInterval(async () => {
     try {
-      const supabase = createClient();
-      channel = supabase
-        .channel('imported_customers_realtime')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'imported_customers' },
-          async () => {
-            console.log('[CRM Realtime] Atualização de clientes detectada na nuvem!');
-            const { customers } = await syncImportedCustomers();
-            onUpdate(customers);
-          }
-        )
-        .subscribe();
-    } catch (e) {
-      console.warn('Erro ao configurar canal realtime de clientes:', e);
-    }
-  });
-
-  return () => {
-    if (channel) {
-      import('./supabase').then(({ createClient }) => {
-        try {
-          const supabase = createClient();
-          supabase.removeChannel(channel);
-        } catch {}
-      });
-    }
-  };
+      const customers = await fetchAllSupabaseCustomers();
+      if (active) onUpdate(customers);
+    } catch {}
+  }, 15000);
+  return () => { active = false; clearInterval(timer); };
 }
-
 // Limpar clientes importados
 export async function clearImportedCustomers(): Promise<void> {
+  const response = await fetch('/api/crm/customers', { method: 'DELETE' });
+  if (!response.ok) throw new Error('Não foi possível limpar a base. Apenas administradores podem excluir clientes.');
   memoryImportedCustomers = [];
   if (typeof window !== 'undefined') {
-    try {
-      localStorage.removeItem(STORAGE_IMPORTED_KEY);
-      const db = await openCustomerDb();
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      tx.objectStore(IDB_STORE).clear();
-    } catch {}
+    localStorage.removeItem(STORAGE_IMPORTED_KEY);
+    const db = await openCustomerDb();
+    const tx = db.transaction(IDB_STORE, 'readwrite');
+    tx.objectStore(IDB_STORE).clear();
     window.dispatchEvent(new Event('crm_customers_updated'));
   }
-
-  try {
-    const { createClient } = await import('./supabase');
-    const supabase = createClient();
-    await supabase.from('imported_customers').delete().neq('id', 'keep_empty');
-  } catch {}
-
-  try {
-    fetch('/api/crm/customers', { method: 'DELETE' }).catch(() => {});
-  } catch {}
 }
-
 // Extrai perfis consolidados de clientes a partir do histórico de vendas do ERP
 export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
   const profileMap = new Map<string, {
@@ -1207,4 +1025,3 @@ export function generateCustomerWhatsAppMessage(
 
   return { message, url };
 }
-

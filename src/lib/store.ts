@@ -1,7 +1,7 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
-import { validateMasterPassword } from '@/lib/collaborators';
+
 
 // === INSUMOS (Inventário) ===
 export type StockStatus = 'ok' | 'acabando' | 'zerado';
@@ -1150,65 +1150,6 @@ export function useInventory() {
     window.addEventListener('storage', handleStorage);
 
     // Assinatura Supabase Realtime para sincronização sub-segundo (<100ms) entre PC do Caixa e Tablet da Cozinha
-    const realtimeChannel = supabase
-      .channel('sales_realtime_sync')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'sales' },
-        (payload: any) => {
-          if (payload.eventType === 'INSERT') {
-            const newSale = payload.new;
-            setSales(prev => {
-              if (prev.some(s => s.id === newSale.id)) return prev;
-              const mapped: Sale = {
-                id: newSale.id,
-                customerName: newSale.customer_name || 'Balcão',
-                orderType: (newSale.order_type || (newSale.channel === 'ifood' ? 'delivery' : 'mesa')) as any,
-                channel: newSale.channel,
-                total: Number(newSale.total) || 0,
-                paymentMethod: newSale.payment_method,
-                date: newSale.created_at,
-                status: newSale.status || 'completed',
-                productionStatus: (newSale.production_status || 'em_producao') as ProductionStatus,
-                productionStartedAt: newSale.production_started_at || newSale.created_at,
-                productionCompletedAt: newSale.production_completed_at || undefined,
-                productionTimeMinutes: newSale.production_time_minutes ? Number(newSale.production_time_minutes) : undefined,
-                targetPrepMinutes: newSale.target_prep_minutes ? Number(newSale.target_prep_minutes) : 20,
-                delayReason: newSale.delay_reason || undefined,
-                delayNotes: newSale.delay_notes || undefined,
-                items: []
-              };
-              return [mapped, ...prev];
-            });
-          } else if (payload.eventType === 'UPDATE') {
-            const updated = payload.new;
-            setSales(prev => prev.map(s => {
-              if (s.id === updated.id) {
-                return {
-                  ...s,
-                  customerName: updated.customer_name || s.customerName,
-                  status: updated.status || s.status,
-                  productionStatus: (updated.production_status || s.productionStatus) as ProductionStatus,
-                  productionStartedAt: updated.production_started_at || s.productionStartedAt,
-                  productionCompletedAt: updated.production_completed_at || s.productionCompletedAt,
-                  productionTimeMinutes: updated.production_time_minutes ? Number(updated.production_time_minutes) : s.productionTimeMinutes,
-                  delayReason: updated.delay_reason || s.delayReason,
-                  delayNotes: updated.delay_notes || s.delayNotes,
-                  total: Number(updated.total) || s.total
-                };
-              }
-              return s;
-            }));
-          } else if (payload.eventType === 'DELETE') {
-            const oldId = payload.old?.id;
-            if (oldId) {
-              setSales(prev => prev.filter(s => s.id !== oldId));
-            }
-          }
-        }
-      )
-      .subscribe();
-
     // Polling contínuo a cada 3.5s para garantir sincronização resiliente e atualização de itens
     const syncInterval = setInterval(async () => {
       try {
@@ -1308,7 +1249,7 @@ export function useInventory() {
     return () => {
       window.removeEventListener('storage', handleStorage);
       clearInterval(syncInterval);
-      supabase.removeChannel(realtimeChannel);
+
     };
   }, []);
 
@@ -2028,7 +1969,7 @@ export function useInventory() {
         return { success: false, error: authRes.error };
       }
     } catch {
-      isPassValid = validateMasterPassword(masterPassword);
+      isPassValid = false; // Falha fechada: não validar credenciais no navegador.
     }
 
     if (!isPassValid) {
@@ -2161,7 +2102,7 @@ export function useInventory() {
         return { success: false, error: authRes.error };
       }
     } catch {
-      isPassValid = validateMasterPassword(masterPassword);
+      isPassValid = false; // Falha fechada: não validar credenciais no navegador.
     }
 
     if (!isPassValid) {
