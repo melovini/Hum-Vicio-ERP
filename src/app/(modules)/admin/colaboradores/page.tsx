@@ -6,7 +6,8 @@ import {
   CheckCircle2, AlertTriangle, Edit2, Trash2, Eye, EyeOff, 
   Phone, Clock, Check, X, ShieldAlert, Sparkles, UserCheck, UserX,
   Calendar, DollarSign, Wallet, History, Gift, CheckSquare, 
-  FileText, ArrowDownCircle, ArrowUpCircle
+  FileText, ArrowDownCircle, ArrowUpCircle, Briefcase, Coins,
+  CalendarCheck, ChevronLeft, ChevronRight, Sun, Coffee
 } from 'lucide-react';
 import SlidingSheet from '@/components/ui/SlidingSheet';
 import StatusBadge, { StatusBadgeVariant } from '@/components/ui/StatusBadge';
@@ -15,9 +16,10 @@ import {
   getStoredCollaborators, setLocalCollaboratorsCache
 } from '@/lib/collaborators';
 import { 
-  WageEntry, DAYS_OF_WEEK, DayKey,
+  WageEntry, DAYS_OF_WEEK, DayKey, CalendarDay, QuinzenaInfo,
   getStoredWageEntries, saveStoredWageEntry, deleteStoredWageEntry, 
-  computeCollaboratorBalance, getStoredWeeklySchedules, saveStoredWeeklySchedule
+  computeCollaboratorBalance, getStoredWeeklySchedules, saveStoredWeeklySchedule,
+  getQuinzenaInfo, getCurrentQuinzena, MONTH_NAMES, formatDateKey
 } from '@/lib/diarias';
 import {
   getCollaboratorsAction,
@@ -51,6 +53,7 @@ export default function ColaboradoresPage() {
   const [nameInput, setNameInput] = useState('');
   const [roleInput, setRoleInput] = useState<CollaboratorRole>('caixa');
   const [pinInput, setPinInput] = useState('');
+  const [showModalPin, setShowModalPin] = useState(false);
   const [phoneInput, setPhoneInput] = useState('');
   const [shiftInput, setShiftInput] = useState<'manha' | 'tarde' | 'noite' | 'integral'>('integral');
   const [isActiveInput, setIsActiveInput] = useState(true);
@@ -61,6 +64,11 @@ export default function ColaboradoresPage() {
   // Estado das Diárias, Agrados e Acertos
   const [wageEntries, setWageEntries] = useState<WageEntry[]>([]);
   const [weeklySchedules, setWeeklySchedules] = useState<Record<string, string[]>>({});
+
+  // Controle de Navegação da Escala Quinzenal (15 em 15 Dias)
+  const [selectedYear, setSelectedYear] = useState<number>(() => getCurrentQuinzena().year);
+  const [selectedMonth, setSelectedMonth] = useState<number>(() => getCurrentQuinzena().month);
+  const [selectedQuinzena, setSelectedQuinzena] = useState<1 | 2>(() => getCurrentQuinzena().quinzena);
 
   // Modais de Ação de Diárias
   const [bonusModalCollab, setBonusModalCollab] = useState<Collaborator | null>(null);
@@ -250,13 +258,75 @@ export default function ColaboradoresPage() {
     }
   };
 
-  const handleToggleScheduleDay = (collabId: string, dayKey: string) => {
-    const currentDays = weeklySchedules[collabId] || [];
-    const exists = currentDays.includes(dayKey);
-    const updatedDays = exists ? currentDays.filter(d => d !== dayKey) : [...currentDays, dayKey];
-    const newSchedule = { ...weeklySchedules, [collabId]: updatedDays };
-    setWeeklySchedules(newSchedule);
-    saveStoredWeeklySchedule(newSchedule);
+  // Dados computados da Quinzena Selecionada
+  const currentQuinzenaInfo = useMemo(() => {
+    return getQuinzenaInfo(selectedYear, selectedMonth, selectedQuinzena);
+  }, [selectedYear, selectedMonth, selectedQuinzena]);
+
+  const handlePrevQuinzena = () => {
+    if (selectedQuinzena === 2) {
+      setSelectedQuinzena(1);
+    } else {
+      if (selectedMonth === 0) {
+        setSelectedYear(prev => prev - 1);
+        setSelectedMonth(11);
+      } else {
+        setSelectedMonth(prev => prev - 1);
+      }
+      setSelectedQuinzena(2);
+    }
+  };
+
+  const handleNextQuinzena = () => {
+    if (selectedQuinzena === 1) {
+      setSelectedQuinzena(2);
+    } else {
+      if (selectedMonth === 11) {
+        setSelectedYear(prev => prev + 1);
+        setSelectedMonth(0);
+      } else {
+        setSelectedMonth(prev => prev + 1);
+      }
+      setSelectedQuinzena(1);
+    }
+  };
+
+  const handleGoToCurrentQuinzena = () => {
+    const cur = getCurrentQuinzena();
+    setSelectedYear(cur.year);
+    setSelectedMonth(cur.month);
+    setSelectedQuinzena(cur.quinzena);
+  };
+
+  // Alternar dia de plantão/folga na data do calendário real
+  const handleToggleScheduleDate = async (collab: Collaborator, dateStr: string) => {
+    const currentDates: string[] = Array.isArray(collab.weeklySchedule) ? collab.weeklySchedule : [];
+    const exists = currentDates.includes(dateStr);
+    const updatedDates = exists
+      ? currentDates.filter(d => d !== dateStr)
+      : [...currentDates, dateStr];
+
+    const updatedCollab: Collaborator = {
+      ...collab,
+      weeklySchedule: updatedDates,
+      updatedAt: new Date().toISOString()
+    };
+
+    // Atualização otimista na tela
+    const updatedList = collaborators.map(c => c.id === collab.id ? updatedCollab : c);
+    setCollaborators(updatedList);
+    setLocalCollaboratorsCache(updatedList);
+
+    const newSchedules = { ...weeklySchedules, [collab.id]: updatedDates };
+    setWeeklySchedules(newSchedules);
+    saveStoredWeeklySchedule(newSchedules);
+
+    // Salva silenciosamente no servidor
+    try {
+      await saveCollaboratorAction(updatedCollab);
+    } catch (err) {
+      console.error('Erro ao sincronizar escala quinzenal:', err);
+    }
   };
 
   // Abrir Sheet para Novo Colaborador
@@ -265,6 +335,7 @@ export default function ColaboradoresPage() {
     setNameInput('');
     setRoleInput('caixa');
     setPinInput('');
+    setShowModalPin(false);
     setPhoneInput('');
     setShiftInput('integral');
     setIsActiveInput(true);
@@ -280,12 +351,13 @@ export default function ColaboradoresPage() {
     setNameInput(collab.name);
     setRoleInput(collab.role);
     setPinInput('');
+    setShowModalPin(false);
     setPhoneInput(collab.phone || '');
     setShiftInput(collab.shift || 'integral');
     setIsActiveInput(collab.isActive);
     setPayTypeInput(collab.payType || 'mensalista');
     setDailyRateInput(collab.dailyRate ? String(collab.dailyRate) : '100');
-    setWeeklyScheduleInput(collab.weeklySchedule || ['qui', 'sex', 'sab', 'dom']);
+    setWeeklyScheduleInput(Array.isArray(collab.weeklySchedule) ? collab.weeklySchedule : ['qui', 'sex', 'sab', 'dom']);
     setIsSheetOpen(true);
   };
 
@@ -527,7 +599,7 @@ export default function ColaboradoresPage() {
               : 'bg-surface-card hover:bg-surface-elevated text-slate-400 hover:text-slate-200 border border-surface-border'
           }`}
         >
-          <Calendar size={16} /> Escala Semanal & Acerto de Diárias
+          <Calendar size={16} /> Escala Quinzenal & Acerto de Diárias
           {totalDueAllDiaristas > 0 && (
             <span className="ml-1 px-2 py-0.5 bg-rose-600 text-white rounded-full font-mono text-[10px] font-black animate-pulse">
               R$ {totalDueAllDiaristas.toFixed(2)} pendente
@@ -907,24 +979,12 @@ export default function ColaboradoresPage() {
                           </div>
                         </div>
 
-                        {/* Dias da Escala Semanal do Diarista */}
-                        <div className="mt-3 flex items-center gap-1 flex-wrap">
-                          <span className="text-[10px] text-slate-500 uppercase font-bold mr-1">Escala:</span>
-                          {DAYS_OF_WEEK.map(day => {
-                            const isScheduled = (weeklySchedules[collab.id] || collab.weeklySchedule || []).includes(day.key);
-                            return (
-                              <span
-                                key={day.key}
-                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                                  isScheduled
-                                    ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
-                                    : 'bg-surface-ground text-slate-600'
-                                }`}
-                              >
-                                {day.short}
-                              </span>
-                            );
-                          })}
+                        {/* Status na Quinzena Atual */}
+                        <div className="mt-3 flex items-center justify-between text-[11px] pt-2 border-t border-surface-border">
+                          <span className="text-slate-400 font-medium">Plantões na quinzena:</span>
+                          <span className="font-mono font-bold text-amber-300">
+                            {currentQuinzenaInfo.days.filter(d => (collab.weeklySchedule || []).includes(d.dateStr)).length} de {currentQuinzenaInfo.days.length} dias
+                          </span>
                         </div>
                       </div>
 
@@ -976,49 +1036,172 @@ export default function ColaboradoresPage() {
             )}
           </div>
 
-          {/* MATRIZ VISUAL DA ESCALA SEMANAL (SEGUNDA A DOMINGO) */}
-          <div className="bg-surface-card rounded-2xl border border-surface-border overflow-hidden shadow-xl space-y-3 p-5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-surface-border">
+          {/* MATRIZ VISUAL DA ESCALA QUINZENAL (15 EM 15 DIAS) COM REVEZAMENTO */}
+          <div className="bg-surface-card rounded-2xl border border-surface-border overflow-hidden shadow-xl space-y-4 p-5">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-surface-border">
               <div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Calendar className="text-brand-primary" size={18} />
-                  Matriz de Escala Semanal de Trabalho
+                  <Calendar className="text-amber-400" size={18} />
+                  Matriz de Escala Quinzenal (Revezamento 15 em 15 Dias)
                 </h3>
-                <p className="text-xs text-slate-400">
-                  Clique nos dias para definir quem está escalado ou de folga. Os diaristas escalados podem ter sua diária confirmada com 1 clique.
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Finais de semana e feriados destacados para planejar folgas alternadas. Clique no dia para alternar entre Plantão (Trabalha) e Folga.
                 </p>
+              </div>
+
+              {/* Seletor e Navegador de Quinzena */}
+              <div className="flex items-center gap-2 bg-surface-ground p-1.5 rounded-xl border border-surface-border self-start md:self-auto">
+                <button
+                  type="button"
+                  onClick={handlePrevQuinzena}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-surface-elevated transition-colors cursor-pointer"
+                  title="Quinzena anterior"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+
+                <div className="px-3 py-1 bg-surface-card rounded-lg border border-surface-border text-center min-w-[210px]">
+                  <span className="text-xs font-black text-white block">
+                    {currentQuinzenaInfo.label}
+                  </span>
+                  <span className="text-[10px] text-slate-400 font-medium">
+                    {currentQuinzenaInfo.monthName} de {currentQuinzenaInfo.year}
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleNextQuinzena}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-surface-elevated transition-colors cursor-pointer"
+                  title="Próxima quinzena"
+                >
+                  <ChevronRight size={16} />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleGoToCurrentQuinzena}
+                  className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-colors cursor-pointer ml-1"
+                  title="Voltar para a quinzena atual"
+                >
+                  Hoje
+                </button>
               </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs text-left border-collapse">
+            {/* Legenda Explicativa */}
+            <div className="flex items-center gap-3 text-[11px] flex-wrap text-slate-400 bg-surface-ground/50 p-2.5 rounded-xl border border-surface-border/50">
+              <span className="font-semibold text-slate-300">Legenda:</span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block" />
+                <strong className="text-emerald-300">Trabalha</strong> (Plantão)
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-sm bg-slate-800 border border-slate-700 inline-block" />
+                <span className="text-slate-400">Folga</span>
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-sm bg-amber-500/40 border border-amber-500 inline-block" />
+                <span className="text-amber-300 font-medium">Fim de Semana (Sáb/Dom)</span>
+              </span>
+              <span className="inline-flex items-center gap-1">
+                <span className="w-2.5 h-2.5 rounded-sm bg-blue-500 ring-2 ring-blue-400 inline-block" />
+                <span className="text-blue-300 font-medium">Dia de Hoje</span>
+              </span>
+            </div>
+
+            {/* Tabela de Escala Quinzenal */}
+            <div className="overflow-x-auto rounded-xl border border-surface-border">
+              <table className="w-full text-xs text-left border-collapse min-w-[850px]">
                 <thead>
-                  <tr className="border-b border-surface-border text-slate-400 uppercase text-[10px] font-semibold bg-surface-ground/60">
-                    <th className="py-3 px-3">Colaborador</th>
-                    <th className="py-3 px-2 text-center">Regime</th>
-                    {DAYS_OF_WEEK.map(d => (
-                      <th key={d.key} className="py-3 px-2 text-center">{d.label}</th>
-                    ))}
-                    <th className="py-3 px-3 text-right">Ação Rápida</th>
+                  <tr className="border-b border-surface-border text-slate-300 uppercase text-[10px] font-bold bg-surface-ground/90">
+                    <th className="py-3 px-3 min-w-[170px] sticky left-0 bg-surface-ground z-10">Colaborador</th>
+                    <th className="py-3 px-2 text-center min-w-[95px]">Regime</th>
+                    {currentQuinzenaInfo.days.map(d => {
+                      const isWeekend = d.isWeekend;
+                      const isToday = d.isToday;
+                      return (
+                        <th 
+                          key={d.dateStr} 
+                          className={`py-2 px-1 text-center min-w-[38px] transition-colors ${
+                            isToday
+                              ? 'bg-blue-600/25 border-x border-blue-500/40'
+                              : isWeekend
+                              ? 'bg-amber-500/10 border-x border-amber-500/20'
+                              : ''
+                          }`}
+                          title={d.holidayName ? `Feriado: ${d.holidayName}` : undefined}
+                        >
+                          <div className="flex flex-col items-center">
+                            <span className={`text-xs font-black ${
+                              isToday 
+                                ? 'text-blue-400 font-extrabold' 
+                                : isWeekend 
+                                ? 'text-amber-300 font-bold' 
+                                : 'text-slate-200'
+                            }`}>
+                              {d.dayNumber}
+                            </span>
+                            <span className={`text-[9px] uppercase font-bold tracking-tight ${
+                              isToday 
+                                ? 'text-blue-300' 
+                                : isWeekend 
+                                ? 'text-amber-400' 
+                                : 'text-slate-400'
+                            }`}>
+                              {d.dayNameShort}
+                            </span>
+                            {d.holidayName && (
+                              <span className="text-[8px] px-1 rounded bg-rose-500/30 text-rose-300 font-bold mt-0.5" title={d.holidayName}>
+                                Feriado
+                              </span>
+                            )}
+                          </div>
+                        </th>
+                      );
+                    })}
+                    <th className="py-3 px-3 text-center min-w-[120px]">Resumo Quinzena</th>
+                    <th className="py-3 px-3 text-right min-w-[130px]">Ação de Hoje</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-surface-border">
                   {collaborators.filter(c => c.isActive).map(collab => {
-                    const assignedDays = weeklySchedules[collab.id] || collab.weeklySchedule || [];
+                    const scheduledDates: string[] = Array.isArray(collab.weeklySchedule) ? collab.weeklySchedule : [];
                     const isDiarista = collab.payType === 'diarista';
 
+                    // Totais do Colaborador nesta Quinzena
+                    const shiftsInQuinzena = currentQuinzenaInfo.days.filter(d => scheduledDates.includes(d.dateStr)).length;
+                    const offDaysInQuinzena = currentQuinzenaInfo.days.length - shiftsInQuinzena;
+                    const weekendsWorked = currentQuinzenaInfo.days.filter(d => d.isWeekend && scheduledDates.includes(d.dateStr)).length;
+                    const totalWeekends = currentQuinzenaInfo.days.filter(d => d.isWeekend).length;
+
+                    // Diária hoje
+                    const todayStr = new Date().toISOString().slice(0, 10);
+                    const isScheduledToday = scheduledDates.includes(todayStr);
+                    const alreadyLoggedToday = wageEntries.some(e => e.collaboratorId === collab.id && e.date === todayStr && (e.type === 'diaria' || e.type === 'diaria_extra'));
+
                     return (
-                      <tr key={collab.id} className="hover:bg-surface-ground/40 transition-colors">
-                        <td className="py-3 px-3 font-semibold text-white">
-                          <div className="flex items-center gap-2">
-                            <span>{collab.name}</span>
-                            <span className="text-[10px] text-slate-500">({collab.shift})</span>
+                      <tr key={collab.id} className="hover:bg-surface-ground/50 transition-colors">
+                        <td className="py-2.5 px-3 font-semibold text-white sticky left-0 bg-surface-card z-10 border-r border-surface-border/50">
+                          <div className="flex flex-col">
+                            <span className="truncate max-w-[150px] font-bold text-slate-100">{collab.name}</span>
+                            <div className="flex items-center gap-1.5 mt-0.5">
+                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
+                                collab.role === 'admin' ? 'bg-purple-500/20 text-purple-300' :
+                                collab.role === 'gerente' ? 'bg-amber-500/20 text-amber-300' :
+                                collab.role === 'cozinha' ? 'bg-emerald-500/20 text-emerald-300' :
+                                'bg-blue-500/20 text-blue-300'
+                              }`}>
+                                {collab.role.toUpperCase()}
+                              </span>
+                              <span className="text-[10px] text-slate-500">{collab.shift}</span>
+                            </div>
                           </div>
                         </td>
 
-                        <td className="py-3 px-2 text-center">
+                        <td className="py-2.5 px-2 text-center">
                           {isDiarista ? (
-                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30">
+                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30 whitespace-nowrap">
                               Diarista (R$ {Number(collab.dailyRate || 100).toFixed(0)})
                             </span>
                           ) : (
@@ -1028,43 +1211,132 @@ export default function ColaboradoresPage() {
                           )}
                         </td>
 
-                        {DAYS_OF_WEEK.map(d => {
-                          const isScheduled = assignedDays.includes(d.key);
+                        {currentQuinzenaInfo.days.map(d => {
+                          const isScheduled = scheduledDates.includes(d.dateStr);
+                          const isWeekend = d.isWeekend;
+                          const isToday = d.isToday;
+
                           return (
-                            <td key={d.key} className="py-3 px-2 text-center">
+                            <td 
+                              key={d.dateStr} 
+                              className={`py-1 px-1 text-center ${
+                                isToday 
+                                  ? 'bg-blue-600/10 border-x border-blue-500/20' 
+                                  : isWeekend 
+                                  ? 'bg-amber-500/5 border-x border-amber-500/10' 
+                                  : ''
+                              }`}
+                            >
                               <button
                                 type="button"
-                                onClick={() => handleToggleScheduleDay(collab.id, d.key)}
-                                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold cursor-pointer transition-all ${
+                                onClick={() => handleToggleScheduleDate(collab, d.dateStr)}
+                                className={`w-8 h-8 rounded-lg text-[11px] font-black cursor-pointer transition-all flex items-center justify-center mx-auto shadow-xs ${
                                   isScheduled
-                                    ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-600/30'
-                                    : 'bg-surface-ground text-slate-600 hover:text-slate-400 border border-transparent'
+                                    ? 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-emerald-900/30'
+                                    : 'bg-surface-ground text-slate-600 hover:text-slate-300 hover:bg-surface-elevated border border-surface-border/60'
                                 }`}
-                                title={isScheduled ? 'Escalado para trabalhar (clique para marcar folga)' : 'Folga (clique para escalar)'}
+                                title={
+                                  isScheduled
+                                    ? `${collab.name}: Escalado para trabalhar no dia ${d.dayNumber} (${d.dayNameShort}). Clique para colocar de folga.`
+                                    : `${collab.name}: Folga no dia ${d.dayNumber} (${d.dayNameShort}). Clique para escalar plantão.`
+                                }
                               >
-                                {isScheduled ? 'Trabalha' : 'Folga'}
+                                {isScheduled ? 'T' : 'F'}
                               </button>
                             </td>
                           );
                         })}
 
-                        <td className="py-3 px-3 text-right">
+                        {/* Resumo da Quinzena */}
+                        <td className="py-2.5 px-3 text-center border-l border-surface-border/50">
+                          <div className="flex flex-col items-center">
+                            <div className="flex items-center gap-1 font-mono text-[11px]">
+                              <span className="text-emerald-400 font-bold" title="Dias trabalhados">{shiftsInQuinzena}T</span>
+                              <span className="text-slate-500">/</span>
+                              <span className="text-slate-400" title="Folgas">{offDaysInQuinzena}F</span>
+                            </div>
+                            <span className="text-[9px] text-amber-300/80 font-medium mt-0.5">
+                              {weekendsWorked}/{totalWeekends} fds trab.
+                            </span>
+                            {isDiarista && (
+                              <span className="text-[10px] font-mono font-bold text-white mt-0.5">
+                                ~ R$ {(shiftsInQuinzena * (Number(collab.dailyRate) || 100)).toFixed(0)}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+
+                        {/* Ação Hoje */}
+                        <td className="py-2.5 px-3 text-right">
                           {isDiarista ? (
-                            <button
-                              type="button"
-                              onClick={() => handleQuickLogShift(collab)}
-                              className="py-1.5 px-3 bg-brand-primary/15 hover:bg-brand-primary text-brand-primary hover:text-white border border-brand-primary/30 rounded-lg font-bold text-[11px] transition-all cursor-pointer inline-flex items-center gap-1"
-                            >
-                              <CheckSquare size={12} /> Confirmar Hoje
-                            </button>
+                            alreadyLoggedToday ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-bold py-1 px-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
+                                <CheckCircle2 size={12} /> Diária Lançada
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleQuickLogShift(collab)}
+                                className={`py-1 px-2.5 rounded-lg font-bold text-[11px] transition-all cursor-pointer inline-flex items-center gap-1 ${
+                                  isScheduledToday
+                                    ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 font-black shadow-xs'
+                                    : 'bg-surface-ground hover:bg-surface-elevated text-slate-400 hover:text-slate-200 border border-surface-border'
+                                }`}
+                                title={isScheduledToday ? 'Confirmar diária trabalhada de hoje' : 'Lançar diária avulsa de hoje'}
+                              >
+                                <CheckSquare size={12} /> + Diária Hoje
+                              </button>
+                            )
                           ) : (
-                            <span className="text-[10px] text-slate-500 italic">Mensalista</span>
+                            <span className="text-[10px] text-slate-500 italic">Salário Fixo</span>
                           )}
                         </td>
                       </tr>
                     );
                   })}
                 </tbody>
+
+                {/* Rodapé com Total de Colaboradores Escalados por Dia */}
+                <tfoot>
+                  <tr className="bg-surface-ground/90 border-t-2 border-surface-border text-[10px] font-bold text-slate-300">
+                    <td className="py-2.5 px-3 sticky left-0 bg-surface-ground z-10">
+                      Total Escalados / Dia:
+                    </td>
+                    <td className="py-2.5 px-2 text-center text-slate-500">
+                      —
+                    </td>
+                    {currentQuinzenaInfo.days.map(d => {
+                      const totalOnDuty = collaborators.filter(c => c.isActive && (c.weeklySchedule || []).includes(d.dateStr)).length;
+                      const isWeekend = d.isWeekend;
+                      const isToday = d.isToday;
+
+                      return (
+                        <td 
+                          key={d.dateStr} 
+                          className={`py-2 px-1 text-center font-mono ${
+                            isToday 
+                              ? 'bg-blue-600/20 text-blue-300 font-black' 
+                              : isWeekend 
+                              ? 'bg-amber-500/10 text-amber-300' 
+                              : 'text-slate-300'
+                          }`}
+                          title={`Total de ${totalOnDuty} pessoas escaladas em ${d.dayNumber}/${currentQuinzenaInfo.month + 1}`}
+                        >
+                          <span className={`inline-block px-1.5 py-0.5 rounded ${
+                            totalOnDuty === 0 
+                              ? 'bg-rose-500/20 text-rose-300' 
+                              : 'bg-surface-card text-white font-bold'
+                          }`}>
+                            {totalOnDuty}
+                          </span>
+                        </td>
+                      );
+                    })}
+                    <td colSpan={2} className="py-2.5 px-3 text-right text-slate-500 text-[10px]">
+                      Dica: Alterne os fins de semana (Sáb/Dom) para revezar a equipe.
+                    </td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
           </div>
@@ -1081,7 +1353,7 @@ export default function ColaboradoresPage() {
             <span>{editingCollab ? `Editar: ${editingCollab.name}` : 'Cadastrar Colaborador'}</span>
           </div>
         }
-        description="Defina as credenciais, nível de permissão e função operacional do colaborador."
+        description="Defina as credenciais, nível de permissão e remuneração do colaborador."
         footer={
           <div className="flex gap-2">
             <button
@@ -1094,16 +1366,17 @@ export default function ColaboradoresPage() {
             <button
               type="button"
               onClick={handleSaveCollaborator}
-              className="flex-1 py-2.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors"
+              disabled={isSaving}
+              className="flex-1 py-2.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors disabled:opacity-50"
             >
-              {editingCollab ? 'Salvar Alterações' : 'Confirmar Cadastro'}
+              {isSaving ? 'Salvando...' : editingCollab ? 'Salvar Alterações' : 'Confirmar Cadastro'}
             </button>
           </div>
         }
       >
         <form onSubmit={handleSaveCollaborator} className="space-y-4 text-xs">
           
-          {/* Nome */}
+          {/* SEÇÃO 1: DADOS BÁSICOS */}
           <div>
             <label className="block text-slate-300 font-semibold mb-1">
               Nome Completo do Colaborador *
@@ -1141,7 +1414,40 @@ export default function ColaboradoresPage() {
             </span>
           </div>
 
-          {/* Regime de Remuneração: Mensalista vs Diarista */}
+          {/* SEÇÃO 2: SENHA / PIN DE ACESSO */}
+          <div className="p-3 rounded-xl bg-surface-ground border border-surface-border space-y-1.5">
+            <label className="block text-slate-200 font-semibold">
+              {editingCollab ? 'Alterar Senha / PIN de Acesso' : 'Senha / PIN de Acesso *'}
+            </label>
+            <div className="relative">
+              <input
+                type={showModalPin ? 'text' : 'password'}
+                required={!editingCollab}
+                maxLength={128}
+                placeholder={editingCollab ? "Deixe em branco para manter a senha atual" : "Operador: 6+ dígitos | Gestor: 12+ caracteres"}
+                value={pinInput} 
+                autoComplete="new-password"
+                onChange={e => setPinInput(e.target.value)}
+                className="w-full input-util font-mono tabular-nums text-sm pr-10 tracking-wider text-brand-accent font-bold"
+              />
+              <button
+                type="button"
+                onClick={() => setShowModalPin(prev => !prev)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1 rounded-md cursor-pointer transition-colors"
+                tabIndex={-1}
+                title={showModalPin ? 'Ocultar senha' : 'Ver senha digitada'}
+              >
+                {showModalPin ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+            <span className="text-[10px] text-slate-400 block leading-tight">
+              {editingCollab 
+                ? 'Deixe o campo vazio para preservar a senha atual. Para alterar, digite a nova credencial.' 
+                : 'Mínimo de 6 dígitos numéricos para operadores ou 12 caracteres para gestores.'}
+            </span>
+          </div>
+
+          {/* SEÇÃO 3: REGIME DE REMUNERAÇÃO & DIÁRIA */}
           <div className="p-3.5 rounded-xl bg-surface-ground border border-surface-border space-y-3">
             <label className="block text-slate-300 font-semibold">
               Regime de Pagamento
@@ -1150,102 +1456,52 @@ export default function ColaboradoresPage() {
               <button
                 type="button"
                 onClick={() => setPayTypeInput('mensalista')}
-                className={`py-2 px-2.5 rounded-lg border text-xs font-bold cursor-pointer transition-all ${
+                className={`py-2 px-3 rounded-lg border text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
                   payTypeInput === 'mensalista'
                     ? 'bg-blue-600/20 border-blue-500 text-blue-300 shadow-sm'
                     : 'bg-surface-card border-surface-border text-slate-400 hover:text-slate-200'
                 }`}
               >
-                👔 Salário Mensal (Mensalista)
+                <Briefcase size={14} /> Salário Mensal (Mensalista)
               </button>
               <button
                 type="button"
                 onClick={() => setPayTypeInput('diarista')}
-                className={`py-2 px-2.5 rounded-lg border text-xs font-bold cursor-pointer transition-all ${
+                className={`py-2 px-3 rounded-lg border text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
                   payTypeInput === 'diarista'
                     ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
                     : 'bg-surface-card border-surface-border text-slate-400 hover:text-slate-200'
                 }`}
               >
-                📅 Diarista (Recebe por Diária)
+                <Coins size={14} /> Diarista (Recebe por Diária)
               </button>
             </div>
 
             {payTypeInput === 'diarista' && (
-              <div className="space-y-3 pt-2 border-t border-surface-border animate-in fade-in duration-200">
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1">
-                    Valor Padrão da Diária (R$) *
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">R$</span>
-                    <input
-                      type="number"
-                      step="0.50"
-                      required
-                      placeholder="100.00"
-                      value={dailyRateInput}
-                      onChange={e => setDailyRateInput(e.target.value)}
-                      className="w-full input-util pl-9 text-xs font-mono font-bold text-white"
-                    />
-                  </div>
-                  <span className="text-[10px] text-slate-500 mt-1 block">
-                    Valor base pago por turno trabalhado. Pode receber diárias extras ou agrados avulsos.
-                  </span>
+              <div className="space-y-2 pt-3 border-t border-surface-border animate-in fade-in duration-200">
+                <label className="block text-slate-300 font-semibold">
+                  Valor Padrão da Diária (R$) *
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs pointer-events-none">R$</span>
+                  <input
+                    type="number"
+                    step="0.50"
+                    required
+                    placeholder="100.00"
+                    value={dailyRateInput}
+                    onChange={e => setDailyRateInput(e.target.value)}
+                    className="w-full input-util pl-9 text-xs font-mono font-bold text-white"
+                  />
                 </div>
-
-                <div>
-                  <label className="block text-slate-300 font-semibold mb-1.5">
-                    Dias da Escala Semanal de Trabalho
-                  </label>
-                  <div className="flex items-center gap-1.5 flex-wrap">
-                    {DAYS_OF_WEEK.map(day => {
-                      const isSelected = weeklyScheduleInput.includes(day.key);
-                      return (
-                        <button
-                          key={day.key}
-                          type="button"
-                          onClick={() => {
-                            setWeeklyScheduleInput(prev => 
-                              isSelected ? prev.filter(k => k !== day.key) : [...prev, day.key]
-                            );
-                          }}
-                          className={`py-1.5 px-3 rounded-lg border text-xs font-bold transition-all cursor-pointer ${
-                            isSelected
-                              ? 'bg-amber-500 text-slate-950 border-amber-400'
-                              : 'bg-surface-card text-slate-400 border-surface-border hover:border-slate-600'
-                          }`}
-                        >
-                          {day.short}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
+                <span className="text-[10px] text-slate-500 block leading-tight">
+                  Valor base pago por turno trabalhado. Na aba &quot;Escala Quinzenal&quot; você monta a escala de 15 em 15 dias com revezamento de finais de semana.
+                </span>
               </div>
             )}
           </div>
 
-          {/* PIN de Acesso */}
-          <div>
-            <label className="block text-slate-300 font-semibold mb-1">
-              Nova credencial de acesso
-            </label>
-            <input
-              type="password"
-              required={!editingCollab}
-              maxLength={128}
-              placeholder={editingCollab ? "Deixe vazio para manter a credencial" : "6 caracteres; gestores: 12 caracteres"}
-              value={pinInput} autoComplete="new-password"
-              onChange={e => setPinInput(e.target.value)}
-              className="w-full input-util font-mono tabular-nums text-sm tracking-widest text-brand-accent font-bold"
-            />
-            <span className="text-[10px] text-slate-500 mt-1 block">
-              Operadores: mínimo de 6 caracteres. Gestores: mínimo de 12. Ao editar, deixe vazio para manter a credencial atual.
-            </span>
-          </div>
-
-          {/* Turno */}
+          {/* SEÇÃO 4: TURNO DE TRABALHO */}
           <div>
             <label className="block text-slate-300 font-semibold mb-1">
               Turno de Trabalho
@@ -1263,7 +1519,7 @@ export default function ColaboradoresPage() {
                   onClick={() => setShiftInput(s.id as any)}
                   className={`py-2 rounded-lg border text-xs font-semibold cursor-pointer transition-colors ${
                     shiftInput === s.id
-                      ? 'bg-brand-primary/10 border-brand-primary text-brand-primary'
+                      ? 'bg-brand-primary/10 border-brand-primary text-brand-primary font-bold'
                       : 'bg-surface-ground border-surface-border text-slate-400 hover:text-slate-200'
                   }`}
                 >
@@ -1273,7 +1529,7 @@ export default function ColaboradoresPage() {
             </div>
           </div>
 
-          {/* Telefone / WhatsApp */}
+          {/* SEÇÃO 5: TELEFONE / CONTATO */}
           <div>
             <label className="block text-slate-300 font-semibold mb-1">
               Telefone / Contato (Opcional)
@@ -1287,7 +1543,7 @@ export default function ColaboradoresPage() {
             />
           </div>
 
-          {/* Status Ativo */}
+          {/* SEÇÃO 6: STATUS ATIVO */}
           <div className="pt-2 border-t border-surface-border">
             <label className="flex items-center gap-2.5 cursor-pointer">
               <input

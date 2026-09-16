@@ -187,3 +187,109 @@ export function saveStoredWeeklySchedule(schedules: Record<string, string[]>): v
     } catch {}
   }
 }
+
+/* =========================================================================
+   SISTEMA DE ESCALAS QUINZENAIS (15 EM 15 DIAS) COM REVEZAMENTO
+   ========================================================================= */
+
+export const MONTH_NAMES = [
+  'Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho',
+  'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'
+] as const;
+
+export const NATIONAL_HOLIDAYS: Record<string, string> = {
+  '01-01': 'Ano Novo',
+  '04-21': 'Tiradentes',
+  '05-01': 'Dia do Trabalho',
+  '09-07': 'Independência',
+  '10-12': 'N. Sra Aparecida',
+  '11-02': 'Finados',
+  '11-15': 'Proclamação República',
+  '11-20': 'Consciência Negra',
+  '12-25': 'Natal',
+};
+
+export interface CalendarDay {
+  dateStr: string; // YYYY-MM-DD
+  dayNumber: number;
+  dayOfWeek: number; // 0 = Domingo, 6 = Sábado
+  dayNameShort: string; // Dom, Seg, Ter, Qua, Qui, Sex, Sáb
+  isWeekend: boolean;
+  isSaturday: boolean;
+  isSunday: boolean;
+  isToday: boolean;
+  holidayName?: string;
+}
+
+export interface QuinzenaInfo {
+  year: number;
+  month: number; // 0..11
+  quinzena: 1 | 2;
+  monthName: string;
+  label: string;
+  startDateStr: string;
+  endDateStr: string;
+  days: CalendarDay[];
+}
+
+export function formatDateKey(year: number, month: number, day: number): string {
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
+export function getCurrentQuinzena(): { year: number; month: number; quinzena: 1 | 2 } {
+  const now = new Date();
+  return {
+    year: now.getFullYear(),
+    month: now.getMonth(),
+    quinzena: now.getDate() <= 15 ? 1 : 2,
+  };
+}
+
+export function getQuinzenaInfo(year: number, month: number, quinzena: 1 | 2): QuinzenaInfo {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startDay = quinzena === 1 ? 1 : 16;
+  const endDay = quinzena === 1 ? 15 : daysInMonth;
+
+  const today = new Date();
+  const todayStr = formatDateKey(today.getFullYear(), today.getMonth(), today.getDate());
+
+  const days: CalendarDay[] = [];
+  const dayNames = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+
+  for (let d = startDay; d <= endDay; d++) {
+    const dateObj = new Date(year, month, d);
+    const dayOfWeek = dateObj.getDay();
+    const dateStr = formatDateKey(year, month, d);
+    const mmDd = `${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const holidayName = NATIONAL_HOLIDAYS[mmDd];
+
+    days.push({
+      dateStr,
+      dayNumber: d,
+      dayOfWeek,
+      dayNameShort: dayNames[dayOfWeek],
+      isWeekend: dayOfWeek === 0 || dayOfWeek === 6,
+      isSaturday: dayOfWeek === 6,
+      isSunday: dayOfWeek === 0,
+      isToday: dateStr === todayStr,
+      holidayName,
+    });
+  }
+
+  const monthName = MONTH_NAMES[month];
+  const label = quinzena === 1
+    ? `1ª Quinzena (01/${String(month + 1).padStart(2, '0')} a 15/${String(month + 1).padStart(2, '0')}/${year})`
+    : `2ª Quinzena (16/${String(month + 1).padStart(2, '0')} a ${endDay}/${String(month + 1).padStart(2, '0')}/${year})`;
+
+  return {
+    year,
+    month,
+    quinzena,
+    monthName,
+    label,
+    startDateStr: formatDateKey(year, month, startDay),
+    endDateStr: formatDateKey(year, month, endDay),
+    days,
+  };
+}
+
