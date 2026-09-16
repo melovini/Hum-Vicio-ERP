@@ -1,4 +1,4 @@
-﻿import test from 'node:test';
+import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createLoader } from './load-typescript.mjs';
 
@@ -131,3 +131,30 @@ test('Calculadora de Cédulas e Conferência Cega: calcula valores exatos e queb
   assert.equal(closing.varianceCredito, -10.00); // Falta de R$ 10 no cartão
   assert.equal(closing.varianceTotal, -6.00); // Diferença total líquida
 });
+
+test('Hydration do Caixa Ativo: inicialização instantânea (0ms) a partir do localStorage evita flash de tela de caixa fechado', () => {
+  localStorage.clear();
+
+  // 1. Simula sessão ativa persistida no navegador
+  const mockActiveSession = {
+    id: 'session-123',
+    openedAt: '2026-09-16T12:00:00.000Z',
+    openedBy: 'Operador Caixa',
+    initialAmount: 100.00,
+    status: 'open'
+  };
+  localStorage.setItem('hum_vicio_active_session', JSON.stringify(mockActiveSession));
+
+  // 2. Carrega store e verifica estado inicial síncrono (0ms)
+  const storeModule = load('src/lib/store.ts');
+  const initial = storeModule.getInitialGlobalState();
+  assert.equal(initial.isOpen, true);
+  assert.equal(initial.activeCashSession?.id, 'session-123');
+
+  // 3. Ao fechar caixa, chave é limpa e novo estado inicial reflete caixa fechado
+  localStorage.removeItem('hum_vicio_active_session');
+  const closedInitial = storeModule.getInitialGlobalState();
+  assert.equal(closedInitial.isOpen, false);
+  assert.equal(closedInitial.activeCashSession, null);
+});
+

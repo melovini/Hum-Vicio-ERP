@@ -297,11 +297,12 @@ const serverInitialState: GlobalStoreState = {
   lastFetchedAt: 0
 };
 
-function getInitialGlobalState(): GlobalStoreState {
+export function getInitialGlobalState(): GlobalStoreState {
   let cachedItems: InventoryItem[] = [];
   let cachedProducts: Product[] = [];
   let cachedSales: Sale[] = [];
   let cachedSessions: CashSession[] = [];
+  let activeSession: CashSession | null = null;
   let cachedLogs: AuditLog[] = [];
   let lastSync: string | null = null;
   let hasCache = false;
@@ -333,6 +334,16 @@ function getInitialGlobalState(): GlobalStoreState {
       if (sSess) cachedSessions = JSON.parse(sSess);
     } catch {}
     try {
+      const sActive = localStorage.getItem('hum_vicio_active_session');
+      if (sActive) {
+        const parsed = JSON.parse(sActive);
+        if (parsed && parsed.status === 'open') {
+          activeSession = parsed;
+          hasCache = true;
+        }
+      }
+    } catch {}
+    try {
       const sLogs = localStorage.getItem('hum_vicio_audit_logs');
       if (sLogs) cachedLogs = JSON.parse(sLogs);
     } catch {}
@@ -341,7 +352,9 @@ function getInitialGlobalState(): GlobalStoreState {
     } catch {}
   }
 
-  const activeSession = cachedSessions.find(s => s.status === 'open') || null;
+  if (!activeSession && cachedSessions.length > 0) {
+    activeSession = cachedSessions.find(s => s.status === 'open') || null;
+  }
 
   return {
     items: cachedItems,
@@ -400,45 +413,80 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
     try {
       const today = new Date().toLocaleDateString('en-CA');
 
-      // Executa todas as 14 consultas em paralelo eliminando o gargalo sequencial
-      const [
-        invRes,
-        prodRes,
-        recRes,
-        salesRes,
-        saleItemsRes,
-        allSessRes,
-        movRes,
-        wasteRes,
-        checksRes,
-        supRes,
-        purchRes,
-        auditRes,
-        subRes,
-        logsRes
-      ] = await Promise.all([
-        supabaseClient.from('inventory').select('*').catch(() => ({ data: null })),
-        supabaseClient.from('products').select('*').catch(() => ({ data: null })),
-        supabaseClient.from('recipes').select('*').catch(() => ({ data: null })),
-        supabaseClient.from('sales').select('*').is('deleted_at', null).order('created_at', { ascending: false }).limit(80).catch(() => ({ data: null })),
-        supabaseClient.from('sale_items').select('*').not('sale_id', 'is', null).catch(() => ({ data: null })),
-        supabaseClient.from('cash_sessions').select('*').is('deleted_at', null).order('opened_at', { ascending: false }).catch(() => ({ data: null })),
-        supabaseClient.from('cash_movements').select('*').order('created_at', { ascending: false }).catch(() => ({ data: null })),
-        supabaseClient.from('waste_records').select('*').order('created_at', { ascending: false }).catch(() => ({ data: null })),
-        supabaseClient.from('kitchen_checklists').select('*').order('date', { ascending: false }).catch(() => ({ data: null })),
-        supabaseClient.from('suppliers').select('*').order('name', { ascending: true }).catch(() => ({ data: null })),
-        supabaseClient.from('purchase_records').select('*').order('created_at', { ascending: false }).catch(() => ({ data: null })),
-        supabaseClient.from('stock_audits').select('*').order('created_at', { ascending: false }).catch(() => ({ data: null })),
-        supabaseClient.from('sub_recipes').select('*').catch(() => ({ data: null })),
-        supabaseClient.from('audit_logs').select('*').order('created_at', { ascending: false }).limit(200).catch(() => ({ data: null }))
-      ]);
+      let invData: any = null;
+      let prodData: any = null;
+      let recData: any = null;
+      let salesData: any = null;
+      let saleItemsData: any = null;
+      let allSessData: any = null;
+      let movData: any = null;
+      let wasteData: any = null;
+      let allChecks: any = null;
+      let supData: any = null;
+      let purchData: any = null;
+      let auditData: any = null;
+      let subData: any = null;
+      let logsData: any = null;
+
+      // 1. Tentar bootstrap unificado ultrarrápido (1 única requisição HTTP com dados já autorizados pelo perfil)
+      let bootstrapLoaded = false;
+      try {
+        const bRes = await fetch('/api/bootstrap', { cache: 'no-store' });
+        if (bRes.ok) {
+          const bData = await bRes.json();
+          invData = bData.inventory || [];
+          prodData = bData.products || [];
+          recData = bData.recipes || [];
+          salesData = bData.sales || [];
+          saleItemsData = bData.saleItems || [];
+          allSessData = bData.cashSessions || [];
+          movData = bData.cashMovements || [];
+          wasteData = bData.wasteRecords || [];
+          allChecks = bData.checklists || [];
+          supData = bData.suppliers || [];
+          purchData = bData.purchaseRecords || [];
+          auditData = bData.stockAudits || [];
+          subData = bData.subRecipes || [];
+          logsData = bData.auditLogs || [];
+          bootstrapLoaded = true;
+        }
+      } catch {}
+
+      // 2. Fallback resiliente caso o bootstrap falhe ou ambiente offline
+      if (!bootstrapLoaded) {
+        const [
+          allSessRes,
+          invRes,
+          prodRes,
+          recRes,
+          salesRes,
+          saleItemsRes,
+          checksRes
+        ] = await Promise.all([
+          supabaseClient.from('cash_sessions').select('*').is('deleted_at', null).order('opened_at', { ascending: false }).catch(() => ({ data: null })),
+          supabaseClient.from('inventory').select('*').catch(() => ({ data: null })),
+          supabaseClient.from('products').select('*').catch(() => ({ data: null })),
+          supabaseClient.from('recipes').select('*').catch(() => ({ data: null })),
+          supabaseClient.from('sales').select('*').is('deleted_at', null).order('created_at', { ascending: false }).limit(80).catch(() => ({ data: null })),
+          supabaseClient.from('sale_items').select('*').not('sale_id', 'is', null).catch(() => ({ data: null })),
+          supabaseClient.from('kitchen_checklists').select('*').order('date', { ascending: false }).catch(() => ({ data: null }))
+        ]);
+
+        allSessData = allSessRes?.data;
+        invData = invRes?.data;
+        prodData = prodRes?.data;
+        recData = recRes?.data;
+        salesData = salesRes?.data;
+        saleItemsData = saleItemsRes?.data;
+        allChecks = checksRes?.data;
+      }
 
       // 1. Processar Insumos
       let mappedItems = globalStore.items;
-      if (invRes?.data) {
+      if (invData) {
         const minStockMap = getSavedMinStockMap();
         const stationMap = getSavedStationMap();
-        mappedItems = (invRes.data as any[]).map(i => {
+        mappedItems = (invData as any[]).map(i => {
           const customStation = (i.station || stationMap[i.id] || getDefaultStationForIngredient(i.name)) as KitchenStation;
           return {
             id: i.id, name: i.name, category: i.category, unit: i.unit, 
@@ -457,13 +505,13 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
 
       // 2. Processar Produtos e Fichas Técnicas
       let mappedProducts = globalStore.products;
-      if (prodRes?.data) {
-        const recData = (recRes?.data as any[]) || [];
-        mappedProducts = (prodRes.data as any[]).map(p => ({
+      if (prodData) {
+        const recipesList = (recData as any[]) || [];
+        mappedProducts = (prodData as any[]).map(p => ({
           id: p.id, name: p.name, category: p.category, 
           priceBalcao: Number(p.price_balcao) || 0, 
           priceIfood: Number(p.price_ifood) || 0,
-          recipe: recData.filter(r => r.product_id === p.id).map(r => ({
+          recipe: recipesList.filter(r => r.product_id === p.id).map(r => ({
             ingredientId: r.ingredient_id,
             quantity: Number(r.quantity) || 0
           }))
@@ -475,14 +523,14 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
 
       // 3. Processar Vendas
       let mappedSales = globalStore.sales;
-      if (salesRes?.data && salesRes.data.length > 0) {
+      if (salesData && salesData.length > 0) {
         const overrides = getSavedProductionOverrides();
         const creditMap = getSavedCreditSalesMap();
         const pickupMap = getSavedPickupPendingSalesMap();
         let overridesCleaned = false;
-        const saleItemsData = (saleItemsRes?.data as any[]) || [];
+        const saleItemsList = (saleItemsData as any[]) || [];
 
-        const remoteSales: Sale[] = (salesRes.data as any[]).map(s => {
+        const remoteSales: Sale[] = (salesData as any[]).map(s => {
           const override = overrides[s.id];
           const creditInfo = creditMap[s.id] || {};
           const pickupInfo = pickupMap[s.id] || {};
@@ -538,7 +586,7 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
             creditStatus: creditInfo.creditStatus || s.credit_status || (s.payment_method === 'consumo_funcionario' || s.payment_method === 'fiado_vip' ? 'pendente' : undefined),
             creditPaidAt: creditInfo.creditPaidAt || s.credit_paid_at || undefined,
             creditPaidMethod: creditInfo.creditPaidMethod || s.credit_paid_method || undefined,
-            items: saleItemsData.filter(i => i.sale_id === s.id).map(i => ({
+            items: saleItemsList.filter(i => i.sale_id === s.id).map(i => ({
               id: i.id,
               productId: i.product_id, 
               productName: i.product_name, 
@@ -563,7 +611,7 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
             }
           } catch {}
         }
-      } else if (salesRes?.data && salesRes.data.length === 0) {
+      } else if (salesData && salesData.length === 0) {
         mappedSales = [];
         if (typeof window !== 'undefined') {
           try {
@@ -577,8 +625,8 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
       let mappedSessions: CashSession[] = globalStore.allCashSessions;
       let openSession: CashSession | null = globalStore.activeCashSession;
       let isOpenNow = globalStore.isOpen;
-      if (allSessRes?.data) {
-        mappedSessions = (allSessRes.data as any[]).map(s => ({
+      if (allSessData) {
+        mappedSessions = (allSessData as any[]).map(s => ({
           id: s.id,
           status: s.status,
           initialAmount: Number(s.initial_amount) || 0,
@@ -593,14 +641,21 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
         openSession = mappedSessions.find(s => s.status === 'open') || null;
         isOpenNow = !!openSession;
         if (typeof window !== 'undefined') {
-          try { localStorage.setItem('hum_vicio_cached_sessions', JSON.stringify(mappedSessions)); } catch {}
+          try {
+            localStorage.setItem('hum_vicio_cached_sessions', JSON.stringify(mappedSessions));
+            if (openSession) {
+              localStorage.setItem('hum_vicio_active_session', JSON.stringify(openSession));
+            } else {
+              localStorage.removeItem('hum_vicio_active_session');
+            }
+          } catch {}
         }
       }
 
       // 5. Processar Movimentações
       let mappedMovements = globalStore.movements;
-      if (movRes?.data) {
-        mappedMovements = (movRes.data as any[]).map(m => ({
+      if (movData) {
+        mappedMovements = (movData as any[]).map(m => ({
           id: m.id,
           type: m.type,
           amount: Number(m.amount) || 0,
@@ -611,8 +666,8 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
 
       // 6. Processar Perdas
       let mappedWaste = globalStore.wasteRecords;
-      if (wasteRes?.data) {
-        mappedWaste = (wasteRes.data as any[]).map(w => ({
+      if (wasteData) {
+        mappedWaste = (wasteData as any[]).map(w => ({
           id: w.id,
           ingredientId: w.ingredient_id,
           ingredientName: w.ingredient_name,
@@ -629,8 +684,8 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
       // 7. Processar Checklists
       let mappedChecklists = globalStore.allChecklists;
       let activeChecklist = globalStore.checklist;
-      if (checksRes?.data) {
-        mappedChecklists = (checksRes.data as any[]).map(c => ({
+      if (allChecks) {
+        mappedChecklists = (allChecks as any[]).map(c => ({
           id: c.id,
           date: c.date,
           tasks: c.tasks,
@@ -644,8 +699,8 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
 
       // 8. Processar Fornecedores
       let mappedSuppliers = globalStore.suppliers;
-      if (supRes?.data) {
-        mappedSuppliers = (supRes.data as any[]).map(s => ({
+      if (supData) {
+        mappedSuppliers = (supData as any[]).map(s => ({
           id: s.id,
           name: s.name,
           contactName: s.contact_name || '',
@@ -658,8 +713,8 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
 
       // 9. Processar Histórico de Compras
       let mappedPurchases = globalStore.purchaseRecords;
-      if (purchRes?.data) {
-        mappedPurchases = (purchRes.data as any[]).map(p => ({
+      if (purchData) {
+        mappedPurchases = (purchData as any[]).map(p => ({
           id: p.id,
           ingredientId: p.ingredient_id,
           ingredientName: p.ingredient_name,
@@ -675,8 +730,8 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
 
       // 10. Processar Auditorias de Estoque
       let mappedAudits = globalStore.stockAudits;
-      if (auditRes?.data) {
-        mappedAudits = (auditRes.data as any[]).map(a => ({
+      if (auditData) {
+        mappedAudits = (auditData as any[]).map(a => ({
           id: a.id,
           auditedBy: a.audited_by,
           items: a.items || [],
@@ -687,8 +742,8 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
 
       // 11. Processar Sub-Receitas
       let mappedSubRecipes = globalStore.subRecipes;
-      if (subRes?.data) {
-        mappedSubRecipes = (subRes.data as any[]).map(s => ({
+      if (subData) {
+        mappedSubRecipes = (subData as any[]).map(s => ({
           id: s.id,
           parentIngredientId: s.parent_ingredient_id,
           childIngredientId: s.child_ingredient_id,
@@ -698,8 +753,8 @@ export async function executeParallelLoadData(supabaseClient: any): Promise<void
 
       // 12. Processar Logs de Auditoria
       let mappedLogs = globalStore.auditLogs;
-      if (logsRes?.data && logsRes.data.length > 0) {
-        mappedLogs = (logsRes.data as any[]).map((l: any) => ({
+      if (logsData && logsData.length > 0) {
+        mappedLogs = (logsData as any[]).map((l: any) => ({
           id: l.id,
           timestamp: l.created_at || l.timestamp,
           action: l.action,
@@ -923,12 +978,25 @@ export function useInventory() {
 
   const setActiveCashSession = (value: CashSession | null | ((prev: CashSession | null) => CashSession | null)) => {
     const next = typeof value === 'function' ? value(globalStore.activeCashSession) : value;
-    updateGlobalStore({ activeCashSession: next });
+    const isNowOpen = !!next && next.status === 'open';
+    updateGlobalStore({ activeCashSession: next, isOpen: isNowOpen });
+    if (typeof window !== 'undefined') {
+      try {
+        if (isNowOpen && next) {
+          localStorage.setItem('hum_vicio_active_session', JSON.stringify(next));
+        } else {
+          localStorage.removeItem('hum_vicio_active_session');
+        }
+      } catch {}
+    }
   };
 
   const setIsOpen = (value: boolean | ((prev: boolean) => boolean)) => {
     const next = typeof value === 'function' ? value(globalStore.isOpen) : value;
     updateGlobalStore({ isOpen: next });
+    if (!next && typeof window !== 'undefined') {
+      try { localStorage.removeItem('hum_vicio_active_session'); } catch {}
+    }
   };
 
   const setMovements = (value: CashMovement[] | ((prev: CashMovement[]) => CashMovement[])) => {
@@ -1149,8 +1217,8 @@ export function useInventory() {
   };
 
   useEffect(() => {
-    // 1. Carga de dados rápida em paralelo: se não carregou ou dados com mais de 20s
-    if (!globalStore.isLoaded || Date.now() - globalStore.lastFetchedAt > 20000) {
+    // 1. Carga de dados rápida em paralelo: se não carregou ou dados com mais de 60s
+    if (!globalStore.isLoaded || Date.now() - globalStore.lastFetchedAt > 60000) {
       void executeParallelLoadData(supabase);
     }
 
