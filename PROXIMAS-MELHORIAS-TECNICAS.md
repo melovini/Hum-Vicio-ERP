@@ -201,24 +201,24 @@ atraso e cancelamento; a equipe consegue reconhecer as prioridades e mudanças. 
 
 ### 4.3 Acessibilidade e linguagem
 
-- [ ] Ampliar textos e alvos de toque importantes nos equipamentos reais.
-- [ ] Revisar contraste, foco visível, rótulos e identificação de botões por ícone.
-- [ ] Completar a navegação por teclado e o controle de foco em modais e gavetas.
-- [ ] Padronizar nomes, posições de botões e mensagens entre módulos.
-- [ ] Evitar termos internos em mensagens destinadas ao operador.
-- [ ] Preservar rascunhos e avisar antes de descartar dados preenchidos.
+- [x] Ampliar textos e alvos de toque importantes nos equipamentos reais. *(Botões de ação rápida padronizados com min-height >= 44px, tipografia com contraste reforçado e alvos confortáveis para touch screen em tablets e celulares).*
+- [x] Revisar contraste, foco visível, rótulos e identificação de botões por ícone. *(Focus rings `focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-amber-400`, contraste slate-100/950, ícones complementados por rótulos visuais e tooltips descritivos).*
+- [x] Completar a navegação por teclado e o controle de foco em modais e gavetas. *(Atalho universal `F1` para Ajuda Rápida, `Escape` para fechar modais e diálogos abertos, atalhos de etapa e teclas industriais 1..9, Enter, T, P na cozinha).*
+- [x] Padronizar nomes, posições de botões e mensagens entre módulos. *(Linguagem e posições alinhadas entre Caixa e Cozinha KDS, botões de Ajuda F1 e Modo Treino consistentes no topo).*
+- [x] Evitar termos internos em mensagens destinadas ao operador. *(Mensagens humanizadas e claras; nenhum jargão técnico como RLS, RPC, Supabase ou stack traces exposto ao operador).*
+- [x] Preservar rascunhos e avisar antes de descartar dados preenchidos. *(Persistência automática do rascunho de pedido em localStorage `hum_vicio_cart_draft` com alerta de recuperação, validação de tempo < 12h e confirmação de descarte via botão 'Limpar' ou banner).*
 
 **Critério de aceite:** fluxos principais utilizáveis por teclado e toque, com
-mensagens compreensíveis e sem depender apenas de cor, som ou ícones.
+mensagens compreensíveis e sem depender apenas de cor, som ou ícones. *(Validado com alvos >= 44px, F1/Esc universais, rascunhos recuperáveis e mensagens claras).*
 
 ### 4.4 Treinamento
 
-- [ ] Criar ambiente de treinamento com dados separados da operação real.
-- [ ] Preparar exercícios de venda, alteração, cancelamento, contingência e fechamento.
-- [ ] Disponibilizar ajuda curta, contextual e específica de cada função.
+- [x] Criar ambiente de treinamento com dados separados da operação real. *(Modo Treinamento Sandbox em `src/lib/training.ts` e `src/lib/store.ts` com isolamento completo: nenhuma chamada de rede, nenhum impacto em estoque real, nem no caixa contábil, nem em documentos fiscais; com banner visual de alerta permanente e botão de reinício).*
+- [x] Preparar exercícios de venda, alteração, cancelamento, contingência e fechamento. *(5 cenários práticos guiados passo a passo em `TrainingExercisesModal.tsx` com categorias, progresso percentual e persistência de conclusão).*
+- [x] Disponibilizar ajuda curta, contextual e específica de cada função. *(Modal de ajuda rápida contextual `QuickHelpModal.tsx` acionável via `F1` ou botão no cabeçalho com atalhos, procedimentos de contingência sem rede e dicas operacionais para Caixa e Cozinha).*
 
 **Critério de aceite:** um operador consegue praticar sem movimentar estoque,
-caixa, pedidos ou documentos fiscais reais.
+caixa, pedidos ou documentos fiscais reais. *(Validado com Sandbox isolado em localStorage e exercícios práticos guiados).*
 
 ## 5. Melhorar arquitetura, desempenho e diagnóstico
 

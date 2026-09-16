@@ -1,6 +1,12 @@
 'use client';
 import { useState, useEffect } from 'react';
 import { createClient } from '@/lib/supabase';
+import { 
+  isTrainingModeActive, setTrainingModeActive, resetTrainingSandbox,
+  getTrainingSales, saveTrainingSales, 
+  getTrainingCashSession, saveTrainingCashSession, 
+  getTrainingMovements, saveTrainingMovements 
+} from '@/lib/training';
 
 
 // === INSUMOS (Inventário) ===
@@ -652,6 +658,25 @@ export function useInventory() {
 
   const [sales, setSales] = useState<Sale[]>([]);
   const [movements, setMovements] = useState<CashMovement[]>([]);
+
+  // Modo Treinamento (Sandbox Isolado - Frente 4.4)
+  const [isTrainingMode, setIsTrainingMode] = useState<boolean>(false);
+
+  useEffect(() => {
+    setIsTrainingMode(isTrainingModeActive());
+    const handleMode = (e: any) => {
+      const active = Boolean(e.detail?.active);
+      setIsTrainingMode(active);
+      if (active) {
+        const tSales = getTrainingSales();
+        if (tSales.length > 0) {
+          setSales(prev => [...tSales, ...prev.filter(p => !tSales.some(t => t.id === p.id))]);
+        }
+      }
+    };
+    window.addEventListener('hum_vicio_training_mode_changed', handleMode);
+    return () => window.removeEventListener('hum_vicio_training_mode_changed', handleMode);
+  }, []);
 
   // Resiliência Offline & Fila de Sincronização (Quando o Banco de Dados Cai)
   const [offlineQueueCount, setOfflineQueueCount] = useState<number>(0);
@@ -1873,8 +1898,23 @@ export function useInventory() {
     return totalCmv;
   };
 
-  // --- CAIXA ACTIONS (EM NUVEM) ---
+  // --- CAIXA ACTIONS (EM NUVEM / TREINAMENTO) ---
   const openCaixa = async (initialAmount: number, operatorName: string) => {
+    // Se estiver em modo treinamento, opera estritamente no sandbox
+    if (isTrainingModeActive()) {
+      const trainingSession: CashSession = {
+        id: `training-session-${Date.now()}`,
+        status: 'open',
+        initialAmount,
+        openedBy: operatorName,
+        openedAt: new Date().toISOString()
+      };
+      saveTrainingCashSession(trainingSession);
+      setActiveCashSession(trainingSession);
+      setAllCashSessions(prev => [trainingSession, ...prev.filter(s => s.id !== trainingSession.id)]);
+      return;
+    }
+
     // 1. Ao iniciar um novo turno de caixa, limpamos as rotas e estados de entrega e salão de turnos anteriores
     if (typeof window !== 'undefined') {
       try {
@@ -1954,6 +1994,27 @@ export function useInventory() {
   ) => {
     const variance = finalAmount - (expectedAmount || 0);
     const now = new Date().toISOString();
+
+    // Se estiver em modo treinamento, encerra no sandbox sem chamar o servidor
+    if (isTrainingModeActive()) {
+      const trainingClosed: CashSession = {
+        id: activeCashSession?.id || `training-session-${Date.now()}`,
+        status: 'closed',
+        initialAmount: activeCashSession?.initialAmount || 100,
+        openedBy: activeCashSession?.openedBy || operatorName,
+        openedAt: activeCashSession?.openedAt || now,
+        finalAmount,
+        expectedAmount,
+        varianceAmount: variance,
+        closedBy: operatorName,
+        closedAt: now,
+        closingDetails
+      };
+      saveTrainingCashSession(null);
+      setActiveCashSession(null);
+      setAllCashSessions(prev => [trainingClosed, ...prev.filter(s => s.id !== trainingClosed.id)]);
+      return;
+    }
 
     // Limpar rotas, estados de entrega e salão locais ao encerrar o caixa
     if (typeof window !== 'undefined') {
@@ -2267,6 +2328,29 @@ export function useInventory() {
     const giftItems = (sale.items || []).filter(i => i.isGift);
     const hasGifts = giftItems.length > 0;
     const giftsTotalValue = giftItems.reduce((acc, i) => acc + ((i.originalPrice || 0) * i.quantity), 0);
+
+    // Se estiver em modo treinamento, não aciona o servidor de produção nem baixa estoque real
+    if (isTrainingModeActive()) {
+      const trainingSale: Sale = {
+        id: clientGeneratedId,
+        date: new Date().toISOString(),
+        status: 'completed',
+        ...sale,
+        productionStatus: initialProductionStatus,
+        productionStartedAt: initialProductionStarted,
+        targetPrepMinutes: initialTargetPrep,
+        paymentStatus,
+        creditStatus,
+        hasGifts,
+        giftsTotalValue: hasGifts ? giftsTotalValue : undefined,
+        isOfflineSynced: true,
+        syncStatus: 'synced'
+      };
+      const currentTrainingSales = getTrainingSales();
+      saveTrainingSales([trainingSale, ...currentTrainingSales]);
+      setSales(prev => [trainingSale, ...prev]);
+      return trainingSale;
+    }
 
     let sData: any = null;
     let isOffline = false;
@@ -2752,6 +2836,27 @@ export function useInventory() {
     const cancellationReason = reason || 'Desistência do cliente antes do preparo';
     const now = new Date().toISOString();
 
+    // Se estiver em modo treinamento, cancela localmente no sandbox sem chamar o servidor
+    if (isTrainingModeActive()) {
+      const currentTrainingSales = getTrainingSales();
+      const updated = currentTrainingSales.map(s => s.id === id ? { 
+        ...s, 
+        status: 'cancelled' as const, 
+        cancellationReason,
+        cancelledAt: now,
+        cancelledBy: authorizedBy || 'Supervisor (Treino)'
+      } : s);
+      saveTrainingSales(updated);
+      setSales(prev => prev.map(s => s.id === id ? { 
+        ...s, 
+        status: 'cancelled' as const,
+        cancellationReason,
+        cancelledAt: now,
+        cancelledBy: authorizedBy || 'Supervisor (Treino)'
+      } : s));
+      return { success: true };
+    }
+
     try {
       const res = await fetch('/api/sales/cancel', {
         method: 'POST',
@@ -3015,6 +3120,21 @@ export function useInventory() {
   };
 
   const addMovement = async (mov: Omit<CashMovement, 'id' | 'date'>) => {
+    // Se estiver em modo treinamento, registra localmente sem acionar o servidor
+    if (isTrainingModeActive()) {
+      const trainingMov: CashMovement = {
+        id: `training-mov-${Date.now()}`,
+        type: mov.type,
+        amount: mov.amount,
+        description: `[TREINAMENTO] ${mov.description}`,
+        date: new Date().toISOString()
+      };
+      const currentTrainingMovs = getTrainingMovements();
+      saveTrainingMovements([trainingMov, ...currentTrainingMovs]);
+      setMovements(prev => [trainingMov, ...prev]);
+      return trainingMov;
+    }
+
     let createdMov: CashMovement | null = null;
 
     try {
@@ -3160,6 +3280,7 @@ export function useInventory() {
     auditLogs, addAuditLog,
     fixedExpensesConfig, saveFixedExpensesConfig, settleCreditSale,
     settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow,
-    connectionStatus, lastServerSync, offlineSalesList, checkServerHealth
+    connectionStatus, lastServerSync, offlineSalesList, checkServerHealth,
+    isTrainingMode, setTrainingMode: setTrainingModeActive, resetTrainingSandbox
   };
 }

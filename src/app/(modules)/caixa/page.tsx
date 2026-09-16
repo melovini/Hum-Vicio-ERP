@@ -9,7 +9,8 @@ import {
   Clock, Play, Pause, AlertOctagon, Bell, ShieldAlert, Receipt, Gift, Tag, Percent, Truck, LayoutGrid,
   Edit3, GitCompare, Search, Calendar, Filter, CreditCard, Banknote, UserCheck, RotateCcw,
   Repeat, Star, ChevronDown, Globe, MapPin, Phone, Landmark,
-  Calculator, Zap, Coins, FileCheck2
+  Calculator, Zap, Coins, FileCheck2,
+  HelpCircle, GraduationCap, BookOpen
 } from 'lucide-react';
 import Link from 'next/link';
 import ReceiptModal from '@/components/ReceiptModal';
@@ -17,6 +18,10 @@ import SaleSuccessModal from '@/components/SaleSuccessModal';
 import RouteManifestModal from '@/components/RouteManifestModal';
 import SlidingSheet from '@/components/ui/SlidingSheet';
 import SyncStatusBar from '@/components/SyncStatusBar';
+import TrainingBanner from '@/components/TrainingBanner';
+import TrainingExercisesModal from '@/components/TrainingExercisesModal';
+import QuickHelpModal from '@/components/QuickHelpModal';
+import { isTrainingModeActive, setTrainingModeActive } from '@/lib/training';
 import { playOrderReadyChime } from '@/lib/audio';
 import MapaMesasCanvas from '@/components/MapaMesasCanvas';
 import { 
@@ -59,8 +64,14 @@ export default function CaixaPage() {
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus,
     settleCreditSale,
     settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow,
-    connectionStatus, lastServerSync, offlineSalesList
+    connectionStatus, lastServerSync, offlineSalesList,
+    isTrainingMode, setTrainingMode, resetTrainingSandbox
   } = useInventory();
+
+  // Modais de Ajuda e Treinamento (Frentes 4.3 e 4.4)
+  const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showExercisesModal, setShowExercisesModal] = useState(false);
+  const [draftRestoredToast, setDraftRestoredToast] = useState(false);
 
   const [activeTab, setActiveTab] = useState<'pdv' | 'mesas' | 'producao' | 'rotas' | 'historico' | 'sangria' | 'contas_receber'>('pdv');
   const [productionFilter, setProductionFilter] = useState<'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido'>('todos');
@@ -491,6 +502,69 @@ export default function CaixaPage() {
     }
   };
 
+  // 1. Preservação de Rascunho do Carrinho (Frente 4.3 - Acessibilidade e Salvamento)
+  useEffect(() => {
+    if (cart.length > 0 || customerName.trim().length > 0) {
+      try {
+        const draft = {
+          cart,
+          customerName,
+          orderType,
+          pickupPaymentTiming,
+          deliveryFeeInput,
+          discountInput,
+          saleChannel,
+          saleMethod,
+          timestamp: Date.now()
+        };
+        localStorage.setItem('hum_vicio_cart_draft', JSON.stringify(draft));
+      } catch {}
+    } else {
+      try {
+        localStorage.removeItem('hum_vicio_cart_draft');
+      } catch {}
+    }
+  }, [cart, customerName, orderType, pickupPaymentTiming, deliveryFeeInput, discountInput, saleChannel, saleMethod]);
+
+  // 2. Restauração Automática do Rascunho na Montagem
+  useEffect(() => {
+    try {
+      const rawDraft = localStorage.getItem('hum_vicio_cart_draft');
+      if (rawDraft) {
+        const parsed = JSON.parse(rawDraft);
+        const isRecent = parsed?.timestamp && (Date.now() - parsed.timestamp) < 12 * 3600 * 1000;
+        if (isRecent && parsed.cart && Array.isArray(parsed.cart) && parsed.cart.length > 0) {
+          setCart(parsed.cart);
+          if (parsed.customerName) setCustomerName(parsed.customerName);
+          if (parsed.orderType) setOrderType(parsed.orderType);
+          if (parsed.pickupPaymentTiming) setPickupPaymentTiming(parsed.pickupPaymentTiming);
+          if (parsed.deliveryFeeInput) setDeliveryFeeInput(parsed.deliveryFeeInput);
+          if (parsed.discountInput) setDiscountInput(parsed.discountInput);
+          if (parsed.saleChannel) setSaleChannel(parsed.saleChannel);
+          if (parsed.saleMethod) setSaleMethod(parsed.saleMethod);
+          setDraftRestoredToast(true);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // 3. Descarte Seguro de Rascunho com Confirmação Prévia
+  const handleDiscardDraft = () => {
+    if (cart.length > 0 || customerName.trim().length > 0) {
+      if (!window.confirm('Atenção: Deseja realmente descartar todos os dados preenchidos deste pedido?')) {
+        return;
+      }
+    }
+    setCart([]);
+    setCustomerName('');
+    setDeliveryFeeInput('');
+    setDiscountInput('');
+    setDraftRestoredToast(false);
+    try {
+      localStorage.removeItem('hum_vicio_cart_draft');
+    } catch {}
+  };
+
   // Cupom iFood Custeado pela Loja (Cupom Hits)
   const [hasStoreCoupon, setHasStoreCoupon] = useState(false);
   const [storeCouponInput, setStoreCouponInput] = useState('10.00');
@@ -500,6 +574,34 @@ export default function CaixaPage() {
   const [selectedCombo, setSelectedCombo] = useState<'none' | 'batata_bebida' | 'aneis_bebida'>('none');
   const [selectedAdditionals, setSelectedAdditionals] = useState<Record<string, number>>({});
   const [burgerNotes, setBurgerNotes] = useState('');
+
+  // 4. Teclas Globais de Acessibilidade (F1 para Ajuda e Escape para fechar modais)
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // F1: Ajuda Rápida Operacional
+      if (e.key === 'F1') {
+        e.preventDefault();
+        setShowHelpModal(prev => !prev);
+        return;
+      }
+
+      // Escape: fecha modais abertos
+      if (e.key === 'Escape') {
+        if (showHelpModal) { setShowHelpModal(false); return; }
+        if (showExercisesModal) { setShowExercisesModal(false); return; }
+        if (showSuccessModal) { setShowSuccessModal(false); return; }
+        if (showOpenModal) { setShowOpenModal(false); return; }
+        if (showCloseModal) { setShowCloseModal(false); return; }
+        if (selectedBurgerForConfig) { setSelectedBurgerForConfig(null); return; }
+        if (selectedSaleToPrint) { setSelectedSaleToPrint(null); return; }
+        if (saleToCancel) { setSaleToCancel(null); return; }
+        if (showCustomerSuggestions) { setShowCustomerSuggestions(false); return; }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [showHelpModal, showExercisesModal, showSuccessModal, showOpenModal, showCloseModal, selectedBurgerForConfig, selectedSaleToPrint, saleToCancel, showCustomerSuggestions]);
 
   // Movement State
   const [movAmount, setMovAmount] = useState('');
@@ -1553,120 +1655,191 @@ export default function CaixaPage() {
   }, [selectedBurgerForConfig, saleChannel, selectedCombo, selectedAdditionals, availableAdditionals]);
 
   return (
-    <div className="min-h-screen relative p-4 md:p-8 overflow-hidden">
-      <div className="absolute top-0 right-0 w-[50%] h-[50%] bg-emerald-500/10 blur-[150px] pointer-events-none" />
-      
-      <div className="max-w-7xl mx-auto relative z-10">
-        <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
-          <div className="flex items-center gap-4">
-            <Link href="/" className="p-3 glass-card rounded-2xl hover:bg-slate-800 transition-colors">
-              <ArrowLeft size={24} className="text-slate-300" />
-            </Link>
-            <div>
-              <div className="inline-flex items-center gap-2 text-emerald-400 font-bold mb-0.5 text-xs">
-                <MonitorDot size={16} /> Módulo Frente de Caixa & PDV
+    <div className="min-h-screen relative overflow-hidden">
+      {/* Banner Superior de Modo Treinamento (Frente 4.4) */}
+      <TrainingBanner onOpenExercises={() => setShowExercisesModal(true)} />
+
+      <div className="p-4 md:p-8">
+        <div className="absolute top-0 right-0 w-[50%] h-[50%] bg-emerald-500/10 blur-[150px] pointer-events-none" />
+        
+        <div className="max-w-7xl mx-auto relative z-10">
+          <header className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+            <div className="flex items-center gap-4">
+              <Link href="/" className="p-3 glass-card rounded-2xl hover:bg-slate-800 transition-colors">
+                <ArrowLeft size={24} className="text-slate-300" />
+              </Link>
+              <div>
+                <div className="inline-flex items-center gap-2 text-emerald-400 font-bold mb-0.5 text-xs">
+                  <MonitorDot size={16} /> Módulo Frente de Caixa & PDV
+                </div>
+                <h1 className="text-3xl font-extrabold text-white tracking-tight">Gestão de Pedidos</h1>
               </div>
-              <h1 className="text-3xl font-extrabold text-white tracking-tight">Gestão de Pedidos</h1>
             </div>
-          </div>
 
-          <div className="flex items-center gap-3">
-            {/* Indicador de Resiliência Offline & Contingência */}
-            <SyncStatusBar />
+            <div className="flex items-center gap-2.5 flex-wrap">
+              {/* Indicador de Resiliência Offline & Contingência */}
+              <SyncStatusBar />
 
-            {/* Seletor Rápido de Operador (Troca Rápida de Operador sem fechar caixa) */}
-            {isOpen && (
-              <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-700/80 rounded-2xl px-3 py-2 text-xs shadow-md">
-                <User size={15} className="text-emerald-400 shrink-0" />
-                <div className="flex flex-col text-left">
-                  <span className="text-[9px] text-slate-400 uppercase font-black tracking-wider leading-none">
-                    Operador Ativo
-                  </span>
-                  <select
-                    value={currentOperator}
-                    onChange={e => handleSwitchOperator(e.target.value)}
-                    className="bg-transparent text-white font-black text-xs outline-none cursor-pointer pr-1 hover:text-emerald-300 transition-colors"
-                    title="Alternar operador ativo para atribuição das vendas sem deslogar"
+              {/* Alternador de Modo Treinamento (Frente 4.4) */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (isTrainingMode) {
+                    if (window.confirm('Deseja sair do Modo Treinamento e retornar à Operação Real?')) {
+                      setTrainingMode(false);
+                    }
+                  } else {
+                    if (window.confirm('Deseja ativar o Modo Treinamento? As vendas e movimentos serão simulados sem afetar o caixa real ou estoque.')) {
+                      setTrainingMode(true);
+                    }
+                  }
+                }}
+                className={`px-3 py-2.5 min-h-[44px] rounded-2xl font-black text-xs uppercase tracking-wider flex items-center gap-2 cursor-pointer transition-all border shadow-md focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:outline-none ${
+                  isTrainingMode
+                    ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 border-amber-400 animate-pulse ring-2 ring-amber-400/50'
+                    : 'bg-slate-900/90 hover:bg-slate-800 text-amber-400 border-slate-700'
+                }`}
+                title={isTrainingMode ? 'Clique para sair do Modo Treinamento' : 'Ativar ambiente seguro de treinamento para praticar vendas'}
+              >
+                <GraduationCap size={18} />
+                <span className="hidden md:inline">{isTrainingMode ? 'Treino Ativo' : 'Modo Treino'}</span>
+              </button>
+
+              {/* Botão de Ajuda Rápida (F1) (Frente 4.3) */}
+              <button
+                type="button"
+                onClick={() => setShowHelpModal(true)}
+                className="px-3 py-2.5 min-h-[44px] bg-slate-900/90 hover:bg-slate-800 text-blue-400 border border-slate-700 rounded-2xl font-bold flex items-center gap-1.5 cursor-pointer text-xs transition-all shadow-md focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:outline-none"
+                title="Ajuda Rápida e Atalhos de Teclado (F1)"
+              >
+                <HelpCircle size={17} />
+                <span className="hidden sm:inline">Ajuda (F1)</span>
+              </button>
+
+              {/* Seletor Rápido de Operador (Troca Rápida de Operador sem fechar caixa) */}
+              {isOpen && (
+                <div className="flex items-center gap-2 bg-slate-900/90 border border-slate-700/80 rounded-2xl px-3 py-2 text-xs shadow-md min-h-[44px]">
+                  <User size={15} className="text-emerald-400 shrink-0" />
+                  <div className="flex flex-col text-left">
+                    <span className="text-[9px] text-slate-400 uppercase font-black tracking-wider leading-none">
+                      Operador Ativo
+                    </span>
+                    <select
+                      value={currentOperator}
+                      onChange={e => handleSwitchOperator(e.target.value)}
+                      className="bg-transparent text-white font-black text-xs outline-none cursor-pointer pr-1 hover:text-emerald-300 transition-colors"
+                      title="Alternar operador ativo para atribuição das vendas sem deslogar"
+                    >
+                      <option value={activeCashSession?.openedBy || 'Operador'} className="bg-slate-900 text-white">
+                        {activeCashSession?.openedBy || 'Operador'} (Abertura)
+                      </option>
+                      {collaboratorsList
+                        .filter(c => c.name !== (activeCashSession?.openedBy || 'Operador'))
+                        .map(c => (
+                          <option key={c.id} value={c.name} className="bg-slate-900 text-white">
+                            {c.name} ({c.role === 'caixa' ? 'Caixa' : c.role === 'gerente' ? 'Gerente' : c.role})
+                          </option>
+                        ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+              <button 
+                type="button"
+                onClick={() => {
+                  setSessionToDeleteId(activeCashSession?.id || (allCashSessions[0]?.id || ''));
+                  setDeleteSessionPassword('');
+                  setDeleteSessionError('');
+                  setShowDeleteTestModal(true);
+                }}
+                className="px-4 py-2.5 min-h-[44px] bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-500/40 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-xs uppercase tracking-wider shadow-lg"
+                title="Apagar caixa de teste e expurgar vendas da contabilidade"
+              >
+                <Trash2 size={16} /> Apagar Caixa Teste
+              </button>
+
+              {isOpen ? (
+                <div className="flex items-center gap-2">
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setCountedAmountInput('');
+                      setCountedDebitoInput('');
+                      setCountedCreditoInput('');
+                      setCountedPixInput('');
+                      setCloseNotesInput('');
+                      setOperatorCloseInput(activeCashSession?.openedBy || '');
+                      setShowQuickCheckModal(true);
+                    }}
+                    className="px-4 py-2.5 min-h-[44px] bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-xs sm:text-sm shadow-md"
+                    title="Conferir se os valores das maquininhas de cartão batem com o sistema sem encerrar o caixa"
                   >
-                    <option value={activeCashSession?.openedBy || 'Operador'} className="bg-slate-900 text-white">
-                      {activeCashSession?.openedBy || 'Operador'} (Abertura)
-                    </option>
-                    {collaboratorsList
-                      .filter(c => c.name !== (activeCashSession?.openedBy || 'Operador'))
-                      .map(c => (
-                        <option key={c.id} value={c.name} className="bg-slate-900 text-white">
-                          {c.name} ({c.role === 'caixa' ? 'Caixa' : c.role === 'gerente' ? 'Gerente' : c.role})
-                        </option>
-                      ))}
-                  </select>
+                    <Calculator size={16} className="text-blue-400" /> Conferir Maquininhas
+                  </button>
+
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setCountedAmountInput('');
+                      setCountedDebitoInput('');
+                      setCountedCreditoInput('');
+                      setCountedPixInput('');
+                      setCloseNotesInput('');
+                      setOperatorCloseInput(activeCashSession?.openedBy || '');
+                      setDenominations({
+                        bill100: 0, bill50: 0, bill20: 0, bill10: 0, bill5: 0, bill2: 0,
+                        coin1: 0, coin050: 0, coin025: 0, coin010: 0, coin005: 0
+                      });
+                      setUsePhysicalCalc(true);
+                      setShowCloseModal(true);
+                    }}
+                    className="px-4 sm:px-5 py-2.5 min-h-[44px] bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-xs sm:text-sm shadow-md"
+                    title="Iniciar fechamento do turno com conferência detalhada de cartões e gaveta"
+                  >
+                    <Lock size={16} /> Fechar Caixa & Conferência
+                  </button>
+                </div>
+              ) : (
+                <button 
+                  onClick={() => setShowOpenModal(true)}
+                  className="px-5 py-2.5 min-h-[44px] bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold flex items-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all cursor-pointer text-sm"
+                >
+                  <Unlock size={16} /> Abrir Caixa
+                </button>
+              )}
+            </div>
+          </header>
+
+          {/* Banner de Rascunho Recuperado (Frente 4.3) */}
+          {draftRestoredToast && cart.length > 0 && (
+            <div className="mb-6 p-3.5 px-4 bg-emerald-950/80 border-2 border-emerald-500 text-emerald-100 rounded-2xl shadow-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 animate-fade-in">
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">📝</span>
+                <div>
+                  <strong className="text-xs font-black uppercase text-emerald-300">Rascunho Anterior Recuperado:</strong>
+                  <p className="text-xs text-emerald-100">
+                    Os itens do pedido que estava sendo preenchido antes do fechamento foram restaurados com segurança.
+                  </p>
                 </div>
               </div>
-            )}
-            <button 
-              type="button"
-              onClick={() => {
-                setSessionToDeleteId(activeCashSession?.id || (allCashSessions[0]?.id || ''));
-                setDeleteSessionPassword('');
-                setDeleteSessionError('');
-                setShowDeleteTestModal(true);
-              }}
-              className="px-4 py-3 bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border border-rose-500/40 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-xs uppercase tracking-wider shadow-lg"
-              title="Apagar caixa de teste e expurgar vendas da contabilidade"
-            >
-              <Trash2 size={16} /> Apagar Caixa Teste
-            </button>
-
-            {isOpen ? (
-              <div className="flex items-center gap-2">
-                <button 
+              <div className="flex items-center gap-2 shrink-0">
+                <button
                   type="button"
-                  onClick={() => {
-                    setCountedAmountInput('');
-                    setCountedDebitoInput('');
-                    setCountedCreditoInput('');
-                    setCountedPixInput('');
-                    setCloseNotesInput('');
-                    setOperatorCloseInput(activeCashSession?.openedBy || '');
-                    setShowQuickCheckModal(true);
-                  }}
-                  className="px-4 py-3 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 border border-blue-500/30 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-xs sm:text-sm shadow-md"
-                  title="Conferir se os valores das maquininhas de cartão batem com o sistema sem encerrar o caixa"
+                  onClick={() => setDraftRestoredToast(false)}
+                  className="px-3 py-1.5 min-h-[38px] bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black cursor-pointer shadow transition-all active:scale-95"
                 >
-                  <Calculator size={16} className="text-blue-400" /> Conferir Maquininhas
+                  Continuar Pedido
                 </button>
-
-                <button 
+                <button
                   type="button"
-                  onClick={() => {
-                    setCountedAmountInput('');
-                    setCountedDebitoInput('');
-                    setCountedCreditoInput('');
-                    setCountedPixInput('');
-                    setCloseNotesInput('');
-                    setOperatorCloseInput(activeCashSession?.openedBy || '');
-                    setDenominations({
-                      bill100: 0, bill50: 0, bill20: 0, bill10: 0, bill5: 0, bill2: 0,
-                      coin1: 0, coin050: 0, coin025: 0, coin010: 0, coin005: 0
-                    });
-                    setUsePhysicalCalc(true);
-                    setShowCloseModal(true);
-                  }}
-                  className="px-4 sm:px-5 py-3 bg-red-500/15 hover:bg-red-500/25 text-red-400 border border-red-500/30 rounded-2xl font-bold flex items-center gap-2 transition-all cursor-pointer text-xs sm:text-sm shadow-md"
-                  title="Iniciar fechamento do turno com conferência detalhada de cartões e gaveta"
+                  onClick={handleDiscardDraft}
+                  className="px-3 py-1.5 min-h-[38px] bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 rounded-xl text-xs font-bold cursor-pointer transition-all active:scale-95"
                 >
-                  <Lock size={16} /> Fechar Caixa & Conferência
+                  Descartar Rascunho
                 </button>
               </div>
-            ) : (
-              <button 
-                onClick={() => setShowOpenModal(true)}
-                className="px-5 py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-bold flex items-center gap-2 shadow-[0_0_20px_rgba(16,185,129,0.3)] transition-all cursor-pointer text-sm"
-              >
-                <Unlock size={16} /> Abrir Caixa
-              </button>
-            )}
-          </div>
-        </header>
+            </div>
+          )}
 
         {/* Modal de Abertura */}
         {showOpenModal && (
@@ -2809,16 +2982,28 @@ export default function CaixaPage() {
                           <CartIcon size={20} className="text-emerald-400" /> Carrinho do Pedido
                         </h2>
                         
-                        <select 
-                          value={saleChannel} 
-                          onChange={e => {
-                            handleSwitchChannel(e.target.value as 'balcao' | 'ifood');
-                          }} 
-                          className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 font-bold outline-none cursor-pointer"
-                        >
-                          <option value="balcao">🏪 Balcão</option>
-                          <option value="ifood">🛵 iFood</option>
-                        </select>
+                        <div className="flex items-center gap-2">
+                          {cart.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleDiscardDraft}
+                              className="px-2.5 py-1.5 min-h-[36px] bg-slate-900/80 hover:bg-rose-950/50 text-slate-400 hover:text-rose-300 border border-slate-700 hover:border-rose-500/50 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
+                              title="Limpar todos os itens e recomeçar o pedido"
+                            >
+                              <Trash2 size={13} /> Limpar
+                            </button>
+                          )}
+                          <select 
+                            value={saleChannel} 
+                            onChange={e => {
+                              handleSwitchChannel(e.target.value as 'balcao' | 'ifood');
+                            }} 
+                            className="bg-slate-900 border border-slate-700 rounded-xl px-3 py-1.5 text-xs text-slate-200 font-bold outline-none cursor-pointer min-h-[36px]"
+                          >
+                            <option value="balcao">🏪 Balcão</option>
+                            <option value="ifood">🛵 iFood</option>
+                          </select>
+                        </div>
                       </div>
 
                       {/* 3 ETAPAS GUIADAS DA VENDA */}
@@ -6399,7 +6584,19 @@ export default function CaixaPage() {
             }}
           />
         )}
+
+        {/* Central de Treinamento e Ajuda Rápida (Frentes 4.3 e 4.4) */}
+        <TrainingExercisesModal 
+          isOpen={showExercisesModal} 
+          onClose={() => setShowExercisesModal(false)} 
+        />
+        <QuickHelpModal 
+          isOpen={showHelpModal} 
+          onClose={() => setShowHelpModal(false)} 
+          context="caixa" 
+        />
       </div>
     </div>
+  </div>
   );
 }

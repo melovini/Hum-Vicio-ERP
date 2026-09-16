@@ -5,13 +5,18 @@ import {
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
   Eye, Check, ListChecks, MessageSquare, Utensils,
-  Volume2, Volume1, VolumeX, BellRing, User, X, Play, ArrowLeft, FileText
+  Volume2, Volume1, VolumeX, BellRing, User, X, Play, ArrowLeft, FileText,
+  HelpCircle, GraduationCap
 } from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
 import SyncStatusBar from '@/components/SyncStatusBar';
 import { playKitchenChime, playCancellationWarning, getAudioSettings, setAudioVolume, setAudioMuted, testAudioAlert } from '@/lib/audio';
 import { getActiveCollaborators, Collaborator } from '@/lib/collaborators';
+import TrainingBanner from '@/components/TrainingBanner';
+import TrainingExercisesModal from '@/components/TrainingExercisesModal';
+import QuickHelpModal from '@/components/QuickHelpModal';
+import { isTrainingModeActive, setTrainingModeActive } from '@/lib/training';
 
 export default function CozinhaKDSPage() {
   const { 
@@ -89,6 +94,20 @@ export default function CozinhaKDSPage() {
   const [manualTicketCustomer, setManualTicketCustomer] = useState('');
   const [manualTicketBurger, setManualTicketBurger] = useState('');
   const [manualTicketNotes, setManualTicketNotes] = useState('');
+
+  // Modo Treinamento e Ajuda Rápida (Frentes 4.3 e 4.4)
+  const [showHelpModal, setShowHelpModal] = useState(false);
+  const [showExercisesModal, setShowExercisesModal] = useState(false);
+  const [isTraining, setIsTraining] = useState(false);
+
+  useEffect(() => {
+    setIsTraining(isTrainingModeActive());
+    const handleTrainingChange = (e: any) => {
+      setIsTraining(!!e.detail?.active);
+    };
+    window.addEventListener('hum_vicio_training_mode_changed', handleTrainingChange);
+    return () => window.removeEventListener('hum_vicio_training_mode_changed', handleTrainingChange);
+  }, []);
 
   const handleCreateManualContingencyOrder = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -628,14 +647,26 @@ export default function CozinhaKDSPage() {
         return;
       }
 
-      // [Escape]: Cancela a confirmação pendente
+      // [F1]: Ajuda Rápida Operacional (Frentes 4.3 e 4.4)
+      if (e.key === 'F1') {
+        e.preventDefault();
+        setShowHelpModal(prev => !prev);
+        return;
+      }
+
+      // [Escape]: Fecha modais ou cancela a confirmação pendente
       if (e.key === 'Escape') {
+        if (showHelpModal) { setShowHelpModal(false); return; }
+        if (showExercisesModal) { setShowExercisesModal(false); return; }
+        if (showManualTicketModal) { setShowManualTicketModal(false); return; }
+        if (selectedDelayedSale) { setSelectedDelayedSale(null); return; }
+        if (showVolumeMenu) { setShowVolumeMenu(false); return; }
         if (pendingConclude) {
           e.preventDefault();
           clearTimeout(pendingConclude.timerId);
           setPendingConclude(null);
+          return;
         }
-        return;
       }
 
       // [P] ou [p]: Atalho para Lançar Perda / Descarte
@@ -659,7 +690,7 @@ export default function CozinhaKDSPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [pullableQueueOrders, productionOrders, updateOrderProductionStatus, targetPrepMinutes, pendingConclude]);
+  }, [pullableQueueOrders, productionOrders, updateOrderProductionStatus, targetPrepMinutes, pendingConclude, showHelpModal, showExercisesModal, showManualTicketModal, selectedDelayedSale, showVolumeMenu]);
 
   // Agrupar itens do Painel de Faltas
   const groupedItems = useMemo(() => {
@@ -677,6 +708,9 @@ export default function CozinhaKDSPage() {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 p-3 md:p-6 select-none">
       
+      {/* Banner de Modo Treinamento (Sandbox) - Frente 4.4 */}
+      <TrainingBanner onOpenExercises={() => setShowExercisesModal(true)} />
+
       {/* HEADER KDS TABLET */}
       <header className="flex flex-wrap items-center justify-between gap-4 pb-4 mb-6 border-b border-slate-800">
         
@@ -862,10 +896,38 @@ export default function CozinhaKDSPage() {
           <button
             type="button"
             onClick={() => setShowManualTicketModal(true)}
-            className="px-3 py-2.5 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+            className="px-3 py-2.5 min-h-[44px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-amber-400"
             title="Lançar comanda física na chapa durante contingência operacional"
           >
             <FileText size={15} /> + Comanda Manual
+          </button>
+
+          {/* BOTÃO MODO TREINO / AJUDA F1 (Frentes 4.3 e 4.4) */}
+          <button
+            type="button"
+            onClick={() => {
+              const current = isTrainingModeActive();
+              setTrainingModeActive(!current);
+            }}
+            className={`px-3 py-2.5 min-h-[44px] rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all border focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-amber-400 ${
+              isTraining
+                ? 'bg-amber-500 text-slate-950 border-amber-400 font-black shadow-lg shadow-amber-500/20'
+                : 'bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border-slate-800'
+            }`}
+            title="Alternar Modo de Treinamento Isolado (Sandbox)"
+          >
+            <GraduationCap size={15} className={isTraining ? 'text-slate-950' : 'text-amber-400'} />
+            <span className="hidden md:inline">Treino</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowHelpModal(true)}
+            className="px-3 py-2.5 min-h-[44px] bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all shadow-sm focus-visible:ring-2 focus-visible:outline-none focus-visible:ring-amber-400"
+            title="Central de Ajuda Rápida e Atalhos da Cozinha (F1)"
+          >
+            <HelpCircle size={15} className="text-amber-400" />
+            <span className="hidden sm:inline">Ajuda</span> (F1)
           </button>
 
           <LogoutButton />
@@ -2062,6 +2124,17 @@ export default function CozinhaKDSPage() {
           </div>
         </div>
       )}
+
+      {/* Central de Treinamento e Ajuda Rápida (Frentes 4.3 e 4.4) */}
+      <TrainingExercisesModal 
+        isOpen={showExercisesModal} 
+        onClose={() => setShowExercisesModal(false)} 
+      />
+      <QuickHelpModal 
+        isOpen={showHelpModal} 
+        onClose={() => setShowHelpModal(false)} 
+        context="cozinha" 
+      />
 
     </div>
   );
