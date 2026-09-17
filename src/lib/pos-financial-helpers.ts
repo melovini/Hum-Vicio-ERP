@@ -137,25 +137,26 @@ export function recalculateCartPrices(
     if (!prod) return item;
 
     // 1. Preço base do produto no canal de destino
-    const basePrice = targetChannel === 'ifood' ? prod.priceIfood : prod.priceBalcao;
+    const basePrice = targetChannel === 'ifood' ? (prod.priceIfood ?? prod.priceBalcao) : prod.priceBalcao;
 
     // 2. Preço de combos no canal de destino
     let comboPrice = 0;
-    if (item.combo) {
-      const cleanCombo = item.combo.toLowerCase().replace(/^combo:\s*/i, '').trim();
+    if (item.comboId || item.combo) {
+      const cleanCombo = (item.combo || '').toLowerCase().replace(/^combo:\s*/i, '').trim();
       const matchCombo = productsList.find(p => 
-        p.category === 'combo' && (
-          p.name.toLowerCase().trim() === item.combo!.toLowerCase().trim() ||
-          p.name.toLowerCase().includes(cleanCombo) ||
-          cleanCombo.includes(p.name.toLowerCase().replace(/^combo:\s*/i, '').trim())
-        )
+        (item.comboId && p.id === item.comboId) ||
+        (p.category === 'combo' && (
+          (item.combo && p.name.toLowerCase().trim() === item.combo.toLowerCase().trim()) ||
+          (cleanCombo && p.name.toLowerCase().includes(cleanCombo)) ||
+          (cleanCombo && cleanCombo.includes(p.name.toLowerCase().replace(/^combo:\s*/i, '').trim()))
+        ))
       );
 
       if (matchCombo) {
         comboPrice = targetChannel === 'ifood' 
           ? (matchCombo.priceIfood ?? matchCombo.priceBalcao) 
           : matchCombo.priceBalcao;
-      } else {
+      } else if (cleanCombo) {
         if (cleanCombo.includes('anéis') || cleanCombo.includes('aneis')) {
           comboPrice = targetChannel === 'ifood' ? 18.00 : 16.00;
         } else if (cleanCombo.includes('batata')) {
@@ -168,21 +169,30 @@ export function recalculateCartPrices(
     let additionsTotal = 0;
     const updatedAdditionals = (item.additionals || []).map(add => {
       const cleanName = add.name.replace(/^\d+x\s*/, '').trim();
-      const matchProd = productsList.find(p => 
-        p.name === `Adicional: ${cleanName}` || 
-        p.name === `Pote Maionese ${cleanName}` || 
-        p.name.toLowerCase().includes(cleanName.toLowerCase())
-      );
-      const unitAddPrice = matchProd 
-        ? (targetChannel === 'ifood' ? matchProd.priceIfood : matchProd.priceBalcao) 
-        : (add.price || 5.00);
+      const matchProd = (add.id ? productsList.find(p => p.id === add.id) : undefined) ||
+        productsList.find(p => 
+          p.name === `Adicional: ${cleanName}` || 
+          p.name === `Pote Maionese ${cleanName}` || 
+          p.name.toLowerCase().includes(cleanName.toLowerCase())
+        );
 
-      const qtyMatch = add.name.match(/^(\d+)x/);
-      const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
-      additionsTotal += unitAddPrice * qty;
+      const unitAddPrice = matchProd 
+        ? (targetChannel === 'ifood' ? (matchProd.priceIfood ?? matchProd.priceBalcao) : matchProd.priceBalcao) 
+        : (add.unitPrice ?? add.price);
+
+      const qty = typeof add.quantity === 'number' && add.quantity > 0
+        ? add.quantity
+        : (add.name.match(/^(\d+)x/) ? parseInt(add.name.match(/^(\d+)x/)![1], 10) : 1);
+
+      const totalPrice = Number((unitAddPrice * qty).toFixed(2));
+      additionsTotal += totalPrice;
+
       return {
         ...add,
-        price: unitAddPrice * qty,
+        id: matchProd?.id || add.id,
+        quantity: qty,
+        unitPrice: unitAddPrice,
+        price: totalPrice,
       };
     });
 

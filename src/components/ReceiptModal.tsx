@@ -88,8 +88,12 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
       sale.items.forEach(item => {
         text += `[${item.quantity}x] ${item.productName}\n`;
         if (item.combo) text += `    + COMBO: ${item.combo}\n`;
+        if (item.meatPoint) text += `    * PONTO: ${item.meatPoint.toUpperCase()} *\n`;
         if (item.additionals && item.additionals.length > 0) {
           text += `    + ADICIONAIS: ${item.additionals.map(a => a.name).join(', ')}\n`;
+        }
+        if (item.removals && item.removals.length > 0) {
+          text += `    - RETIRAR: ${item.removals.join(', ').toUpperCase()}\n`;
         }
         if (item.notes) text += `    *** OBS: ${item.notes.toUpperCase()} ***\n`;
       });
@@ -107,6 +111,13 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
         const namePad = item.productName.slice(0, 26).padEnd(28, ' ');
         text += `${namePad} ${item.quantity}x ${itemTot}\n`;
         if (item.combo) text += `  + ${item.combo.toUpperCase()}\n`;
+        if (item.meatPoint) text += `  * PONTO: ${item.meatPoint.toUpperCase()} *\n`;
+        if (item.additionals && item.additionals.length > 0) {
+          text += `  + ADICIONAIS: ${item.additionals.map(a => a.name).join(', ')}\n`;
+        }
+        if (item.removals && item.removals.length > 0) {
+          text += `  - RETIRAR: ${item.removals.join(', ').toUpperCase()}\n`;
+        }
         if (item.notes) text += `  *** OBS: ${item.notes.toUpperCase()} ***\n`;
       });
       text += subDivider;
@@ -310,9 +321,19 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                             + {item.combo.toUpperCase()}
                           </p>
                         )}
+                        {item.meatPoint && (
+                          <p className="text-xs font-black pl-3 text-black">
+                            * PONTO: {item.meatPoint.toUpperCase()} *
+                          </p>
+                        )}
                         {item.additionals && item.additionals.length > 0 && (
                           <p className="text-xs font-bold pl-3">
                             + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
+                          </p>
+                        )}
+                        {item.removals && item.removals.length > 0 && (
+                          <p className="text-xs font-black pl-3 text-black underline">
+                            - RETIRAR: {item.removals.join(', ').toUpperCase()}
                           </p>
                         )}
                         {item.notes && (
@@ -352,7 +373,14 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                       <div key={idx} className="flex justify-between items-start text-xs">
                         <div className="pr-2">
                           <p className="font-bold">{item.productName}</p>
-                          {item.combo && <p className="text-[10px] font-bold text-black font-bold pl-2 uppercase">+ {item.combo.toUpperCase()}</p>}
+                          {item.combo && <p className="text-[10px] font-bold text-black pl-2 uppercase">+ {item.combo.toUpperCase()}</p>}
+                          {item.meatPoint && <p className="text-[10px] font-bold text-black pl-2 uppercase">* PONTO: {item.meatPoint.toUpperCase()}</p>}
+                          {item.additionals && item.additionals.length > 0 && (
+                            <p className="text-[10px] font-bold text-black pl-2 uppercase">+ {item.additionals.map(a => a.name.toUpperCase()).join(', ')}</p>
+                          )}
+                          {item.removals && item.removals.length > 0 && (
+                            <p className="text-[10px] font-bold text-black pl-2 uppercase">- RETIRAR: {item.removals.join(', ').toUpperCase()}</p>
+                          )}
                           {item.notes && <p className="text-[10px] font-black text-black pl-2 uppercase">*** OBS: {item.notes.toUpperCase()} ***</p>}
                         </div>
                         <span className="font-bold shrink-0">

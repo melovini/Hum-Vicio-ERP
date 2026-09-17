@@ -1,8 +1,8 @@
 'use client';
 import React, { useState, useMemo, useEffect } from 'react';
 import { Dialog } from '@/components/ui';
-import { Product, SaleItem, InventoryItem } from '@/lib/store';
-import { Plus, MessageSquare } from 'lucide-react';
+import { Product, SaleItem, SaleItemAdditional, InventoryItem } from '@/lib/store';
+import { Plus, Minus, MessageSquare, AlertCircle, Sparkles, Check, Info } from 'lucide-react';
 
 interface PosBurgerCustomizerModalProps {
   product: Product | null;
@@ -13,27 +13,15 @@ interface PosBurgerCustomizerModalProps {
   onConfirm: (item: SaleItem) => void;
 }
 
-const FALLBACK_ADDITIONALS = [
-  { id: 'fb_1', name: 'Bacon Fatiado Crocante', priceBalcao: 5.00, priceIfood: 6.00 },
-  { id: 'fb_2', name: 'Cheddar Cremoso Extra', priceBalcao: 5.00, priceIfood: 6.00 },
-  { id: 'fb_3', name: 'Queijo Prato Extra', priceBalcao: 5.00, priceIfood: 6.00 },
-  { id: 'fb_4', name: 'Queijo Mussarela Extra', priceBalcao: 5.00, priceIfood: 6.00 },
-  { id: 'fb_5', name: 'Cebola Caramelizada', priceBalcao: 4.00, priceIfood: 5.00 },
-  { id: 'fb_6', name: 'Cebola Crispy', priceBalcao: 4.00, priceIfood: 5.00 },
-  { id: 'fb_7', name: 'Picles Artesanal', priceBalcao: 4.00, priceIfood: 5.00 },
-  { id: 'fb_8', name: 'Maionese da Casa Extra', priceBalcao: 3.50, priceIfood: 4.50 },
-  { id: 'fb_9', name: 'Maionese de Alho Extra', priceBalcao: 3.50, priceIfood: 4.50 },
-  { id: 'fb_10', name: 'Geleia de Pimenta Defumada', priceBalcao: 4.00, priceIfood: 5.00 },
-  { id: 'fb_11', name: 'Barbecue Artesanal', priceBalcao: 3.50, priceIfood: 4.50 },
-  { id: 'fb_12', name: 'Ovo Frito na Manteiga', priceBalcao: 3.00, priceIfood: 4.00 },
-  { id: 'fb_13', name: 'Hambúrguer Smash 100g Extra', priceBalcao: 8.00, priceIfood: 10.00 },
-  { id: 'fb_14', name: 'Hambúrguer 160g Extra', priceBalcao: 10.00, priceIfood: 12.00 },
-  { id: 'fb_15', name: 'Catupiry Original Extra', priceBalcao: 6.00, priceIfood: 7.50 },
-  { id: 'fb_16', name: 'Alface Americana', priceBalcao: 2.00, priceIfood: 3.00 },
-  { id: 'fb_17', name: 'Tomate Fatiado', priceBalcao: 2.00, priceIfood: 3.00 },
-  { id: 'fb_18', name: 'Pimenta Jalapeño', priceBalcao: 4.00, priceIfood: 5.00 },
-  { id: 'fb_19', name: 'Pote Maionese da Casa 50g', priceBalcao: 4.00, priceIfood: 5.00 },
+const MEAT_POINTS = [
+  { id: 'MAL PASSADO', label: 'Mal Passado', badge: '🔴' },
+  { id: 'AO PONTO -', label: 'Ao Ponto -', badge: '🟠' },
+  { id: 'AO PONTO', label: 'Ao Ponto', badge: '🟢' },
+  { id: 'AO PONTO +', label: 'Ao Ponto +', badge: '🟤' },
+  { id: 'BEM PASSADO', label: 'Bem Passado', badge: '⚫' },
 ];
+
+const QUICK_OBS = ['MOLHO À PARTE', 'CORTAR AO MEIO', 'BEM TOSTADO', 'CAPRICHAR NO MOLHO'];
 
 export default function PosBurgerCustomizerModal({
   product,
@@ -45,42 +33,47 @@ export default function PosBurgerCustomizerModal({
 }: PosBurgerCustomizerModalProps) {
   const [selectedComboId, setSelectedComboId] = useState<string>('none');
   const [selectedAdditionals, setSelectedAdditionals] = useState<Record<string, number>>({});
-  const [notes, setNotes] = useState('');
+  const [selectedMeatPoint, setSelectedMeatPoint] = useState<string>('AO PONTO');
+  const [selectedRemovals, setSelectedRemovals] = useState<Set<string>>(new Set());
+  const [customNotes, setCustomNotes] = useState('');
 
-  // Combos promocionais dinâmicos a partir do catálogo e precificação
+  // Identifica se o produto é carne bovina ou se deve exibir ponto da carne
+  const isBeefBurger = useMemo(() => {
+    if (!product) return false;
+    const name = product.name.toLowerCase();
+    if (name.includes('frango') || name.includes('estados unidos') || name.includes('eua')) {
+      return false;
+    }
+    return true;
+  }, [product]);
+
+  // Resetar estado quando abrir novo produto
+  useEffect(() => {
+    if (product) {
+      setSelectedComboId('none');
+      setSelectedAdditionals({});
+      setSelectedMeatPoint(isBeefBurger ? 'AO PONTO' : '');
+      setSelectedRemovals(new Set());
+      setCustomNotes('');
+    }
+  }, [product, isBeefBurger]);
+
+  // Combos promocionais dinâmicos a partir do catálogo real (sem combos hardcoded)
   const availableCombos = useMemo(() => {
     const dbCombos = products.filter(p => p.isActive !== false && p.category === 'combo');
-    if (dbCombos.length > 0) {
-      return dbCombos.map(c => {
-        const price = saleChannel === 'ifood' ? (c.priceIfood ?? c.priceBalcao) : c.priceBalcao;
-        const isBatata = c.name.toLowerCase().includes('batata');
-        const isAneis = c.name.toLowerCase().includes('anéis') || c.name.toLowerCase().includes('aneis');
-        const icon = isBatata ? '🍟' : isAneis ? '🧅' : '🥤';
-        const cleanName = c.name.replace(/^Combo:\s*/i, '').trim();
-        return {
-          id: c.id,
-          rawName: c.name,
-          displayName: `${icon} ${cleanName}`,
-          price,
-        };
-      });
-    }
-
-    // Fallback com preços oficiais da precificação
-    return [
-      {
-        id: 'fb_combo_batata',
-        rawName: 'Combo: Batata + Bebida',
-        displayName: '🍟 Batata + Bebida',
-        price: saleChannel === 'ifood' ? 16.00 : 14.00,
-      },
-      {
-        id: 'fb_combo_aneis',
-        rawName: 'Combo: Anéis de Cebola + Bebida',
-        displayName: '🧅 Anéis de Cebola + Bebida',
-        price: saleChannel === 'ifood' ? 18.00 : 16.00,
-      },
-    ];
+    return dbCombos.map(c => {
+      const price = saleChannel === 'ifood' ? (c.priceIfood ?? c.priceBalcao) : c.priceBalcao;
+      const isBatata = c.name.toLowerCase().includes('batata');
+      const isAneis = c.name.toLowerCase().includes('anéis') || c.name.toLowerCase().includes('aneis');
+      const icon = isBatata ? '🍟' : isAneis ? '🧅' : '🥤';
+      const cleanName = c.name.replace(/^Combo:\s*/i, '').trim();
+      return {
+        id: c.id,
+        rawName: c.name,
+        displayName: `${icon} ${cleanName}`,
+        price,
+      };
+    });
   }, [products, saleChannel]);
 
   const selectedComboObj = useMemo(() => {
@@ -88,18 +81,8 @@ export default function PosBurgerCustomizerModal({
     return availableCombos.find(c => c.id === selectedComboId) || null;
   }, [selectedComboId, availableCombos]);
 
-  // Resetar estado quando abrir novo produto
-  useEffect(() => {
-    if (product) {
-      setSelectedComboId('none');
-      setSelectedAdditionals({});
-      setNotes('');
-    }
-  }, [product]);
-
-  // Lista dinâmica de adicionais vinculados à ficha técnica e ao catálogo
+  // Lista dinâmica de adicionais vinculados à ficha técnica e ao catálogo (sem FALLBACK_ADDITIONALS)
   const availableAdditionals = useMemo(() => {
-    // Se o produto foi configurado explicitamente para não aceitar adicionais, retorna lista vazia
     if (product?.acceptsAddons === false) {
       return [];
     }
@@ -110,21 +93,18 @@ export default function PosBurgerCustomizerModal({
       return ing?.name.toLowerCase().trim() || '';
     }).filter(Boolean);
 
-    // Conjunto de IDs permitidos caso o produto tenha seleção restrita de adicionais
     const allowedIdsSet = (product?.allowedAddonIds && product.allowedAddonIds.length > 0)
       ? new Set(product.allowedAddonIds)
       : null;
 
     const candidateProducts = products.filter(p => {
       if (p.isActive === false) return false;
-      if (p.id === product?.id) return false; // Não permitir adicionar o próprio produto a si mesmo
+      if (p.id === product?.id) return false;
 
-      // Se houver lista de adicionais permitidos, respeita estritamente
       if (allowedIdsSet) {
         return allowedIdsSet.has(p.id);
       }
 
-      // Caso contrário, inclui porções, adicionais marcados explicitamente ou por nome
       return (
         p.isAddon === true ||
         p.category === 'porcao' ||
@@ -135,58 +115,34 @@ export default function PosBurgerCustomizerModal({
       );
     });
 
-    if (candidateProducts.length > 0) {
-      const list = candidateProducts.map(p => {
-        const price = saleChannel === 'ifood' ? (p.priceIfood || p.priceBalcao) : p.priceBalcao;
-        const cleanName = p.name.replace(/^(Adicional|Porção|Extra):\s*/i, '').trim();
+    const list = candidateProducts.map(p => {
+      const price = saleChannel === 'ifood' ? (p.priceIfood ?? p.priceBalcao) : p.priceBalcao;
+      const cleanName = p.name.replace(/^(Adicional|Porção|Extra):\s*/i, '').trim();
 
-        const hasDirectIngredient = (p.recipe || []).some(r => burgerRecipeIngredientIds.has(r.ingredientId));
-        const hasMatchingName = burgerRecipeIngredientNames.some(ingName => 
-          cleanName.toLowerCase().includes(ingName) || ingName.includes(cleanName.toLowerCase())
-        );
-        const isFromRecipe = hasDirectIngredient || hasMatchingName;
-
-        return {
-          id: p.id,
-          name: cleanName,
-          price,
-          isFromRecipe,
-        };
-      });
-
-      return list.sort((a, b) => {
-        if (a.isFromRecipe && !b.isFromRecipe) return -1;
-        if (!a.isFromRecipe && b.isFromRecipe) return 1;
-        return a.name.localeCompare(b.name, 'pt-BR');
-      });
-    }
-
-    // Se houver restrição por allowedAddonIds e nenhum produto foi encontrado, não usa fallback
-    if (allowedIdsSet) {
-      return [];
-    }
-
-    return FALLBACK_ADDITIONALS.map(fb => {
-      const price = saleChannel === 'ifood' ? fb.priceIfood : fb.priceBalcao;
-      const isFromRecipe = burgerRecipeIngredientNames.some(ingName => 
-        fb.name.toLowerCase().includes(ingName) || ingName.includes(fb.name.toLowerCase())
+      const hasDirectIngredient = (p.recipe || []).some(r => burgerRecipeIngredientIds.has(r.ingredientId));
+      const hasMatchingName = burgerRecipeIngredientNames.some(ingName => 
+        cleanName.toLowerCase().includes(ingName) || ingName.includes(cleanName.toLowerCase())
       );
+      const isFromRecipe = hasDirectIngredient || hasMatchingName;
+
       return {
-        id: fb.id,
-        name: fb.name,
+        id: p.id,
+        name: cleanName,
+        fullName: p.name,
         price,
         isFromRecipe,
       };
-    }).sort((a, b) => {
+    });
+
+    return list.sort((a, b) => {
       if (a.isFromRecipe && !b.isFromRecipe) return -1;
       if (!a.isFromRecipe && b.isFromRecipe) return 1;
       return a.name.localeCompare(b.name, 'pt-BR');
     });
   }, [product, products, items, saleChannel]);
 
-  // Chips dinâmicos de observações gerados a partir da ficha técnica (SEM GÁS eliminado)
-  const quickNotes = useMemo(() => {
-    const meatPoints = ['AO PONTO', 'BEM PASSADO', 'AO PONTO P/ BEM'];
+  // Chips dinâmicos de retiradas gerados exclusivamente a partir dos insumos da receita
+  const availableRemovals = useMemo(() => {
     const removalChips: string[] = [];
     let hasSalad = false;
 
@@ -198,7 +154,7 @@ export default function PosBurgerCustomizerModal({
         const rawName = ing.name.toUpperCase().trim();
         const cat = (ing.category || '').toUpperCase().trim();
 
-        // 1. Filtrar utilidades, embalagens e operacionais não-alimentares (Elimina Gás, Energia, etc.)
+        // Filtrar embalagens e itens operacionais não-alimentares
         const isNonFood = 
           cat === 'EMBALAGENS' ||
           cat === 'DIVERSOS' ||
@@ -224,13 +180,13 @@ export default function PosBurgerCustomizerModal({
 
         if (isNonFood) return;
 
-        // 2. Filtrar base do lanche (pães e carnes base, cujo preparo já é coberto pelo ponto da carne)
+        // Filtrar base do lanche (pão e carnes base)
         if (rawName.includes('PÃO') || rawName.includes('PAO')) return;
         if (rawName.startsWith('HAMBÚRGUER') || rawName.startsWith('HAMBURGUER') || rawName.startsWith('HAMB.')) {
           if (!rawName.includes('QUEIJO')) return;
         }
 
-        // 3. Normalização limpa e padronizada para a cozinha
+        // Mapeamento padronizado de retiradas
         if (rawName.includes('CEBOLA')) {
           removalChips.push('SEM CEBOLA');
         } else if (rawName.includes('ALFACE')) {
@@ -290,13 +246,12 @@ export default function PosBurgerCustomizerModal({
       removalChips.push('SEM CEBOLA', 'SEM SALADA', 'SEM MOLHO');
     }
 
-    const uniqueRemovals = Array.from(new Set(removalChips));
-    return [...meatPoints, ...uniqueRemovals, 'MOLHO À PARTE', 'CORTAR AO MEIO'];
+    return Array.from(new Set(removalChips));
   }, [product, items]);
 
   const basePrice = useMemo(() => {
     if (!product) return 0;
-    return saleChannel === 'ifood' ? product.priceIfood : product.priceBalcao;
+    return saleChannel === 'ifood' ? (product.priceIfood ?? product.priceBalcao) : product.priceBalcao;
   }, [product, saleChannel]);
 
   const comboPrice = useMemo(() => {
@@ -304,9 +259,9 @@ export default function PosBurgerCustomizerModal({
   }, [selectedComboObj]);
 
   const additionalsPrice = useMemo(() => {
-    return Object.entries(selectedAdditionals).reduce((acc, [name, qty]) => {
+    return Object.entries(selectedAdditionals).reduce((acc, [id, qty]) => {
       if (qty <= 0) return acc;
-      const add = availableAdditionals.find(a => a.name === name);
+      const add = availableAdditionals.find(a => a.id === id);
       return acc + ((add?.price || 0) * qty);
     }, 0);
   }, [selectedAdditionals, availableAdditionals]);
@@ -317,43 +272,42 @@ export default function PosBurgerCustomizerModal({
 
   if (!product) return null;
 
-  const handleToggleNote = (chip: string) => {
-    const meatPoints = ['AO PONTO', 'BEM PASSADO', 'AO PONTO P/ BEM'];
-    let currentNotes = notes.toUpperCase();
+  const handleToggleRemoval = (removal: string) => {
+    setSelectedRemovals(prev => {
+      const next = new Set(prev);
+      if (next.has(removal)) {
+        next.delete(removal);
+      } else {
+        next.add(removal);
+      }
+      return next;
+    });
+  };
 
-    // Se for ponto da carne, substitui o ponto anterior
-    if (meatPoints.includes(chip)) {
-      meatPoints.forEach(mp => {
-        const reg = new RegExp(`(^|,\\s*)${mp}(,\\s*|$)`, 'i');
-        currentNotes = currentNotes.replace(reg, (_, p1, p2) => (p1 && p2 ? ', ' : '')).trim();
-      });
-      currentNotes = currentNotes.replace(/^,\s*|,\s*$/g, '');
-      setNotes(currentNotes ? `${currentNotes}, ${chip}` : chip);
-      return;
-    }
-
-    // Toggle para demais observações
-    if (currentNotes.includes(chip)) {
-      const reg = new RegExp(`(^|,\\s*)${chip}(,\\s*|$)`, 'i');
-      const updated = currentNotes.replace(reg, (_, p1, p2) => (p1 && p2 ? ', ' : '')).trim();
-      setNotes(updated.replace(/^,\s*|,\s*$/g, ''));
+  const handleToggleQuickNote = (noteText: string) => {
+    if (customNotes.toUpperCase().includes(noteText)) {
+      const reg = new RegExp(`(^|,\\s*)${noteText}(,\\s*|$)`, 'i');
+      const updated = customNotes.replace(reg, (_, p1, p2) => (p1 && p2 ? ', ' : '')).trim();
+      setCustomNotes(updated.replace(/^,\s*|,\s*$/g, ''));
     } else {
-      setNotes(currentNotes ? `${currentNotes}, ${chip}` : chip);
+      setCustomNotes(prev => (prev.trim() ? `${prev.trim()}, ${noteText}` : noteText));
     }
   };
 
   const handleSave = () => {
-    const additionalsList: { name: string; price: number }[] = [];
-    Object.entries(selectedAdditionals).forEach(([name, qty]) => {
+    const additionalsList: SaleItemAdditional[] = [];
+    for (const add of availableAdditionals) {
+      const qty = selectedAdditionals[add.id] || 0;
       if (qty > 0) {
-        const item = availableAdditionals.find(a => a.name === name);
-        const unitP = item ? item.price : 0;
         additionalsList.push({
-          name: `${qty > 1 ? `${qty}x ` : ''}${name}`,
-          price: unitP * qty,
+          id: add.id,
+          name: qty > 1 ? `${qty}x ${add.name}` : add.name,
+          quantity: qty,
+          unitPrice: add.price,
+          price: Number((add.price * qty).toFixed(2)),
         });
       }
-    });
+    }
 
     const comboName = selectedComboObj ? selectedComboObj.rawName : undefined;
 
@@ -363,14 +317,19 @@ export default function PosBurgerCustomizerModal({
       productName: product.name,
       quantity: 1,
       unitPrice: totalPrice,
+      comboId: selectedComboObj ? selectedComboObj.id : undefined,
       combo: comboName,
       comboPrice: comboPrice > 0 ? comboPrice : undefined,
-      additionals: additionalsList,
-      notes: notes.trim() ? notes.trim().toUpperCase() : undefined,
+      meatPoint: selectedMeatPoint.trim() ? selectedMeatPoint.trim() : undefined,
+      removals: selectedRemovals.size > 0 ? Array.from(selectedRemovals) : undefined,
+      additionals: additionalsList.length > 0 ? additionalsList : undefined,
+      notes: customNotes.trim() ? customNotes.trim().toUpperCase() : undefined,
     };
 
     onConfirm(newItem);
   };
+
+  const selectedAdditionalsCount = Object.values(selectedAdditionals).reduce((a, b) => a + b, 0);
 
   return (
     <Dialog
@@ -380,17 +339,22 @@ export default function PosBurgerCustomizerModal({
       description={`Personalização de Hambúrguer • Preço Base: R$ ${basePrice.toFixed(2)}`}
       size="lg"
     >
-      <div className="space-y-5 py-2">
+      <div className="space-y-4 py-1 text-slate-200">
         {/* Seção 1: Combos Promocionais */}
         <div>
-          <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">
-            🍟 Selecionar Combo Promocional:
-          </h3>
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              🍟 Combo Promocional:
+            </h3>
+            {availableCombos.length === 0 && (
+              <span className="text-[11px] text-slate-500 italic">Nenhum combo cadastrado</span>
+            )}
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <button
               type="button"
               onClick={() => setSelectedComboId('none')}
-              className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+              className={`p-2.5 rounded-2xl border text-left transition-all cursor-pointer ${
                 selectedComboId === 'none'
                   ? 'bg-amber-500/20 border-amber-500 text-white font-bold'
                   : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800'
@@ -405,9 +369,9 @@ export default function PosBurgerCustomizerModal({
                 key={c.id}
                 type="button"
                 onClick={() => setSelectedComboId(c.id)}
-                className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                className={`p-2.5 rounded-2xl border text-left transition-all cursor-pointer ${
                   selectedComboId === c.id
-                    ? 'bg-amber-500/20 border-amber-500 text-white font-bold'
+                    ? 'bg-amber-500/20 border-amber-500 text-white font-bold ring-1 ring-amber-500/50'
                     : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800'
                 }`}
               >
@@ -420,90 +384,167 @@ export default function PosBurgerCustomizerModal({
           </div>
         </div>
 
-        {/* Seção 2: Adicionais e Ficha Técnica */}
-        {product?.acceptsAddons !== false && availableAdditionals.length > 0 && (
+        {/* Seção 2: Ponto da Carne (Pills dedicadas) */}
+        {isBeefBurger && (
           <div>
+            <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              🥩 Ponto da Carne:
+            </h3>
+            <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5">
+              {MEAT_POINTS.map(mp => {
+                const isSelected = selectedMeatPoint === mp.id;
+                return (
+                  <button
+                    key={mp.id}
+                    type="button"
+                    onClick={() => setSelectedMeatPoint(isSelected ? '' : mp.id)}
+                    className={`py-2 px-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 border ${
+                      isSelected
+                        ? 'bg-orange-600/30 border-orange-500 text-white ring-1 ring-orange-500 font-black shadow-xs'
+                        : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:text-slate-200 hover:border-slate-700'
+                    }`}
+                  >
+                    <span className="text-sm">{mp.badge}</span>
+                    <span className="text-[11px] leading-tight text-center">{mp.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Seção 3: Retiradas de Ingredientes da Receita */}
+        <div>
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-              🧀 Adicionais & Ficha Técnica:
+              🚫 Retirar Ingredientes (Da Receita):
             </h3>
-            {availableAdditionals.some(a => a.isFromRecipe) && (
-              <span className="text-[11px] text-amber-400/90 font-medium">
-                ⭐ Insumos vinculados ao lanche
+            {selectedRemovals.size > 0 && (
+              <span className="text-[11px] text-red-400 font-bold">
+                {selectedRemovals.size} {selectedRemovals.size === 1 ? 'item retirado' : 'itens retirados'}
               </span>
             )}
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-h-56 overflow-y-auto pr-1">
-            {availableAdditionals.map(add => {
-              const currentQty = selectedAdditionals[add.name] || 0;
+          <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pr-1">
+            {availableRemovals.map(removal => {
+              const isRemoved = selectedRemovals.has(removal);
               return (
-                <div
-                  key={add.name}
-                  className={`p-2.5 rounded-xl border transition-all flex flex-col justify-between ${
-                    currentQty > 0
-                      ? 'bg-blue-600/20 border-blue-500 text-white shadow-xs'
-                      : add.isFromRecipe
-                        ? 'bg-amber-950/20 border-amber-500/40 text-slate-200 hover:border-amber-500'
-                        : 'bg-slate-950/50 border-slate-800 text-slate-300 hover:border-slate-700'
+                <button
+                  key={removal}
+                  type="button"
+                  onClick={() => handleToggleRemoval(removal)}
+                  className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer uppercase border ${
+                    isRemoved
+                      ? 'bg-rose-950/80 border-rose-500 text-rose-300 line-through ring-1 ring-rose-500/50 font-black'
+                      : 'bg-slate-950/70 border-slate-800 text-slate-400 hover:text-white hover:border-slate-700'
                   }`}
                 >
-                  <div className="mb-2">
-                    <div className="flex items-start justify-between gap-1 mb-1">
-                      <span className="text-xs font-semibold block leading-tight truncate" title={add.name}>
-                        {add.name}
-                      </span>
-                      {add.isFromRecipe && (
-                        <span className="text-[9px] font-extrabold px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">
-                          ⭐ Ficha
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-[10px] font-mono text-emerald-400 font-bold">
-                      + R$ {add.price.toFixed(2)}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-xs">
-                    <span className="text-[10px] text-slate-400 font-mono">Qtd: {currentQty}</span>
-                    <div className="flex items-center gap-1">
-                      {currentQty > 0 && (
-                        <button
-                          type="button"
-                          onClick={() => setSelectedAdditionals(prev => ({ ...prev, [add.name]: Math.max(0, currentQty - 1) }))}
-                          className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center justify-center cursor-pointer"
-                        >
-                          -
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() => setSelectedAdditionals(prev => ({ ...prev, [add.name]: currentQty + 1 }))}
-                        className="w-5 h-5 rounded bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center cursor-pointer font-bold"
-                      >
-                        +
-                      </button>
-                    </div>
-                  </div>
-                </div>
+                  {removal}
+                </button>
               );
             })}
           </div>
         </div>
+
+        {/* Seção 4: Adicionais & Ficha Técnica */}
+        {product?.acceptsAddons !== false && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                🧀 Adicionais & Extras:
+              </h3>
+              {availableAdditionals.some(a => a.isFromRecipe) && (
+                <span className="text-[11px] text-amber-400/90 font-medium">
+                  ⭐ Insumos vinculados ao lanche
+                </span>
+              )}
+            </div>
+
+            {availableAdditionals.length === 0 ? (
+              <p className="text-xs text-slate-500 italic py-2">Nenhum adicional disponível no catálogo.</p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 max-h-48 overflow-y-auto pr-1">
+                {availableAdditionals.map(add => {
+                  const currentQty = selectedAdditionals[add.id] || 0;
+                  return (
+                    <div
+                      key={add.id}
+                      className={`p-2 rounded-xl border transition-all flex flex-col justify-between ${
+                        currentQty > 0
+                          ? 'bg-blue-600/20 border-blue-500 text-white shadow-xs ring-1 ring-blue-500/40'
+                          : add.isFromRecipe
+                            ? 'bg-amber-950/20 border-amber-500/40 text-slate-200 hover:border-amber-500'
+                            : 'bg-slate-950/50 border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="mb-1.5">
+                        <div className="flex items-start justify-between gap-1 mb-0.5">
+                          <span className="text-xs font-semibold block leading-tight truncate" title={add.name}>
+                            {add.name}
+                          </span>
+                          {add.isFromRecipe && (
+                            <span className="text-[9px] font-extrabold px-1 py-0.2 rounded bg-amber-500/20 text-amber-300 border border-amber-500/40 shrink-0">
+                              ⭐ Ficha
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-[10px] font-mono text-emerald-400 font-bold">
+                          + R$ {add.price.toFixed(2)}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-xs">
+                        <span className="text-[10px] text-slate-400 font-mono">Qtd: {currentQty}</span>
+                        <div className="flex items-center gap-1">
+                          {currentQty > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedAdditionals(prev => {
+                                const next = { ...prev };
+                                if (currentQty <= 1) {
+                                  delete next[add.id];
+                                } else {
+                                  next[add.id] = currentQty - 1;
+                                }
+                                return next;
+                              })}
+                              className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 flex items-center justify-center cursor-pointer"
+                              title="Diminuir"
+                            >
+                              <Minus size={10} />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setSelectedAdditionals(prev => ({ ...prev, [add.id]: currentQty + 1 }))}
+                            className="w-5 h-5 rounded bg-blue-600 hover:bg-blue-500 text-white flex items-center justify-center cursor-pointer font-bold"
+                            title="Aumentar"
+                          >
+                            <Plus size={10} />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         )}
 
-        {/* Seção 3: Ponto da Carne e Observações */}
+        {/* Seção 5: Observações Livres do Cliente */}
         <div>
           <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-            <MessageSquare size={14} className="text-blue-400" /> Ponto da Carne & Observações de Cozinha:
+            <MessageSquare size={13} className="text-blue-400" /> Observações Especiais do Cliente:
           </h3>
-          <div className="flex flex-wrap gap-1.5 mb-2.5 max-h-32 overflow-y-auto pr-1">
-            {quickNotes.map(chip => (
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {QUICK_OBS.map(chip => (
               <button
                 key={chip}
                 type="button"
-                onClick={() => handleToggleNote(chip)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer uppercase ${
-                  notes.toUpperCase().includes(chip)
+                onClick={() => handleToggleQuickNote(chip)}
+                className={`px-2 py-0.5 rounded-lg text-[10px] font-bold transition-all cursor-pointer uppercase ${
+                  customNotes.toUpperCase().includes(chip)
                     ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
                     : 'bg-slate-950 border border-slate-800 text-slate-400 hover:text-white'
                 }`}
@@ -514,15 +555,64 @@ export default function PosBurgerCustomizerModal({
           </div>
           <input
             type="text"
-            value={notes}
-            onChange={e => setNotes(e.target.value.toUpperCase())}
-            placeholder="OUTRA OBSERVAÇÃO (EX: CARNE BEM TOSTADA...)"
+            value={customNotes}
+            onChange={e => setCustomNotes(e.target.value.toUpperCase())}
+            placeholder="OUTRA OBSERVAÇÃO (EX: CORTAR AO MEIO, MOLHO À PARTE...)"
             className="w-full bg-slate-950 border border-slate-700 rounded-xl p-2.5 text-white text-xs outline-none focus:border-amber-500 uppercase font-bold tracking-wide"
           />
         </div>
 
+        {/* Seção 6: Resumo Visual em Tempo Real Pré-Confirmação */}
+        <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-3 space-y-1.5 text-xs">
+          <div className="flex items-center justify-between border-b border-slate-800/80 pb-1.5">
+            <span className="font-bold text-slate-300 flex items-center gap-1.5">
+              <Sparkles size={13} className="text-amber-400" />
+              Resumo da Composição:
+            </span>
+            <span className="font-mono text-emerald-400 font-bold text-[11px]">
+              Base R$ {basePrice.toFixed(2)}
+              {comboPrice > 0 && ` + Combo R$ ${comboPrice.toFixed(2)}`}
+              {additionalsPrice > 0 && ` + Extras R$ ${additionalsPrice.toFixed(2)}`}
+            </span>
+          </div>
+
+          <div className="text-slate-300 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+            <span className="font-bold text-white">
+              1x {product.name}
+            </span>
+            {selectedMeatPoint && (
+              <span className="px-1.5 py-0.5 rounded bg-orange-950/60 border border-orange-500/40 text-orange-300 font-bold">
+                🥩 {selectedMeatPoint}
+              </span>
+            )}
+            {selectedComboObj && (
+              <span className="px-1.5 py-0.5 rounded bg-amber-950/60 border border-amber-500/40 text-amber-300 font-bold">
+                {selectedComboObj.displayName}
+              </span>
+            )}
+            {selectedAdditionalsCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-blue-950/60 border border-blue-500/40 text-blue-300 font-semibold">
+                + {availableAdditionals
+                  .filter(a => (selectedAdditionals[a.id] || 0) > 0)
+                  .map(a => `${selectedAdditionals[a.id] > 1 ? `${selectedAdditionals[a.id]}x ` : ''}${a.name}`)
+                  .join(', ')}
+              </span>
+            )}
+            {selectedRemovals.size > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-rose-950/60 border border-rose-500/40 text-rose-300 font-bold">
+                🚫 {Array.from(selectedRemovals).join(', ')}
+              </span>
+            )}
+            {customNotes.trim() && (
+              <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 italic">
+                💬 {customNotes.trim().toUpperCase()}
+              </span>
+            )}
+          </div>
+        </div>
+
         {/* Rodapé do Modal com Preço Calculado e Ação */}
-        <div className="pt-3 border-t border-slate-800 flex justify-between items-center gap-4">
+        <div className="pt-2 border-t border-slate-800 flex justify-between items-center gap-4">
           <div>
             <span className="text-[10px] text-slate-400 uppercase font-bold block">Total deste item:</span>
             <span className="text-2xl font-mono font-black text-emerald-400">

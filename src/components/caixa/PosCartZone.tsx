@@ -241,9 +241,19 @@ export default function PosCartZone({
                       + {item.combo}
                     </p>
                   )}
+                  {item.meatPoint && (
+                    <span className="text-[9px] font-bold text-orange-300 bg-orange-950/50 border border-orange-500/40 px-1.5 py-0.5 rounded inline-block mr-1">
+                      🥩 {item.meatPoint}
+                    </span>
+                  )}
                   {item.additionals && item.additionals.length > 0 && (
                     <p className="text-[10px] text-blue-400 font-medium">
                       + {item.additionals.map(a => a.name).join(', ')}
+                    </p>
+                  )}
+                  {item.removals && item.removals.length > 0 && (
+                    <p className="text-[10px] font-bold text-rose-400">
+                      🚫 {item.removals.join(', ')}
                     </p>
                   )}
                   {item.notes && (

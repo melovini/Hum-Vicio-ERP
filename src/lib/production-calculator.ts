@@ -315,9 +315,10 @@ export function calculateItemProduction(
   products: Product[] = [],
   inventoryItems: InventoryItem[] = []
 ): ItemProductionDetails {
-  const rawName = item.productName || '';
-  const notes = item.notes || '';
-  const combo = (item.combo || '').trim();
+  const rawName = (item.productName || '').trim();
+  const notes = (item.notes || '').trim();
+  const comboProduct = item.comboId ? products.find(p => p.id === item.comboId) : undefined;
+  const combo = (item.combo || comboProduct?.name || '').trim();
   const qty = Math.max(1, Number(item.quantity) || 1);
 
   // Mapa rápido de insumos por ID e por nome normalizado
@@ -429,11 +430,13 @@ export function calculateItemProduction(
   // 2.1 Adicionais estruturados (preferência primária)
   if (Array.isArray(item.additionals) && item.additionals.length > 0) {
     for (const add of item.additionals) {
-      const { count, cleanName } = parseAdditionalString(add.name);
+      const parsed = parseAdditionalString(add.name);
+      const count = typeof add.quantity === 'number' && add.quantity > 0 ? add.quantity : parsed.count;
+      const cleanName = parsed.cleanName;
       const normAdd = normalizeProductionString(cleanName);
       seenAdditionalsKey.add(normAdd);
 
-      const matchedInv = inventoryByNormName.get(normAdd);
+      const matchedInv = (add.id ? inventoryById.get(add.id) : undefined) || inventoryByNormName.get(normAdd);
       const type = inferComponentType(cleanName, matchedInv?.category);
       parsedAdditionals.push({ count, name: cleanName, type });
     }
@@ -497,7 +500,8 @@ export function calculateItemProduction(
   }
 
   // 4. Retiradas de Ingredientes (ex: "SEM CARNE", "SEM OVO")
-  const normNotes = normalizeProductionString(`${rawName} ${notes}`);
+  const removalsStr = Array.isArray(item.removals) ? item.removals.join(' ') : '';
+  const normNotes = normalizeProductionString(`${rawName} ${notes} ${removalsStr}`);
   let removedPattiesPerBurger = 0;
   let removedEggsPerBurger = 0;
 
@@ -563,7 +567,7 @@ export function calculateItemProduction(
   }
 
   // 8. Ponto da Carne
-  const meatPoint = extractMeatPoint(`${rawName} ${notes}`);
+  const meatPoint = (item.meatPoint && item.meatPoint.trim().toUpperCase()) || extractMeatPoint(`${rawName} ${notes}`);
 
   const breakdown: ProductionBreakdown = {
     basePattiesPerBurger,

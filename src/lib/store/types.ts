@@ -64,6 +64,14 @@ export type GiftReason =
   | 'cortesia_casa'
   | 'outro';
 
+export interface SaleItemAdditional {
+  id?: string;
+  name: string;
+  quantity?: number;
+  unitPrice?: number;
+  price: number;
+}
+
 export interface SaleItem {
   id?: string;
   productId: string;
@@ -74,9 +82,12 @@ export interface SaleItem {
   isGift?: boolean;
   giftReason?: GiftReason;
   giftNotes?: string;
+  comboId?: string;
   combo?: string;
   comboPrice?: number;
-  additionals?: { name: string; price: number }[];
+  meatPoint?: string;
+  removals?: string[];
+  additionals?: SaleItemAdditional[];
   notes?: string;
 }
 

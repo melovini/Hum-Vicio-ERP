@@ -284,10 +284,23 @@ function KitchenProductionOrderCard({
                   </p>
                 )}
 
+                {item.meatPoint && (
+                  <p className="text-xs font-black text-orange-400 pl-1 flex items-center gap-1">
+                    🥩 PONTO: {item.meatPoint.toUpperCase()}
+                  </p>
+                )}
+
                 {item.additionals && item.additionals.length > 0 && (
                   <p className="text-xs font-semibold text-emerald-300 pl-1">
                     + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
                   </p>
+                )}
+
+                {item.removals && item.removals.length > 0 && (
+                  <div className="mt-1 p-1.5 bg-rose-500/20 border border-rose-500/50 rounded-lg text-xs font-extrabold text-rose-300 flex items-center gap-1.5 uppercase">
+                    <span className="shrink-0">🚫</span>
+                    <span>RETIRAR: {item.removals.join(', ').toUpperCase()}</span>
+                  </div>
                 )}
 
                 {item.notes && (
@@ -1565,9 +1578,17 @@ export default function CozinhaKDSPage() {
                           {order.items?.map((item, idx) => (
                             <div key={idx} className="text-xs text-slate-300 bg-slate-950/60 p-2 rounded-xl">
                               <span className="font-bold text-white">[{item.quantity}x] {item.productName}</span>
-                              {item.combo && <p className="text-[10px] text-amber-400">+ Combo: {item.combo}</p>}
+                              {item.combo && <p className="text-[10px] text-amber-400 font-semibold">+ Combo: {item.combo}</p>}
+                              {item.meatPoint && (
+                                <p className="text-[10px] text-orange-400 font-bold flex items-center gap-1">
+                                  🥩 Ponto: {item.meatPoint.toUpperCase()}
+                                </p>
+                              )}
                               {item.additionals && item.additionals.length > 0 && (
-                                <p className="text-[10px] text-emerald-300">+ Adicionais: {item.additionals.map(a => a.name).join(', ')}</p>
+                                <p className="text-[10px] text-emerald-300 font-medium">+ Adicionais: {item.additionals.map(a => a.name).join(', ')}</p>
+                              )}
+                              {item.removals && item.removals.length > 0 && (
+                                <p className="text-[10px] text-rose-400 font-bold">🚫 Retirar: {item.removals.join(', ')}</p>
                               )}
                               {item.notes && (
                                 <div className="mt-1 p-1 bg-amber-500/25 border border-amber-500/50 rounded-lg text-[10px] font-black text-amber-200 flex items-center gap-1 uppercase tracking-wide">
