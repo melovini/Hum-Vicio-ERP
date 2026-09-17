@@ -44,6 +44,7 @@ export interface Product {
   priceIfood: number;
   recipe: RecipeIngredient[];
   isActive?: boolean;
+  status?: 'rascunho' | 'validado' | 'ativo' | 'inativo';
   ncm?: string;
   cest?: string;
   cfop?: string;

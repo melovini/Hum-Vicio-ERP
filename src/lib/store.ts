@@ -569,6 +569,8 @@ export async function executeParallelLoadData(
             subcategory: rawSub,
             priceBalcao: Number(p.price_balcao) || 0, 
             priceIfood: Number(p.price_ifood) || 0,
+            isActive: p.is_active !== undefined ? Boolean(p.is_active) : true,
+            status: p.status || (p.is_active === false ? 'inativo' : (recipesList.some(r => r.product_id === p.id) ? 'validado' : 'rascunho')),
             acceptsAddons: p.accepts_addons ?? addonConf.acceptsAddons ?? (p.category === 'lanche'),
             allowedAddonIds: p.allowed_addon_ids ?? addonConf.allowedAddonIds,
             isAddon: p.is_addon ?? addonConf.isAddon ?? false,
@@ -1731,6 +1733,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     let pData: any = null;
     let insertError: any = null;
     const subcategoryToSave = prod.subcategory?.trim() || inferDefaultSubcategory({ ...prod, id: '' } as Product);
+    const initialStatus = prod.status || (prod.recipe && prod.recipe.length > 0 ? 'validado' : 'rascunho');
 
     try {
       const res = await supabase.from('products').insert({
@@ -1738,20 +1741,34 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
         category: prod.category,
         subcategory: subcategoryToSave,
         price_balcao: prod.priceBalcao,
-        price_ifood: prod.priceIfood
+        price_ifood: prod.priceIfood,
+        status: initialStatus
       }).select().single();
 
       if (res.error) {
         insertError = res.error;
-        console.warn('Tentativa com subcategoria falhou, testando fallback:', res.error);
+        console.warn('Tentativa com status e subcategoria falhou, testando sem status:', res.error);
         const fallbackRes = await supabase.from('products').insert({
           name: prod.name.trim(),
           category: prod.category,
+          subcategory: subcategoryToSave,
           price_balcao: prod.priceBalcao,
           price_ifood: prod.priceIfood
         }).select().single();
+
         if (fallbackRes.error) {
-          insertError = fallbackRes.error;
+          const minimalRes = await supabase.from('products').insert({
+            name: prod.name.trim(),
+            category: prod.category,
+            price_balcao: prod.priceBalcao,
+            price_ifood: prod.priceIfood
+          }).select().single();
+          if (minimalRes.error) {
+            insertError = minimalRes.error;
+          } else {
+            pData = minimalRes.data;
+            insertError = null;
+          }
         } else {
           pData = fallbackRes.data;
           insertError = null;
@@ -1783,14 +1800,22 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
 
     const finalId = pData ? pData.id : `prod_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
+    // Gravação Atômica da Receita com Rollback se falhar
     if (prod.recipe && prod.recipe.length > 0) {
       try {
         const recipeInserts = prod.recipe.map(r => ({
           product_id: finalId, ingredient_id: r.ingredientId, quantity: r.quantity
         }));
-        await supabase.from('recipes').insert(recipeInserts);
-      } catch (rErr) {
-        console.warn('Aviso ao gravar receita do produto:', rErr);
+        const { error: rErr } = await supabase.from('recipes').insert(recipeInserts);
+        if (rErr) {
+          console.error('Falha ao gravar receita do novo produto:', rErr);
+          // Rollback: deleta o produto cadastrado para não deixar produto corrompido sem ficha técnica
+          try { await supabase.from('products').delete().eq('id', finalId); } catch {}
+          throw new Error(`Falha ao gravar ficha técnica: ${rErr.message || 'Erro no banco'}. O produto não foi salvo para evitar inconsistências.`);
+        }
+      } catch (rErr: any) {
+        try { await supabase.from('products').delete().eq('id', finalId); } catch {}
+        throw rErr;
       }
     }
 
@@ -1810,7 +1835,8 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       ...prod,
       id: finalId,
       subcategory: subcategoryToSave,
-      isActive: true,
+      status: initialStatus,
+      isActive: prod.isActive !== false,
     };
 
     setProducts(prev => [...prev, createdProduct]);
@@ -1834,20 +1860,22 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     if (updates.priceBalcao !== undefined) dbPayload.price_balcao = updates.priceBalcao;
     if (updates.priceIfood !== undefined) dbPayload.price_ifood = updates.priceIfood;
     if (updates.isActive !== undefined) dbPayload.is_active = updates.isActive;
+    if (updates.status !== undefined) dbPayload.status = updates.status;
 
     if (Object.keys(dbPayload).length > 0) {
       try {
         const res = await supabase.from('products').update(dbPayload).eq('id', id);
         if (res.error) {
-          console.warn('Erro ao atualizar produto no Supabase:', res.error);
-          if (dbPayload.subcategory !== undefined) {
+          console.warn('Erro ao atualizar produto com payload completo no Supabase:', res.error);
+          // Fallback progressivo removendo status e subcategory se as colunas não existirem
+          delete dbPayload.status;
+          const fallbackRes = await supabase.from('products').update(dbPayload).eq('id', id);
+          if (fallbackRes.error) {
             delete dbPayload.subcategory;
-            const fallbackRes = await supabase.from('products').update(dbPayload).eq('id', id);
-            if (fallbackRes.error) {
-              throw new Error(fallbackRes.error.message || 'Falha ao atualizar produto no banco.');
+            const minimalRes = await supabase.from('products').update(dbPayload).eq('id', id);
+            if (minimalRes.error) {
+              throw new Error(minimalRes.error.message || 'Falha ao atualizar produto no banco.');
             }
-          } else {
-            throw new Error(res.error.message || 'Falha ao atualizar produto no banco.');
           }
         }
       } catch (err: any) {
@@ -1868,17 +1896,35 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       });
     }
 
-    if (updates.recipe) {
+    // Gravação Atômica da Receita com Restauração (Rollback) em caso de erro
+    if (updates.recipe !== undefined) {
+      const previousRecipe = existing?.recipe || [];
       try {
-        await supabase.from('recipes').delete().eq('product_id', id);
+        const { error: delErr } = await supabase.from('recipes').delete().eq('product_id', id);
+        if (delErr) {
+          throw new Error(`Erro ao limpar receita anterior: ${delErr.message}`);
+        }
+
         if (updates.recipe.length > 0) {
           const recipeInserts = updates.recipe.map(r => ({
             product_id: id, ingredient_id: r.ingredientId, quantity: r.quantity
           }));
-          await supabase.from('recipes').insert(recipeInserts);
+          const { error: insErr } = await supabase.from('recipes').insert(recipeInserts);
+          if (insErr) {
+            console.error('Erro ao inserir nova receita. Restaurando receita anterior...', insErr);
+            // ROLLBACK: Restaura a receita anterior para que o produto não fique vazio
+            if (previousRecipe.length > 0) {
+              const restoreInserts = previousRecipe.map(r => ({
+                product_id: id, ingredient_id: r.ingredientId, quantity: r.quantity
+              }));
+              try { await supabase.from('recipes').insert(restoreInserts); } catch (resErr) { console.error(resErr); }
+            }
+            throw new Error(`Falha ao gravar a nova ficha técnica: ${insErr.message || 'Erro no banco'}. A receita anterior foi restaurada.`);
+          }
         }
-      } catch (e) {
-        console.error('Erro ao atualizar receitas no Supabase:', e);
+      } catch (e: any) {
+        console.error('Erro na transação de atualização de receita:', e);
+        throw e;
       }
     }
 

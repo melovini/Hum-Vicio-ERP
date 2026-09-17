@@ -20,6 +20,8 @@ import {
   DEFAULT_SUBCATEGORIES_BY_CATEGORY,
   type CardapioCategoryFilter 
 } from '@/lib/recipe-helpers';
+import { validateProductIntegrity, type ProductStatus } from '@/lib/product-validator';
+import { KitchenProductPreview } from '@/components/cardapio/KitchenProductPreview';
 import {
   getCustomSubcategories,
   saveCustomSubcategories,
@@ -67,6 +69,7 @@ export default function CardapioAdminPage() {
   const [subcategory, setSubcategory] = useState('');
   const [priceBalcao, setPriceBalcao] = useState('');
   const [priceIfood, setPriceIfood] = useState('');
+  const [productStatus, setProductStatus] = useState<ProductStatus>('validado');
   const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [isCreatingIngOnTheFly, setIsCreatingIngOnTheFly] = useState(false);
   const [inlineCostInputs, setInlineCostInputs] = useState<Record<string, string>>({});
@@ -120,6 +123,7 @@ export default function CardapioAdminPage() {
   // Modal Rápido de Vínculo para Produtos Existentes
   const [quickLinkProduct, setQuickLinkProduct] = useState<Product | null>(null);
   const [quickLinkIngredientId, setQuickLinkIngredientId] = useState<string>('');
+  const [quickLinkSuggestedItem, setQuickLinkSuggestedItem] = useState<InventoryItem | null>(null);
   const [quickLinkDefaultQty, setQuickLinkDefaultQty] = useState<string>('0.030');
   const [quickLinkSearch, setQuickLinkSearch] = useState<string>('');
   const [quickLinkTargetCategory, setQuickLinkTargetCategory] = useState<'lanche' | 'combo' | 'todos'>('lanche');
@@ -163,6 +167,26 @@ export default function CardapioAdminPage() {
       30,
     );
   }, [recipe, getIngredientTrueCost, priceBalcao, priceIfood]);
+
+  // Validação em Tempo Real de Integridade e Prévia do KDS (Etapa 2)
+  const validationResult = useMemo(() => {
+    const pBalcao = Number(priceBalcao.toString().replace(',', '.')) || 0;
+    const pIfood = Number(priceIfood.toString().replace(',', '.')) || pBalcao;
+    return validateProductIntegrity(
+      {
+        id: editingId || undefined,
+        name: name.trim(),
+        category,
+        subcategory: subcategory.trim() || undefined,
+        priceBalcao: pBalcao,
+        priceIfood: pIfood,
+        recipe,
+        status: productStatus,
+      },
+      items,
+      30
+    );
+  }, [editingId, name, category, subcategory, priceBalcao, priceIfood, recipe, productStatus, items]);
 
   // Sub-receitas (Insumos da categoria 'Pré-preparos' ou 'Molhos & Condimentos')
   const prepIngredients = useMemo(() => {
@@ -405,6 +429,7 @@ export default function CardapioAdminPage() {
     setName(''); 
     setCategory('lanche'); 
     setSubcategory('');
+    setProductStatus('validado');
     setPriceBalcao(''); 
     setPriceIfood('');
     setNcm(''); 
@@ -497,9 +522,21 @@ export default function CardapioAdminPage() {
       return;
     }
 
+    // Validador de Integridade Crítica (Etapa 2)
+    const dangerWarnings = validationResult.warnings.filter(w => w.severity === 'danger');
+    if (dangerWarnings.length > 0) {
+      notify({ 
+        title: 'Corrija os erros críticos antes de salvar:',
+        description: dangerWarnings.map(w => w.message).join(' | '),
+        tone: 'danger' 
+      });
+      return;
+    }
+
     setIsSavingProduct(true);
     try {
       const subcategoryFinal = subcategory.trim() || inferDefaultSubcategory({ name, category } as Product);
+      const isProductActive = productStatus !== 'inativo';
       const productData = {
         name: name.trim(), 
         category, 
@@ -507,6 +544,8 @@ export default function CardapioAdminPage() {
         priceBalcao: valBalcao, 
         priceIfood: valIfood,
         recipe,
+        status: productStatus,
+        isActive: isProductActive,
         ncm: ncm.trim() || undefined,
         cfop: cfop.trim() || undefined,
         csosn: csosn.trim() || undefined,
@@ -545,6 +584,7 @@ export default function CardapioAdminPage() {
     setName(p.name);
     setCategory(p.category);
     setSubcategory(p.subcategory || inferDefaultSubcategory(p));
+    setProductStatus((p.status as any) || (p.isActive === false ? 'inativo' : 'validado'));
     setPriceBalcao(p.priceBalcao.toString());
     setPriceIfood(p.priceIfood.toString());
     setNcm(p.ncm || '');
@@ -569,6 +609,7 @@ export default function CardapioAdminPage() {
     setName(`[Cópia] ${p.name}`);
     setCategory(p.category);
     setSubcategory(p.subcategory || inferDefaultSubcategory(p));
+    setProductStatus('rascunho');
     setPriceBalcao(p.priceBalcao.toString());
     setPriceIfood(p.priceIfood.toString());
     setNcm(p.ncm || '');
@@ -699,6 +740,7 @@ export default function CardapioAdminPage() {
   const openQuickLinkModal = (p: Product) => {
     setQuickLinkProduct(p);
     const matched = findMatchingInventoryItem(p.name, p.recipe, items);
+    setQuickLinkSuggestedItem(matched || null);
     const targetIngId = matched?.id || p.recipe[0]?.ingredientId || '';
     setQuickLinkIngredientId(targetIngId);
 
@@ -821,6 +863,11 @@ export default function CardapioAdminPage() {
               )}
               {p.isActive === false ? (
                 <Badge variant="danger" dot>Desativado</Badge>
+              ) : p.status === 'rascunho' || (p.recipe.length === 0 && (p.category === 'lanche' || p.category === 'combo')) ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 flex items-center gap-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse" />
+                  Rascunho
+                </span>
               ) : (
                 <Badge variant="success" dot>Ativo</Badge>
               )}
@@ -1540,7 +1587,7 @@ export default function CardapioAdminPage() {
           <div className="space-y-6">
             {/* Informações Básicas do Produto */}
             <div className="grid grid-cols-1 md:grid-cols-12 gap-4">
-              <div className="md:col-span-6 space-y-1.5">
+              <div className="md:col-span-5 space-y-1.5">
                 <label htmlFor="prod-name-input" className="block text-xs font-bold text-text-secondary">
                   Nome do Produto *
                 </label>
@@ -1554,7 +1601,7 @@ export default function CardapioAdminPage() {
                 />
               </div>
 
-              <div className="md:col-span-3 space-y-1.5">
+              <div className="md:col-span-2 space-y-1.5">
                 <label htmlFor="prod-cat-input" className="block text-xs font-bold text-text-secondary">
                   Categoria *
                 </label>
@@ -1614,6 +1661,21 @@ export default function CardapioAdminPage() {
                     />
                   )}
                 </div>
+              </div>
+
+              <div className="md:col-span-2 space-y-1.5">
+                <label htmlFor="prod-status-select" className="block text-xs font-bold text-text-secondary">
+                  Status
+                </label>
+                <Select
+                  id="prod-status-select"
+                  value={productStatus}
+                  onChange={e => setProductStatus(e.target.value as any)}
+                >
+                  <option value="validado">Disponível</option>
+                  <option value="rascunho">Rascunho</option>
+                  <option value="inativo">Inativo</option>
+                </Select>
               </div>
             </div>
 
@@ -2096,6 +2158,13 @@ export default function CardapioAdminPage() {
               )}
             </div>
 
+            {/* PRÉVIA DETERMINÍSTICA DA COZINHA (KDS) & VALIDADOR (Etapa 2) */}
+            <KitchenProductPreview
+              validationResult={validationResult}
+              productName={name}
+              category={category}
+            />
+
             {/* Seção: Observações Rápidas para a Cozinha / Chapa */}
             <div className="rounded-xl border border-border-default bg-surface-elevated/40 p-4 space-y-2.5">
               <div className="flex items-center justify-between">
@@ -2143,6 +2212,25 @@ export default function CardapioAdminPage() {
           }
         >
           <div className="space-y-4">
+            {quickLinkSuggestedItem && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-center justify-between gap-2 text-xs text-amber-200">
+                <span className="flex items-center gap-1.5">
+                  <Sparkles size={14} className="text-amber-400 shrink-0" />
+                  <span>Sugestão inteligente pelo nome: <strong>{quickLinkSuggestedItem.name}</strong></span>
+                </span>
+                {quickLinkIngredientId !== quickLinkSuggestedItem.id && (
+                  <Button 
+                    size="sm" 
+                    variant="secondary" 
+                    className="h-7 text-[11px] px-2.5 bg-amber-500/20 text-amber-300 border-amber-500/40 hover:bg-amber-500/30"
+                    onClick={() => setQuickLinkIngredientId(quickLinkSuggestedItem.id)}
+                  >
+                    Confirmar Vínculo Sugerido
+                  </Button>
+                )}
+              </div>
+            )}
+
             <div className="bg-surface-elevated/40 border border-border-default rounded-xl p-3 grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
               <div className="md:col-span-7">
                 <label htmlFor="quick-link-ing-select" className="block text-xs font-bold text-text-secondary mb-1">
