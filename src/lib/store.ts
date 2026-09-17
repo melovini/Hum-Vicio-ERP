@@ -493,11 +493,15 @@ export async function executeParallelLoadData(
           const customStation = (i.station || stationMap[i.id] || getDefaultStationForIngredient(i.name)) as KitchenStation;
           return {
             id: i.id, name: i.name, category: i.category, unit: i.unit, 
-            costPerUnit: Number(i.cost_per_unit) || 0, 
-            currentStock: Number(i.current_stock) || 0, 
-            minStock: i.min_stock !== undefined && i.min_stock !== null ? Number(i.min_stock) : minStockMap[i.id],
+            costPerUnit: Number(i.cost_per_unit ?? i.costPerUnit) || 0, 
+            currentStock: Number(i.current_stock ?? i.currentStock) || 0, 
+            minStock: i.min_stock !== undefined && i.min_stock !== null 
+              ? Number(i.min_stock) 
+              : i.minStock !== undefined && i.minStock !== null 
+                ? Number(i.minStock) 
+                : minStockMap[i.id],
             status: i.status,
-            isActive: i.is_active !== undefined ? i.is_active : true,
+            isActive: i.is_active !== undefined ? i.is_active : (i.isActive !== undefined ? i.isActive : true),
             station: customStation
           };
         });
@@ -1387,9 +1391,8 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       }
       
       if (error) {
-        console.error('Erro detalhado do Supabase:', error);
-        alert(`Erro ao salvar no banco: ${error.message}`);
-        return;
+        console.error('Erro ao salvar insumo no Supabase:', error);
+        throw new Error('Não foi possível salvar o insumo no banco de dados.');
       }
       
       const newId = data ? data.id : ('inv_' + Date.now().toString(36));
@@ -1401,8 +1404,8 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       setItems([...items, createdItem]);
       return createdItem;
     } catch (err: any) {
-      alert(`Erro inesperado: ${err.message}`);
-      return undefined;
+      console.error('Falha ao adicionar insumo:', err);
+      throw err;
     }
   };
   
