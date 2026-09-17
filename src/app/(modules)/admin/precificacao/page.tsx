@@ -1,32 +1,56 @@
 'use client';
+
 import { useState, useMemo } from 'react';
-import { useInventory, Product } from '@/lib/store';
-import { calculateNetProfit, calculateIfoodViability, TaxConfig } from '@/lib/pricing';
-import { 
-  Calculator, ArrowLeft, Store, Smartphone, Search, 
-  Check, Save, Sparkles, TrendingUp, AlertTriangle, 
-  Sliders, RefreshCw, DollarSign, Percent, Info, Flame
-} from 'lucide-react';
 import Link from 'next/link';
+import { 
+  Calculator, Store, Smartphone, 
+  Save, Sparkles, TrendingUp, AlertTriangle, 
+  Sliders, Check, Flame
+} from 'lucide-react';
+import { useInventory, type Product } from '@/lib/store';
+import { 
+  filterPricingProducts,
+  applyPercentMarkup,
+  calculateChannelComparison,
+  calculatePricingSummaryMetrics,
+  type PricingCategoryFilter 
+} from '@/lib/pricing-helpers';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Button } from '@/components/ui/Button';
+import { FilterBar } from '@/components/ui/FilterBar';
+import { Select } from '@/components/ui/Select';
+import { Dialog } from '@/components/ui/Dialog';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
+import { Badge } from '@/components/ui/Badge';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { useToast } from '@/components/ui/Toast';
+import { cn } from '@/lib/cn';
 
 export default function PrecificacaoPage() {
   const { products, getProductCmv, updateProduct, isLoaded } = useInventory();
+  const { notify } = useToast();
 
   // Estados de Filtro
   const [searchTerm, setSearchTerm] = useState('');
-  const [categoryFilter, setCategoryFilter] = useState<'todos' | 'lanche' | 'duplo' | 'combo' | 'porcao' | 'bebida'>('todos');
+  const [categoryFilter, setCategoryFilter] = useState<PricingCategoryFilter>('todos');
   
   // Taxas do iFood (configuráveis)
   const [ifoodCommissionPct, setIfoodCommissionPct] = useState<number>(23); // 23%
   const [paymentFeePct, setPaymentFeePct] = useState<number>(3.2); // 3.2%
   
-  // Estados de Edição Local (para permitir digitação fluida antes de salvar)
+  // Estados de Edição Local (para permitir digitação antes de salvar)
   const [editedPrices, setEditedPrices] = useState<Record<string, number>>({});
   const [savedSuccessIds, setSavedSuccessIds] = useState<Record<string, boolean>>({});
-  const [bulkPercentInput, setBulkPercentInput] = useState<string>('27');
-  const [showBulkModal, setShowBulkModal] = useState<boolean>(false);
+  const [isSavingAll, setIsSavingAll] = useState(false);
+  const [savingProductId, setSavingProductId] = useState<string | null>(null);
 
-  // Produto Selecionado para Raio-X / Simulador Detalhado
+  // Modais de Ajuste em Lote e Confirmação
+  const [showBulkModal, setShowBulkModal] = useState<boolean>(false);
+  const [bulkPercentInput, setBulkPercentInput] = useState<string>('27');
+  const [confirmSaveAllOpen, setConfirmSaveAllOpen] = useState(false);
+
+  // Produto Selecionado para Raio-X Detalhado
   const [selectedProductId, setSelectedProductId] = useState<string>('');
 
   // Produtos Ativos
@@ -36,22 +60,9 @@ export default function PrecificacaoPage() {
 
   // Produtos Filtrados
   const filteredProducts = useMemo(() => {
-    return activeProducts.filter(p => {
-      if (categoryFilter === 'duplo') {
-        if (!p.name.toLowerCase().includes('duplo')) return false;
-      } else if (categoryFilter === 'lanche') {
-        if (p.category !== 'lanche' || p.name.toLowerCase().includes('duplo')) return false;
-      } else if (categoryFilter === 'combo') {
-        if (p.category !== 'combo' && !p.name.toLowerCase().includes('combo')) return false;
-      } else if (categoryFilter !== 'todos' && p.category !== categoryFilter) {
-        return false;
-      }
-
-      if (searchTerm.trim()) {
-        return p.name.toLowerCase().includes(searchTerm.toLowerCase());
-      }
-
-      return true;
+    return filterPricingProducts(activeProducts, {
+      category: categoryFilter,
+      search: searchTerm,
     });
   }, [activeProducts, categoryFilter, searchTerm]);
 
@@ -71,12 +82,7 @@ export default function PrecificacaoPage() {
 
   // Alteração por porcentagem de acréscimo sobre o Balcão
   const handleApplyPercentToProduct = (p: Product, percent: number, round90: boolean = false) => {
-    let newPrice = p.priceBalcao * (1 + percent / 100);
-    if (round90) {
-      newPrice = Math.floor(newPrice) + 0.90;
-    } else {
-      newPrice = Math.round(newPrice * 10) / 10;
-    }
+    const newPrice = applyPercentMarkup(p.priceBalcao, percent, { round90 });
     setEditedPrices(prev => ({
       ...prev,
       [p.id]: newPrice
@@ -86,79 +92,92 @@ export default function PrecificacaoPage() {
   // Salvar Preço Individual
   const handleSaveProductPrice = async (p: Product) => {
     const newPrice = getProductIfoodPrice(p);
-    await updateProduct(p.id, { priceIfood: newPrice });
+    setSavingProductId(p.id);
+    try {
+      await updateProduct(p.id, { priceIfood: newPrice });
+      notify({ 
+        title: `Preço no iFood salvo!`, 
+        description: `"${p.name}" atualizado para R$ ${newPrice.toFixed(2)}.`,
+        tone: 'success' 
+      });
 
-    // Feedback visual
-    setSavedSuccessIds(prev => ({ ...prev, [p.id]: true }));
-    setTimeout(() => {
-      setSavedSuccessIds(prev => {
+      // Remove dos editados locais
+      setEditedPrices(prev => {
         const next = { ...prev };
         delete next[p.id];
         return next;
       });
-    }, 2500);
+
+      // Feedback visual momentâneo
+      setSavedSuccessIds(prev => ({ ...prev, [p.id]: true }));
+      setTimeout(() => {
+        setSavedSuccessIds(prev => {
+          const next = { ...prev };
+          delete next[p.id];
+          return next;
+        });
+      }, 2500);
+    } catch {
+      notify({ title: 'Erro ao atualizar preço.', tone: 'danger' });
+    } finally {
+      setSavingProductId(null);
+    }
   };
 
-  // Aplicar Acréscimo em Massa (Ex: +27% em todos os lanches)
+  // Aplicar Acréscimo em Massa
   const handleApplyBulkMarkup = () => {
     const pct = parseFloat(bulkPercentInput);
-    if (isNaN(pct)) return;
+    if (isNaN(pct) || pct <= 0) {
+      notify({ title: 'Informe uma porcentagem válida.', tone: 'warning' });
+      return;
+    }
 
     const updates: Record<string, number> = {};
     filteredProducts.forEach(p => {
-      const calculated = Math.floor(p.priceBalcao * (1 + pct / 100)) + 0.90;
-      updates[p.id] = calculated;
+      updates[p.id] = applyPercentMarkup(p.priceBalcao, pct, { round90: true });
     });
 
     setEditedPrices(prev => ({ ...prev, ...updates }));
     setShowBulkModal(false);
+    notify({ 
+      title: `Markup de +${pct}% aplicado na tabela!`, 
+      description: `${filteredProducts.length} produto(s) atualizados com final .90. Clique em Salvar para efetivar.`,
+      tone: 'info' 
+    });
   };
 
   // Salvar Todos os Modificados
-  const handleSaveAllModified = async () => {
-    for (const [id, newPrice] of Object.entries(editedPrices)) {
-      await updateProduct(id, { priceIfood: newPrice });
+  const handleConfirmSaveAll = async () => {
+    const count = Object.keys(editedPrices).length;
+    if (count === 0) return;
+
+    setIsSavingAll(true);
+    try {
+      for (const [id, newPrice] of Object.entries(editedPrices)) {
+        await updateProduct(id, { priceIfood: newPrice });
+      }
+      setEditedPrices({});
+      setConfirmSaveAllOpen(false);
+      notify({ 
+        title: `Preços atualizados com sucesso!`, 
+        description: `${count} produto(s) atualizados no cardápio do iFood.`,
+        tone: 'success' 
+      });
+    } catch {
+      notify({ title: 'Erro ao salvar alterações de preço.', tone: 'danger' });
+    } finally {
+      setIsSavingAll(false);
     }
-    setEditedPrices({});
-    alert('Todos os novos preços do iFood foram salvos e auditados!');
   };
 
   // Métricas do Topo
   const metrics = useMemo(() => {
-    let totalBalcao = 0;
-    let totalIfood = 0;
-    let count = 0;
-    let totalMarginPct = 0;
-    let criticalItemsCount = 0;
-
-    activeProducts.forEach(p => {
-      const ifoodP = getProductIfoodPrice(p);
-      const cmv = getProductCmv(p.recipe || []);
-      const totalFee = (ifoodCommissionPct + paymentFeePct) / 100;
-      const netProfit = (ifoodP * (1 - totalFee)) - cmv;
-      const margin = ifoodP > 0 ? (netProfit / ifoodP) * 100 : 0;
-
-      totalBalcao += p.priceBalcao;
-      totalIfood += ifoodP;
-      totalMarginPct += margin;
-      count++;
-
-      if (margin < 18) {
-        criticalItemsCount++;
-      }
-    });
-
-    const avgBalcao = count > 0 ? totalBalcao / count : 0;
-    const avgIfood = count > 0 ? totalIfood / count : 0;
-    const avgMargin = count > 0 ? totalMarginPct / count : 0;
-
-    return {
-      avgBalcao,
-      avgIfood,
-      avgMargin,
-      criticalItemsCount,
-      totalCount: count
-    };
+    return calculatePricingSummaryMetrics(
+      activeProducts,
+      p => getProductCmv(p.recipe || []),
+      p => getProductIfoodPrice(p),
+      { ifoodCommissionPct, paymentFeePct },
+    );
   }, [activeProducts, editedPrices, ifoodCommissionPct, paymentFeePct, getProductCmv]);
 
   // Produto ativo no simulador de raio-X
@@ -175,328 +194,247 @@ export default function PrecificacaoPage() {
   // Raio-X do produto selecionado
   const selectedProductSim = useMemo(() => {
     if (!selectedProduct) return null;
-    const totalFeePct = (ifoodCommissionPct + paymentFeePct) / 100;
-
-    // Balcão
-    const balcaoFee = selectedProduct.priceBalcao * 0.03; // Cartão médio 3%
-    const balcaoNetRev = selectedProduct.priceBalcao - balcaoFee;
-    const balcaoProfit = balcaoNetRev - selectedProductCmv;
-    const balcaoMargin = selectedProduct.priceBalcao > 0 ? (balcaoProfit / selectedProduct.priceBalcao) * 100 : 0;
-
-    // iFood
-    const ifoodFee = selectedProductIfoodPrice * totalFeePct;
-    const ifoodNetRev = selectedProductIfoodPrice - ifoodFee;
-    const ifoodProfit = ifoodNetRev - selectedProductCmv;
-    const ifoodMargin = selectedProductIfoodPrice > 0 ? (ifoodProfit / selectedProductIfoodPrice) * 100 : 0;
-
-    return {
-      balcao: {
-        gross: selectedProduct.priceBalcao,
-        fees: balcaoFee,
-        netRev: balcaoNetRev,
-        profit: balcaoProfit,
-        margin: balcaoMargin
-      },
-      ifood: {
-        gross: selectedProductIfoodPrice,
-        fees: ifoodFee,
-        netRev: ifoodNetRev,
-        profit: ifoodProfit,
-        margin: ifoodMargin
-      }
-    };
+    return calculateChannelComparison(
+      selectedProduct.priceBalcao,
+      selectedProductIfoodPrice,
+      selectedProductCmv,
+      { ifoodCommissionPct, paymentFeePct, balcaoFeePct: 3.0 },
+    );
   }, [selectedProduct, selectedProductCmv, selectedProductIfoodPrice, ifoodCommissionPct, paymentFeePct]);
 
   if (!isLoaded) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-500 border-t-transparent"></div>
+      <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6" data-testid="precificacao-skeleton">
+        <Skeleton className="h-14 w-1/3" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <Skeleton className="h-28 rounded-dialog" />
+          <Skeleton className="h-28 rounded-dialog" />
+          <Skeleton className="h-28 rounded-dialog" />
+          <Skeleton className="h-28 rounded-dialog" />
+        </div>
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-64 w-full rounded-dialog" />
       </div>
     );
   }
+
+  const modifiedCount = Object.keys(editedPrices).length;
 
   return (
     <div className="min-h-screen relative p-4 md:p-8 overflow-hidden pb-20">
       <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[150px] pointer-events-none" />
       
-      <div className="max-w-7xl mx-auto relative z-10 space-y-8">
-        
-        {/* Topo / Header */}
-        <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-800">
-          <div className="flex items-center gap-4">
-            <Link href="/" className="p-3.5 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-2xl transition-all shadow-sm">
-              <ArrowLeft size={22} />
-            </Link>
-            <div>
-              <div className="inline-flex items-center gap-2 text-emerald-400 font-extrabold text-xs uppercase tracking-wider mb-1">
-                <Calculator size={15} /> Gestão Estratégica de Preços
-              </div>
-              <h1 className="text-3xl font-black text-white tracking-tight">Precificação Inteligente do iFood</h1>
-              <p className="text-xs text-slate-400 mt-1">
-                Ajuste os preços por porcentagem ou valor direto em R$ de forma individualizada (ex: EUA vs. México).
-              </p>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-3">
-            <Link
-              href="/admin/engenharia"
-              className="py-2.5 px-4 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-amber-400 rounded-xl font-bold text-xs flex items-center gap-1.5 transition-all shadow-sm"
-            >
-              <Flame size={15} /> Ver Viabilidade do iFood (Hits & Ads)
-            </Link>
-            {Object.keys(editedPrices).length > 0 && (
-              <button
-                type="button"
-                onClick={handleSaveAllModified}
-                className="py-2.5 px-5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase tracking-wider flex items-center gap-2 shadow-lg shadow-emerald-600/30 transition-all cursor-pointer animate-pulse"
+      <div className="max-w-7xl mx-auto relative z-10 space-y-6">
+        <PageHeader
+          title="Precificação Inteligente do iFood"
+          eyebrow="Gestão Estratégica de Margem"
+          description="Simule preços no delivery, compare a rentabilidade real contra o Balcão e aplique markups inteligentes por produto ou categoria."
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <Link href="/admin/engenharia">
+                <Button variant="secondary" leadingIcon={<Flame size={15} className="text-amber-400" aria-hidden="true" />}>
+                  Viabilidade iFood (Hits & Ads)
+                </Button>
+              </Link>
+              <Button
+                variant="secondary"
+                onClick={() => setShowBulkModal(true)}
+                leadingIcon={<Sparkles size={14} aria-hidden="true" />}
               >
-                <Save size={16} /> Salvar Todos ({Object.keys(editedPrices).length})
-              </button>
-            )}
-          </div>
-        </header>
+                Ajuste em Lote
+              </Button>
+              {modifiedCount > 0 && (
+                <Button
+                  onClick={() => setConfirmSaveAllOpen(true)}
+                  leadingIcon={<Save size={16} aria-hidden="true" />}
+                  className="animate-pulse"
+                >
+                  Salvar Todos ({modifiedCount})
+                </Button>
+              )}
+            </div>
+          }
+        />
 
         {/* Cards de Métricas Gerais */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div className="glass-card p-5 rounded-3xl border border-slate-800 flex items-center gap-4">
-            <div className="p-3.5 bg-blue-500/10 text-blue-400 rounded-2xl border border-blue-500/20">
-              <Store size={24} />
+          <div className="rounded-dialog border border-border-default bg-surface-card p-5 shadow-elevated flex items-center gap-4">
+            <div className="p-3 bg-brand-primary/10 text-brand-primary rounded-xl border border-brand-primary/20">
+              <Store size={22} aria-hidden="true" />
             </div>
             <div>
-              <span className="text-xs text-slate-400 font-bold uppercase">Preço Médio Balcão</span>
-              <h3 className="text-2xl font-mono font-black text-white">R$ {metrics.avgBalcao.toFixed(2)}</h3>
-              <span className="text-[10px] text-slate-500">Base da loja física</span>
+              <span className="text-xs text-text-muted font-bold uppercase block">Preço Médio Balcão</span>
+              <h3 className="text-2xl font-mono font-bold text-text-primary tabular-nums">
+                R$ {metrics.avgBalcao.toFixed(2)}
+              </h3>
+              <span className="text-[10px] text-text-secondary">Base da loja física</span>
             </div>
           </div>
 
-          <div className="glass-card p-5 rounded-3xl border border-slate-800 flex items-center gap-4">
-            <div className="p-3.5 bg-red-500/10 text-red-400 rounded-2xl border border-red-500/20">
-              <Smartphone size={24} />
+          <div className="rounded-dialog border border-border-default bg-surface-card p-5 shadow-elevated flex items-center gap-4">
+            <div className="p-3 bg-status-danger/10 text-status-danger rounded-xl border border-status-danger/20">
+              <Smartphone size={22} aria-hidden="true" />
             </div>
             <div>
-              <span className="text-xs text-slate-400 font-bold uppercase">Preço Médio iFood</span>
-              <h3 className="text-2xl font-mono font-black text-white">R$ {metrics.avgIfood.toFixed(2)}</h3>
-              <span className="text-[10px] text-emerald-400">
+              <span className="text-xs text-text-muted font-bold uppercase block">Preço Médio iFood</span>
+              <h3 className="text-2xl font-mono font-bold text-text-primary tabular-nums">
+                R$ {metrics.avgIfood.toFixed(2)}
+              </h3>
+              <span className="text-[10px] text-emerald-400 font-mono tabular-nums">
                 +{metrics.avgBalcao > 0 ? (((metrics.avgIfood - metrics.avgBalcao) / metrics.avgBalcao) * 100).toFixed(1) : 0}% sobre Balcão
               </span>
             </div>
           </div>
 
-          <div className="glass-card p-5 rounded-3xl border border-slate-800 flex items-center gap-4">
-            <div className="p-3.5 bg-emerald-500/10 text-emerald-400 rounded-2xl border border-emerald-500/20">
-              <TrendingUp size={24} />
+          <div className="rounded-dialog border border-emerald-500/30 bg-surface-card p-5 shadow-elevated flex items-center gap-4 border-t-4 border-t-emerald-500">
+            <div className="p-3 bg-emerald-500/10 text-emerald-400 rounded-xl border border-emerald-500/20">
+              <TrendingUp size={22} aria-hidden="true" />
             </div>
             <div>
-              <span className="text-xs text-slate-400 font-bold uppercase">Margem Líquida iFood</span>
-              <h3 className="text-2xl font-mono font-black text-emerald-400">{metrics.avgMargin.toFixed(1)}%</h3>
-              <span className="text-[10px] text-slate-500">Após taxas de {ifoodCommissionPct + paymentFeePct}%</span>
+              <span className="text-xs text-text-muted font-bold uppercase block">Margem Líquida iFood</span>
+              <h3 className="text-2xl font-mono font-bold text-emerald-400 tabular-nums">
+                {metrics.avgMargin.toFixed(1)}%
+              </h3>
+              <span className="text-[10px] text-text-secondary">Após taxas de {(ifoodCommissionPct + paymentFeePct).toFixed(1)}%</span>
             </div>
           </div>
 
-          <div className="glass-card p-5 rounded-3xl border border-slate-800 flex items-center gap-4">
-            <div className="p-3.5 bg-amber-500/10 text-amber-400 rounded-2xl border border-amber-500/20">
-              <AlertTriangle size={24} />
+          <div className="rounded-dialog border border-amber-500/30 bg-surface-card p-5 shadow-elevated flex items-center gap-4 border-t-4 border-t-amber-500">
+            <div className="p-3 bg-amber-500/10 text-amber-400 rounded-xl border border-amber-500/20">
+              <AlertTriangle size={22} aria-hidden="true" />
             </div>
             <div>
-              <span className="text-xs text-slate-400 font-bold uppercase">Margem Apertada (&lt;18%)</span>
-              <h3 className={`text-2xl font-mono font-black ${metrics.criticalItemsCount > 0 ? 'text-amber-400' : 'text-white'}`}>
+              <span className="text-xs text-text-muted font-bold uppercase block">Margem Apertada (&lt;18%)</span>
+              <h3 className={cn(
+                'text-2xl font-mono font-bold tabular-nums',
+                metrics.criticalItemsCount > 0 ? 'text-amber-400' : 'text-text-primary',
+              )}>
                 {metrics.criticalItemsCount} itens
               </h3>
-              <span className="text-[10px] text-slate-500">Exigem revisão de preço</span>
+              <span className="text-[10px] text-text-secondary">Exigem revisão de preço</span>
             </div>
           </div>
         </div>
 
         {/* Barra de Taxas & Parâmetros da Plataforma */}
-        <div className="glass-card p-4 rounded-3xl border border-slate-800 flex flex-wrap items-center justify-between gap-4 bg-slate-950/40">
-          <div className="flex items-center gap-3">
-            <Sliders size={18} className="text-red-400" />
-            <span className="text-xs font-bold text-slate-300">Taxas Cadastradas no iFood:</span>
+        <div className="rounded-dialog border border-border-default bg-surface-card p-4 shadow-elevated flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-2">
+            <Sliders size={16} className="text-status-danger" aria-hidden="true" />
+            <span className="text-xs font-bold text-text-primary">Taxas da Plataforma (iFood):</span>
           </div>
 
           <div className="flex flex-wrap items-center gap-4 text-xs">
             <div className="flex items-center gap-2">
-              <span className="text-slate-400">Comissão iFood:</span>
-              <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1">
+              <label htmlFor="commission-rate-input" className="text-text-secondary">Comissão iFood:</label>
+              <div className="flex items-center bg-surface-input border border-border-default rounded-control px-2.5 py-1">
                 <input
+                  id="commission-rate-input"
                   type="number"
                   step="0.5"
                   value={ifoodCommissionPct}
                   onChange={e => setIfoodCommissionPct(parseFloat(e.target.value) || 0)}
-                  className="w-12 bg-transparent text-white font-mono font-bold text-center outline-none"
+                  className="w-12 bg-transparent text-text-primary font-mono font-bold text-center outline-none"
                 />
-                <span className="text-slate-500 font-bold">%</span>
+                <span className="text-text-muted font-bold">%</span>
               </div>
             </div>
 
             <div className="flex items-center gap-2">
-              <span className="text-slate-400">Pagamento Online:</span>
-              <div className="flex items-center bg-slate-900 border border-slate-800 rounded-xl px-2.5 py-1">
+              <label htmlFor="payment-rate-input" className="text-text-secondary">Pagamento Online:</label>
+              <div className="flex items-center bg-surface-input border border-border-default rounded-control px-2.5 py-1">
                 <input
+                  id="payment-rate-input"
                   type="number"
                   step="0.1"
                   value={paymentFeePct}
                   onChange={e => setPaymentFeePct(parseFloat(e.target.value) || 0)}
-                  className="w-12 bg-transparent text-white font-mono font-bold text-center outline-none"
+                  className="w-12 bg-transparent text-text-primary font-mono font-bold text-center outline-none"
                 />
-                <span className="text-slate-500 font-bold">%</span>
+                <span className="text-text-muted font-bold">%</span>
               </div>
             </div>
 
-            <div className="bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-800 text-slate-300 font-mono">
-              Total Plataforma: <strong className="text-red-400">{(ifoodCommissionPct + paymentFeePct).toFixed(1)}%</strong>
+            <div className="bg-surface-elevated px-3 py-1.5 rounded-control border border-border-default text-text-primary font-mono">
+              Taxa Total: <strong className="text-status-danger tabular-nums">{(ifoodCommissionPct + paymentFeePct).toFixed(1)}%</strong>
             </div>
+          </div>
+        </div>
 
-            <button
-              type="button"
-              onClick={() => setShowBulkModal(true)}
-              className="py-1.5 px-3.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-xl font-bold text-xs flex items-center gap-1.5 cursor-pointer transition-all"
+        {/* FilterBar */}
+        <FilterBar
+          search={searchTerm}
+          onSearchChange={setSearchTerm}
+          searchLabel="Buscar produtos"
+          placeholder="Buscar por nome ou categoria..."
+          resultCount={filteredProducts.length}
+          totalCount={activeProducts.length}
+          active={Boolean(searchTerm || categoryFilter !== 'todos')}
+          onClear={() => {
+            setSearchTerm('');
+            setCategoryFilter('todos');
+          }}
+        >
+          <div className="space-y-1.5 sm:w-48">
+            <label htmlFor="pricing-cat-select" className="block text-sm font-medium text-text-secondary">
+              Filtro de Categoria
+            </label>
+            <Select
+              id="pricing-cat-select"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value as PricingCategoryFilter)}
             >
-              <Sparkles size={14} /> Ajuste em Lote
-            </button>
+              <option value="todos">Todos os produtos</option>
+              <option value="lanche">Burgers Simples</option>
+              <option value="duplo">Linha Duplos</option>
+              <option value="combo">Combos & Upsell</option>
+              <option value="porcao">Porções</option>
+              <option value="bebida">Bebidas</option>
+            </Select>
           </div>
-        </div>
+        </FilterBar>
 
-        {/* Modal de Ajuste em Lote */}
-        {showBulkModal && (
-          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
-            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-md w-full shadow-2xl space-y-5">
-              <div>
-                <h3 className="text-xl font-black text-white flex items-center gap-2">
-                  <Sparkles className="text-blue-400" /> Ajuste de Preços em Lote
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Aplica uma porcentagem padronizada sobre o preço de balcão de todos os lanches filtrados.
-                </p>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-300 mb-1.5">
-                    Porcentagem de Acréscimo sobre o Balcão (%)
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="number"
-                      value={bulkPercentInput}
-                      onChange={e => setBulkPercentInput(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-white font-mono font-bold outline-none focus:border-blue-500"
-                    />
-                    <span className="text-lg text-slate-400 font-bold">%</span>
-                  </div>
-                </div>
-
-                <div className="flex gap-2">
-                  {[20, 25, 27, 30, 35].map(p => (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => setBulkPercentInput(p.toString())}
-                      className="flex-1 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-mono font-bold"
-                    >
-                      +{p}%
-                    </button>
-                  ))}
-                </div>
-
-                <div className="bg-blue-500/10 border border-blue-500/20 p-3 rounded-xl text-xs text-blue-300">
-                  💡 Os preços serão automaticamente arredondados com final <strong>.90</strong> para melhorar a conversão no app.
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowBulkModal(false)}
-                  className="flex-1 py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs"
+        {/* Tabela Interativa de Precificação */}
+        {filteredProducts.length === 0 ? (
+          <EmptyState
+            title={activeProducts.length ? 'Nenhum produto encontrado' : 'Nenhum produto disponível'}
+            description="Tente pesquisar com outro termo ou alterar o filtro de categoria."
+            icon={<Calculator aria-hidden="true" />}
+            action={
+              activeProducts.length ? (
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setSearchTerm('');
+                    setCategoryFilter('todos');
+                  }}
                 >
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  onClick={handleApplyBulkMarkup}
-                  className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-black text-xs uppercase tracking-wider shadow-lg shadow-blue-600/30"
-                >
-                  Aplicar na Tabela
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Barra de Filtros da Tabela */}
-        <div className="glass-card p-4 rounded-3xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div className="flex flex-wrap gap-1.5 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
-            {[
-              { id: 'todos', label: 'Todos' },
-              { id: 'lanche', label: '🍔 Burgers Simples' },
-              { id: 'duplo', label: '🔥 Linha Duplos' },
-              { id: 'combo', label: '🍟 Combos & Upsell' },
-              { id: 'porcao', label: '🍟 Porções' },
-              { id: 'bebida', label: '🥤 Bebidas' },
-            ].map(tab => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setCategoryFilter(tab.id as any)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  categoryFilter === tab.id 
-                    ? 'bg-emerald-500 text-slate-950 font-black shadow-md' 
-                    : 'text-slate-400 hover:text-white'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="relative w-full md:w-80">
-            <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={e => setSearchTerm(e.target.value)}
-              placeholder="Buscar item (ex: EUA, México, Batata)..."
-              className="w-full pl-10 pr-4 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder:text-slate-500 outline-none focus:border-emerald-500"
-            />
-          </div>
-        </div>
-
-        {/* Tabela Interativa de Precificação Flexível */}
-        <div className="glass-card rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
-          <div className="p-5 border-b border-slate-800 flex justify-between items-center bg-slate-900/40">
-            <div>
-              <h3 className="text-lg font-black text-white flex items-center gap-2">
-                Cardápio no iFood ({filteredProducts.length} itens)
-              </h3>
-              <p className="text-xs text-slate-400">
-                Digite o valor em R$ desejado ou clique nos atalhos de porcentagem.
-              </p>
-            </div>
-            <span className="text-xs text-slate-500 font-mono">Taxa iFood considerada: {(ifoodCommissionPct + paymentFeePct).toFixed(1)}%</span>
-          </div>
-
-          <div className="overflow-x-auto">
+                  Limpar filtros
+                </Button>
+              ) : undefined
+            }
+          />
+        ) : (
+          <div className="overflow-x-auto rounded-dialog border border-border-default bg-surface-card shadow-elevated">
             <table className="w-full text-left border-collapse">
               <thead>
-                <tr className="bg-slate-950/80 border-b border-slate-800 text-[11px] font-black uppercase text-slate-400 tracking-wider">
+                <tr className="border-b border-border-default bg-surface-elevated/60 text-xs font-semibold text-text-muted uppercase tracking-wider">
                   <th className="p-4">Produto & CMV</th>
                   <th className="p-4">Preço Balcão</th>
-                  <th className="p-4 w-48">Preço iFood (R$)</th>
+                  <th className="p-4 w-44">Preço iFood (R$)</th>
                   <th className="p-4">Acréscimo s/ Balcão</th>
                   <th className="p-4">Lucro Líquido iFood</th>
                   <th className="p-4 text-right">Ação</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 text-xs">
+              <tbody className="divide-y divide-border-default/50 text-sm">
                 {filteredProducts.map(p => {
                   const cmv = getProductCmv(p.recipe || []);
                   const currentIfood = getProductIfoodPrice(p);
                   const isModified = editedPrices[p.id] !== undefined && editedPrices[p.id] !== p.priceIfood;
                   const isSaved = savedSuccessIds[p.id];
+                  const isSaving = savingProductId === p.id;
 
-                  // Cálculo do Markup e Lucro
+                  // Markup e Lucro
                   const markupPct = p.priceBalcao > 0 ? ((currentIfood - p.priceBalcao) / p.priceBalcao) * 100 : 0;
                   const totalFeePct = (ifoodCommissionPct + paymentFeePct) / 100;
                   const netRevenue = currentIfood * (1 - totalFeePct);
@@ -506,27 +444,28 @@ export default function PrecificacaoPage() {
                   return (
                     <tr 
                       key={p.id}
-                      className={`hover:bg-slate-900/40 transition-colors ${
-                        isModified ? 'bg-amber-500/5' : ''
-                      }`}
+                      className={cn(
+                        'hover:bg-surface-elevated/40 transition-colors',
+                        isModified && 'bg-amber-500/5',
+                      )}
                     >
                       {/* Nome e CMV */}
                       <td className="p-4">
                         <div className="flex items-center gap-2">
-                          <span className="font-extrabold text-white text-sm">{p.name}</span>
+                          <span className="font-bold text-text-primary text-sm">{p.name}</span>
                           {p.name.toLowerCase().includes('duplo') && (
-                            <span className="px-1.5 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/30 rounded text-[10px] font-black">
+                            <Badge variant="neutral" className="text-[10px]">
                               DUPLO
-                            </span>
+                            </Badge>
                           )}
                         </div>
-                        <div className="flex items-center gap-2 text-slate-400 mt-1 font-mono text-[11px]">
-                          <span>CMV: <strong className="text-amber-400">R$ {cmv.toFixed(2)}</strong></span>
+                        <div className="flex items-center gap-2 text-text-muted mt-1 font-mono text-xs">
+                          <span>CMV: <strong className="text-amber-400 tabular-nums">R$ {cmv.toFixed(2)}</strong></span>
                           <span>•</span>
                           <button
                             type="button"
                             onClick={() => setSelectedProductId(p.id)}
-                            className="text-blue-400 hover:underline cursor-pointer"
+                            className="text-brand-primary hover:underline cursor-pointer"
                           >
                             Ver Raio-X
                           </button>
@@ -534,45 +473,48 @@ export default function PrecificacaoPage() {
                       </td>
 
                       {/* Preço Balcão */}
-                      <td className="p-4 font-mono font-bold text-slate-300">
+                      <td className="p-4 font-mono font-bold text-text-secondary tabular-nums">
                         R$ {p.priceBalcao.toFixed(2)}
                       </td>
 
-                      {/* Input do Preço iFood (Edição Flexível) */}
+                      {/* Input do Preço iFood */}
                       <td className="p-4">
                         <div className="flex items-center gap-1.5">
-                          <span className="text-slate-500 font-mono font-bold">R$</span>
+                          <span className="text-text-muted font-mono font-bold text-xs">R$</span>
                           <input
                             type="number"
                             step="0.10"
+                            aria-label={`Preço iFood de ${p.name}`}
                             value={currentIfood}
                             onChange={e => handlePriceChange(p.id, e.target.value)}
-                            className={`w-28 p-2 rounded-xl font-mono text-sm font-black outline-none border transition-all ${
+                            className={cn(
+                              'w-28 p-2 rounded-control font-mono text-sm font-bold outline-none border transition-colors tabular-nums',
                               isModified 
-                                ? 'bg-amber-950/40 border-amber-500 text-amber-300 shadow-sm' 
-                                : 'bg-slate-950 border-slate-700 text-white focus:border-emerald-500'
-                            }`}
+                                ? 'bg-amber-500/10 border-amber-500 text-amber-300 shadow-sm' 
+                                : 'bg-surface-input border-border-default text-text-primary focus:border-brand-primary',
+                            )}
                           />
                         </div>
                       </td>
 
                       {/* Acréscimo Percentual & Botões de Atalho */}
                       <td className="p-4">
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <span className={`font-mono font-black text-xs ${
-                            markupPct < 20 ? 'text-amber-400' : 'text-emerald-400'
-                          }`}>
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className={cn(
+                            'font-mono font-bold text-xs tabular-nums',
+                            markupPct < 20 ? 'text-amber-400' : 'text-emerald-400',
+                          )}>
                             +{markupPct.toFixed(1)}%
                           </span>
                         </div>
-                        {/* Botões Rápidos de Porcentagem */}
+                        {/* Botões Rápidos */}
                         <div className="flex items-center gap-1">
                           {[20, 25, 30, 35].map(pct => (
                             <button
                               key={pct}
                               type="button"
                               onClick={() => handleApplyPercentToProduct(p, pct, true)}
-                              className="px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white rounded text-[10px] font-mono cursor-pointer transition-colors"
+                              className="px-1.5 py-0.5 bg-surface-elevated hover:bg-surface-card text-text-muted hover:text-text-primary rounded text-[10px] font-mono cursor-pointer transition-colors border border-border-default"
                               title={`Aplicar +${pct}% com final .90`}
                             >
                               +{pct}%
@@ -584,22 +526,20 @@ export default function PrecificacaoPage() {
                       {/* Lucro Líquido no iFood */}
                       <td className="p-4 font-mono">
                         <div className="flex items-center gap-2">
-                          <span className={`font-bold text-sm ${netProfit > 0 ? 'text-white' : 'text-red-400'}`}>
+                          <span className={cn(
+                            'font-bold text-sm tabular-nums',
+                            netProfit > 0 ? 'text-text-primary' : 'text-status-danger',
+                          )}>
                             R$ {netProfit.toFixed(2)}
                           </span>
-                          <span className={`px-2 py-0.5 rounded text-[10px] font-black ${
-                            marginPct >= 25 
-                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                              : marginPct >= 18
-                                ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-                                : marginPct >= 10
-                                  ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
-                                  : 'bg-red-500/20 text-red-400 border border-red-500/30'
-                          }`}>
+                          <Badge 
+                            variant={marginPct >= 25 ? 'success' : marginPct >= 18 ? 'neutral' : 'warning'}
+                            className="font-mono tabular-nums text-[10px]"
+                          >
                             {marginPct.toFixed(1)}%
-                          </span>
+                          </Badge>
                         </div>
-                        <span className="text-[10px] text-slate-500">
+                        <span className="text-[10px] text-text-muted">
                           {marginPct < 18 ? '⚠️ Margem apertada' : 'Margem saudável'}
                         </span>
                       </td>
@@ -607,25 +547,26 @@ export default function PrecificacaoPage() {
                       {/* Ação: Salvar */}
                       <td className="p-4 text-right">
                         {isSaved ? (
-                          <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-xl font-bold text-xs">
-                            <Check size={14} /> Salvo!
+                          <span className="inline-flex items-center gap-1 px-3 py-1.5 bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 rounded-control font-bold text-xs">
+                            <Check size={14} aria-hidden="true" /> Salvo!
                           </span>
                         ) : isModified ? (
-                          <button
-                            type="button"
+                          <Button
+                            size="sm"
                             onClick={() => handleSaveProductPrice(p)}
-                            className="py-1.5 px-3.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-xs uppercase flex items-center gap-1.5 shadow-md shadow-amber-500/20 cursor-pointer transition-all ml-auto"
+                            loading={isSaving}
+                            leadingIcon={<Save size={14} aria-hidden="true" />}
                           >
-                            <Save size={14} /> Salvar
-                          </button>
+                            Salvar
+                          </Button>
                         ) : (
-                          <button
-                            type="button"
+                          <Button
+                            size="sm"
+                            variant="secondary"
                             onClick={() => setSelectedProductId(p.id)}
-                            className="py-1.5 px-3 text-slate-500 hover:text-slate-300 hover:bg-slate-800 rounded-xl text-xs font-medium cursor-pointer transition-all ml-auto"
                           >
                             Simular
-                          </button>
+                          </Button>
                         )}
                       </td>
                     </tr>
@@ -634,26 +575,29 @@ export default function PrecificacaoPage() {
               </tbody>
             </table>
           </div>
-        </div>
+        )}
 
         {/* Raio-X Detalhado: Comparativo Balcão vs. iFood */}
         {selectedProduct && selectedProductSim && (
-          <div className="glass-card rounded-3xl p-6 md:p-8 border border-slate-800 space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+          <div className="rounded-dialog border border-border-default bg-surface-card p-6 shadow-elevated space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-border-default">
               <div>
-                <span className="text-xs text-emerald-400 font-bold uppercase tracking-wider">Raio-X de Margem</span>
-                <h3 className="text-2xl font-black text-white">{selectedProduct.name}</h3>
-                <p className="text-xs text-slate-400">
-                  CMV da Ficha Técnica: <strong className="text-amber-400 font-mono">R$ {selectedProductCmv.toFixed(2)}</strong>
+                <h2 className="text-xs text-brand-primary font-bold uppercase tracking-wider block">
+                  Raio-X de Margem e Rentabilidade
+                </h2>
+                <h3 className="text-2xl font-bold text-text-primary">{selectedProduct.name}</h3>
+                <p className="text-xs text-text-secondary mt-0.5">
+                  CMV da Ficha Técnica: <strong className="text-amber-400 font-mono tabular-nums">R$ {selectedProductCmv.toFixed(2)}</strong>
                 </p>
               </div>
 
               <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-400">Trocar produto:</span>
+                <label htmlFor="select-product-xray" className="text-xs text-text-muted">Trocar produto:</label>
                 <select
+                  id="select-product-xray"
                   value={selectedProduct.id}
                   onChange={e => setSelectedProductId(e.target.value)}
-                  className="bg-slate-950 border border-slate-700 rounded-xl p-2 text-white text-xs font-bold outline-none cursor-pointer"
+                  className="bg-surface-input border border-border-default rounded-control p-2 text-text-primary text-xs font-bold outline-none cursor-pointer"
                 >
                   {activeProducts.map(p => (
                     <option key={p.id} value={p.id}>{p.name}</option>
@@ -663,36 +607,41 @@ export default function PrecificacaoPage() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
               {/* Coluna Balcão */}
-              <div className="p-6 rounded-2xl bg-blue-950/20 border border-blue-500/20 space-y-3 text-xs">
-                <div className="flex items-center gap-2 text-blue-400 font-extrabold text-sm pb-2 border-b border-blue-500/20">
-                  <Store size={18} /> Venda no Balcão (Loja Física)
+              <div className="p-5 rounded-xl bg-surface-elevated/40 border border-border-default space-y-3 text-xs">
+                <div className="flex items-center gap-2 text-brand-primary font-bold text-sm pb-2 border-b border-border-default">
+                  <Store size={18} aria-hidden="true" /> Venda no Balcão (Loja Física)
                 </div>
 
-                <div className="flex justify-between text-slate-300">
+                <div className="flex justify-between text-text-secondary">
                   <span>Preço de Venda:</span>
-                  <span className="font-mono font-bold text-white">R$ {selectedProductSim.balcao.gross.toFixed(2)}</span>
+                  <span className="font-mono font-bold text-text-primary tabular-nums">
+                    R$ {selectedProductSim.balcao.gross.toFixed(2)}
+                  </span>
                 </div>
-                <div className="flex justify-between text-slate-400">
+                <div className="flex justify-between text-text-muted">
                   <span>Taxa Cartão (Médio 3%):</span>
-                  <span className="font-mono text-red-400">- R$ {selectedProductSim.balcao.fees.toFixed(2)}</span>
+                  <span className="font-mono text-status-danger tabular-nums">
+                    - R$ {selectedProductSim.balcao.fees.toFixed(2)}
+                  </span>
                 </div>
-                <div className="flex justify-between text-slate-400">
+                <div className="flex justify-between text-text-muted">
                   <span>CMV do Lanche:</span>
-                  <span className="font-mono text-amber-400">- R$ {selectedProductCmv.toFixed(2)}</span>
+                  <span className="font-mono text-amber-400 tabular-nums">
+                    - R$ {selectedProductCmv.toFixed(2)}
+                  </span>
                 </div>
 
-                <div className="pt-3 border-t border-blue-500/30 flex justify-between items-end">
+                <div className="pt-3 border-t border-border-default flex justify-between items-end">
                   <div>
-                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Lucro Líquido</span>
-                    <strong className="text-2xl font-mono text-blue-400 font-black">
+                    <span className="text-[10px] text-text-muted uppercase tracking-wider block">Lucro Líquido</span>
+                    <strong className="text-2xl font-mono text-brand-primary font-bold tabular-nums">
                       R$ {selectedProductSim.balcao.profit.toFixed(2)}
                     </strong>
                   </div>
                   <div className="text-right">
-                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Margem Líquida</span>
-                    <strong className="text-xl font-mono text-emerald-400 font-black">
+                    <span className="text-[10px] text-text-muted uppercase tracking-wider block">Margem Líquida</span>
+                    <strong className="text-xl font-mono text-emerald-400 font-bold tabular-nums">
                       {selectedProductSim.balcao.margin.toFixed(1)}%
                     </strong>
                   </div>
@@ -700,46 +649,117 @@ export default function PrecificacaoPage() {
               </div>
 
               {/* Coluna iFood */}
-              <div className="p-6 rounded-2xl bg-red-950/20 border border-red-500/20 space-y-3 text-xs">
-                <div className="flex items-center gap-2 text-red-400 font-extrabold text-sm pb-2 border-b border-red-500/20">
-                  <Smartphone size={18} /> Venda no iFood (Preço Atual)
+              <div className="p-5 rounded-xl bg-surface-elevated/40 border border-status-danger/30 space-y-3 text-xs">
+                <div className="flex items-center gap-2 text-status-danger font-bold text-sm pb-2 border-b border-border-default">
+                  <Smartphone size={18} aria-hidden="true" /> Venda no iFood (Preço Atual)
                 </div>
 
-                <div className="flex justify-between text-slate-300">
+                <div className="flex justify-between text-text-secondary">
                   <span>Preço no iFood:</span>
-                  <span className="font-mono font-bold text-white">R$ {selectedProductSim.ifood.gross.toFixed(2)}</span>
+                  <span className="font-mono font-bold text-text-primary tabular-nums">
+                    R$ {selectedProductSim.ifood.gross.toFixed(2)}
+                  </span>
                 </div>
-                <div className="flex justify-between text-slate-400">
-                  <span>Comissão + Pagamento ({(ifoodCommissionPct + paymentFeePct).toFixed(1)}%):</span>
-                  <span className="font-mono text-red-400">- R$ {selectedProductSim.ifood.fees.toFixed(2)}</span>
+                <div className="flex justify-between text-text-muted">
+                  <span>Taxas Plataforma ({(ifoodCommissionPct + paymentFeePct).toFixed(1)}%):</span>
+                  <span className="font-mono text-status-danger tabular-nums">
+                    - R$ {selectedProductSim.ifood.fees.toFixed(2)}
+                  </span>
                 </div>
-                <div className="flex justify-between text-slate-400">
+                <div className="flex justify-between text-text-muted">
                   <span>CMV do Lanche:</span>
-                  <span className="font-mono text-amber-400">- R$ {selectedProductCmv.toFixed(2)}</span>
+                  <span className="font-mono text-amber-400 tabular-nums">
+                    - R$ {selectedProductCmv.toFixed(2)}
+                  </span>
                 </div>
 
-                <div className="pt-3 border-t border-red-500/30 flex justify-between items-end">
+                <div className="pt-3 border-t border-border-default flex justify-between items-end">
                   <div>
-                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Lucro Líquido</span>
-                    <strong className="text-2xl font-mono text-red-400 font-black">
+                    <span className="text-[10px] text-text-muted uppercase tracking-wider block">Lucro Líquido</span>
+                    <strong className="text-2xl font-mono text-status-danger font-bold tabular-nums">
                       R$ {selectedProductSim.ifood.profit.toFixed(2)}
                     </strong>
                   </div>
                   <div className="text-right">
-                    <span className="text-[10px] text-slate-400 uppercase tracking-wider block">Margem Líquida</span>
-                    <strong className={`text-xl font-mono font-black ${
-                      selectedProductSim.ifood.margin >= 18 ? 'text-emerald-400' : 'text-amber-400'
-                    }`}>
+                    <span className="text-[10px] text-text-muted uppercase tracking-wider block">Margem Líquida</span>
+                    <strong className={cn(
+                      'text-xl font-mono font-bold tabular-nums',
+                      selectedProductSim.ifood.margin >= 18 ? 'text-emerald-400' : 'text-amber-400',
+                    )}>
                       {selectedProductSim.ifood.margin.toFixed(1)}%
                     </strong>
                   </div>
                 </div>
               </div>
-
             </div>
           </div>
         )}
 
+        {/* DIALOG: REAJUSTE DE PREÇOS EM LOTE */}
+        <Dialog
+          open={showBulkModal}
+          onClose={() => setShowBulkModal(false)}
+          title="Ajuste de Preços em Lote"
+          description="Aplica uma porcentagem padronizada sobre o preço de balcão de todos os itens filtrados."
+          size="sm"
+          footer={
+            <div className="flex justify-end gap-3 w-full">
+              <Button variant="secondary" onClick={() => setShowBulkModal(false)}>
+                Cancelar
+              </Button>
+              <Button onClick={handleApplyBulkMarkup}>
+                Aplicar na Tabela
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <label htmlFor="bulk-percent-input" className="block text-xs font-bold text-text-secondary">
+                Porcentagem de Acréscimo s/ Balcão (%)
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="bulk-percent-input"
+                  type="number"
+                  value={bulkPercentInput}
+                  onChange={e => setBulkPercentInput(e.target.value)}
+                  className="w-full bg-surface-input border border-border-default rounded-control p-2.5 text-text-primary font-mono font-bold outline-none focus:border-brand-primary"
+                />
+                <span className="text-lg text-text-muted font-bold">%</span>
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              {[20, 25, 27, 30, 35].map(p => (
+                <button
+                  key={p}
+                  type="button"
+                  onClick={() => setBulkPercentInput(p.toString())}
+                  className="flex-1 py-1.5 bg-surface-elevated hover:bg-surface-card text-text-secondary hover:text-text-primary rounded-control text-xs font-mono font-bold border border-border-default cursor-pointer"
+                >
+                  +{p}%
+                </button>
+              ))}
+            </div>
+
+            <div className="rounded-control bg-brand-primary/10 border border-brand-primary/20 p-3 text-xs text-brand-primary">
+              💡 Os preços serão automaticamente arredondados com terminação <strong>.90</strong> para maximizar a conversão.
+            </div>
+          </div>
+        </Dialog>
+
+        {/* CONFIRM DIALOG: SALVAR TODOS */}
+        <ConfirmDialog
+          open={confirmSaveAllOpen}
+          onClose={() => setConfirmSaveAllOpen(false)}
+          title={`Salvar alterações de preço?`}
+          description={`Você está prestes a atualizar o preço de ${modifiedCount} produto(s) no cardápio do iFood.`}
+          confirmLabel="Salvar Preços"
+          tone="warning"
+          loading={isSavingAll}
+          onConfirm={handleConfirmSaveAll}
+        />
       </div>
     </div>
   );
