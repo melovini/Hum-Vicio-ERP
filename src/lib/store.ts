@@ -734,15 +734,15 @@ export async function executeParallelLoadData(
       if (purchData) {
         mappedPurchases = (purchData as any[]).map(p => ({
           id: p.id,
-          ingredientId: p.ingredient_id,
-          ingredientName: p.ingredient_name,
-          supplierId: p.supplier_id,
-          supplierName: p.supplier_name || 'Diversos',
+          ingredientId: p.ingredient_id ?? p.ingredientId,
+          ingredientName: p.ingredient_name ?? p.ingredientName,
+          supplierId: p.supplier_id ?? p.supplierId,
+          supplierName: p.supplier_name ?? p.supplierName ?? 'Diversos',
           quantity: Number(p.quantity) || 0,
           unit: p.unit,
-          costPerUnit: Number(p.cost_per_unit) || 0,
-          totalCost: Number(p.total_cost) || 0,
-          createdAt: p.created_at
+          costPerUnit: Number(p.cost_per_unit ?? p.costPerUnit) || 0,
+          totalCost: Number(p.total_cost ?? p.totalCost) || 0,
+          createdAt: p.created_at ?? p.createdAt
         }));
       }
 
