@@ -1,35 +1,42 @@
 'use client';
+
 import { useState, useEffect, useMemo } from 'react';
 import Link from 'next/link';
 import { 
-  ArrowLeft, Users, Plus, Search, Shield, KeyRound, 
-  CheckCircle2, AlertTriangle, Edit2, Trash2, Eye, EyeOff, 
-  Phone, Clock, Check, X, ShieldAlert, Sparkles, UserCheck, UserX,
+  Users, Plus, Shield, KeyRound, 
+  Edit2, Trash2, Eye, EyeOff, 
+  Phone, Clock, Check, Sparkles, UserCheck, UserX,
   Calendar, DollarSign, Wallet, History, Gift, CheckSquare, 
-  FileText, ArrowDownCircle, ArrowUpCircle, Briefcase, Coins,
-  CalendarCheck, ChevronLeft, ChevronRight, Sun, Coffee
+  ArrowDownCircle, ArrowUpCircle, Briefcase, Coins,
+  ChevronLeft, ChevronRight, BarChart3, Cloud, CloudOff, Info
 } from 'lucide-react';
-import SlidingSheet from '@/components/ui/SlidingSheet';
-import StatusBadge, { StatusBadgeVariant } from '@/components/ui/StatusBadge';
+import { 
+  PageHeader, FilterBar, Dialog, ConfirmDialog, 
+  SlidingSheet, Button, Badge, EmptyState, Skeleton, useToast 
+} from '@/components/ui';
 import { 
   Collaborator, CollaboratorRole, PayType,
   getStoredCollaborators, setLocalCollaboratorsCache
 } from '@/lib/collaborators';
 import { 
-  WageEntry, DAYS_OF_WEEK, DayKey, CalendarDay, QuinzenaInfo,
+  filterCollaborators, computeCollaboratorKpis, 
+  getRoleLabel, getRoleBadgeVariant 
+} from '@/lib/collaborator-filters';
+import { 
+  WageEntry, CalendarDay, QuinzenaInfo,
   getStoredWageEntries, saveStoredWageEntry, deleteStoredWageEntry, 
   computeCollaboratorBalance, getStoredWeeklySchedules, saveStoredWeeklySchedule,
-  getQuinzenaInfo, getCurrentQuinzena, MONTH_NAMES, formatDateKey
+  getQuinzenaInfo, getCurrentQuinzena
 } from '@/lib/diarias';
 import {
   getCollaboratorsAction,
   saveCollaboratorAction,
   toggleActiveCollaboratorAction,
-  deleteCollaboratorAction,
-  checkCloudStatusAction
+  deleteCollaboratorAction
 } from './actions';
 
 export default function ColaboradoresPage() {
+  const { notify } = useToast();
   const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
   const [filterRole, setFilterRole] = useState<'todos' | CollaboratorRole>('todos');
   const [searchQuery, setSearchQuery] = useState('');
@@ -48,6 +55,11 @@ export default function ColaboradoresPage() {
   const [isSheetOpen, setIsSheetOpen] = useState(false);
   const [editingCollab, setEditingCollab] = useState<Collaborator | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Confirmações de Exclusão (Substitutos de confirm nativo)
+  const [collabToDelete, setCollabToDelete] = useState<Collaborator | null>(null);
+  const [isDeletingCollab, setIsDeletingCollab] = useState(false);
+  const [entryToDeleteId, setEntryToDeleteId] = useState<string | null>(null);
 
   // Formulário - Campos Padrão e de Remuneração / Diária
   const [nameInput, setNameInput] = useState('');
@@ -87,8 +99,6 @@ export default function ColaboradoresPage() {
   const [extraShiftDate, setExtraShiftDate] = useState<string>(new Date().toISOString().slice(0, 10));
   const [extraShiftNotes, setExtraShiftNotes] = useState<string>('Diária extra / Cobertura');
 
-  const [feedback, setFeedback] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
-
   // Carregamento Híbrido: Cache Local imediato + Sincronização do Servidor/Nuvem
   useEffect(() => {
     // 1. Mostrar cache local instantâneo
@@ -115,11 +125,6 @@ export default function ColaboradoresPage() {
     }
     loadServerData();
   }, []);
-
-  const showFeedback = (text: string, type: 'success' | 'error' = 'success') => {
-    setFeedback({ text, type });
-    setTimeout(() => setFeedback(null), 4000);
-  };
 
   // Cálculos de Diárias e Saldos
   const diaristasList = useMemo(() => {
@@ -169,7 +174,11 @@ export default function ColaboradoresPage() {
     };
     const updated = saveStoredWageEntry(newEntry);
     setWageEntries(updated);
-    showFeedback(`+1 Diária de R$ ${amount.toFixed(2)} lançada para ${collab.name}!`);
+    notify({
+      title: 'Diária lançada com sucesso',
+      description: `+1 Diária de R$ ${amount.toFixed(2)} para ${collab.name}.`,
+      tone: 'success'
+    });
   };
 
   const handleConfirmBonus = (e: React.FormEvent) => {
@@ -177,7 +186,7 @@ export default function ColaboradoresPage() {
     if (!bonusModalCollab) return;
     const val = parseFloat(bonusAmount) || 0;
     if (val <= 0) {
-      showFeedback('Digite um valor de agrado válido.', 'error');
+      notify({ title: 'Valor inválido', description: 'Digite um valor de agrado positivo.', tone: 'warning' });
       return;
     }
     const newEntry: WageEntry = {
@@ -193,9 +202,14 @@ export default function ColaboradoresPage() {
     };
     const updated = saveStoredWageEntry(newEntry);
     setWageEntries(updated);
+    const collabName = bonusModalCollab.name;
     setBonusModalCollab(null);
     setBonusNotes('');
-    showFeedback(`Agrado de R$ ${val.toFixed(2)} registrado para ${bonusModalCollab.name}!`);
+    notify({
+      title: 'Agrado registrado',
+      description: `R$ ${val.toFixed(2)} lançado para ${collabName}.`,
+      tone: 'success'
+    });
   };
 
   const handleConfirmExtraShift = (e: React.FormEvent) => {
@@ -203,7 +217,7 @@ export default function ColaboradoresPage() {
     if (!extraShiftModalCollab) return;
     const val = parseFloat(extraShiftAmount) || 0;
     if (val <= 0) {
-      showFeedback('Digite um valor de diária extra válido.', 'error');
+      notify({ title: 'Valor inválido', description: 'Digite um valor válido de diária extra.', tone: 'warning' });
       return;
     }
     const newEntry: WageEntry = {
@@ -219,8 +233,13 @@ export default function ColaboradoresPage() {
     };
     const updated = saveStoredWageEntry(newEntry);
     setWageEntries(updated);
+    const collabName = extraShiftModalCollab.name;
     setExtraShiftModalCollab(null);
-    showFeedback(`Diária extra de R$ ${val.toFixed(2)} registrada para ${extraShiftModalCollab.name}!`);
+    notify({
+      title: 'Diária extra registrada',
+      description: `R$ ${val.toFixed(2)} lançado para ${collabName}.`,
+      tone: 'success'
+    });
   };
 
   const handleConfirmAcerto = (e: React.FormEvent) => {
@@ -228,7 +247,7 @@ export default function ColaboradoresPage() {
     if (!acertoModalCollab) return;
     const val = parseFloat(acertoAmount) || 0;
     if (val <= 0) {
-      showFeedback('Digite um valor válido para o acerto.', 'error');
+      notify({ title: 'Valor inválido', description: 'Digite um valor válido para o acerto.', tone: 'warning' });
       return;
     }
     const newEntry: WageEntry = {
@@ -245,17 +264,27 @@ export default function ColaboradoresPage() {
     };
     const updated = saveStoredWageEntry(newEntry);
     setWageEntries(updated);
+    const collabName = acertoModalCollab.name;
     setAcertoModalCollab(null);
     setAcertoNotes('');
-    showFeedback(`Acerto de R$ ${val.toFixed(2)} pago e abatido do saldo de ${acertoModalCollab.name}!`);
+    notify({
+      title: 'Acerto registrado',
+      description: `R$ ${val.toFixed(2)} pago e abatido do saldo de ${collabName}.`,
+      tone: 'success'
+    });
   };
 
-  const handleDeleteEntry = (id: string) => {
-    if (confirm('Deseja excluir este lançamento do extrato?')) {
-      const updated = deleteStoredWageEntry(id);
-      setWageEntries(updated);
-      showFeedback('Lançamento removido com sucesso.');
-    }
+  // Exclusão de Lançamento no Extrato (Substituto de confirm)
+  const handleConfirmDeleteEntry = () => {
+    if (!entryToDeleteId) return;
+    const updated = deleteStoredWageEntry(entryToDeleteId);
+    setWageEntries(updated);
+    setEntryToDeleteId(null);
+    notify({
+      title: 'Lançamento removido',
+      description: 'O saldo do colaborador foi recalculado.',
+      tone: 'info'
+    });
   };
 
   // Dados computados da Quinzena Selecionada
@@ -362,18 +391,17 @@ export default function ColaboradoresPage() {
   };
 
   // Salvar Colaborador via Server Action
-  const handleSaveCollaborator = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSaveCollaborator = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!nameInput.trim()) {
-      showFeedback('O nome do colaborador é obrigatório.', 'error');
+      notify({ title: 'Campo obrigatório', description: 'O nome do colaborador é obrigatório.', tone: 'warning' });
       return;
     }
     if (!editingCollab && !pinInput.trim()) {
-      showFeedback('O PIN ou senha individual é obrigatório.', 'error');
+      notify({ title: 'Campo obrigatório', description: 'O PIN ou senha individual é obrigatório.', tone: 'warning' });
       return;
     }
 
-    // Validar se o PIN já existe em outro colaborador
     const pinClean = pinInput.trim();
     const itemToSave: Collaborator = {
       id: editingCollab ? editingCollab.id : 'collab_' + Date.now().toString(36),
@@ -399,24 +427,16 @@ export default function ColaboradoresPage() {
         setIsCloudSynced(res.isCloudSynced);
         setIsSheetOpen(false);
 
-        if (res.isCloudSynced) {
-          showFeedback(
-            editingCollab 
-              ? `Colaborador "${itemToSave.name}" atualizado e sincronizado na Nuvem!` 
-              : `Colaborador "${itemToSave.name}" cadastrado e sincronizado na Nuvem!`
-          );
-        } else {
-          showFeedback(
-            editingCollab 
-              ? `Senha e dados de "${itemToSave.name}" salvos no servidor local!` 
-              : `Colaborador "${itemToSave.name}" salvo no servidor local!`
-          );
-        }
+        notify({
+          title: editingCollab ? 'Colaborador atualizado' : 'Colaborador cadastrado',
+          description: `"${itemToSave.name}" foi salvo ${res.isCloudSynced ? 'e sincronizado na nuvem' : 'no servidor local'}.`,
+          tone: 'success'
+        });
       } else {
-        showFeedback(res.error || 'Erro ao salvar colaborador.', 'error');
+        notify({ title: 'Erro ao salvar', description: res.error || 'Não foi possível salvar.', tone: 'danger' });
       }
     } catch (err: any) {
-      showFeedback(err.message || 'Falha na conexão com o servidor.', 'error');
+      notify({ title: 'Falha de conexão', description: err.message || 'Erro ao conectar ao servidor.', tone: 'danger' });
     } finally {
       setIsSaving(false);
     }
@@ -430,918 +450,865 @@ export default function ColaboradoresPage() {
         setCollaborators(res.updatedList);
         setLocalCollaboratorsCache(res.updatedList);
         setIsCloudSynced(res.isCloudSynced);
-        showFeedback(`Colaborador ${name} ${currentlyActive ? 'desativado' : 'reativado'}!`);
+        notify({
+          title: currentlyActive ? 'Colaborador desativado' : 'Colaborador reativado',
+          description: `${name} está agora ${currentlyActive ? 'inativo' : 'ativo'}.`,
+          tone: currentlyActive ? 'warning' : 'success'
+        });
       } else {
-        showFeedback(res.error || 'Não foi possível alterar o colaborador.', 'error');
+        notify({ title: 'Erro ao alterar', description: res.error || 'Ação rejeitada pelo servidor.', tone: 'danger' });
       }
     } catch {
-      showFeedback(`Falha ao alterar status de ${name}.`, 'error');
+      notify({ title: 'Erro ao alterar status', description: `Falha ao alterar status de ${name}.`, tone: 'danger' });
     }
   };
 
-  // Excluir Colaborador
-  const handleDelete = async (id: string, name: string) => {
-    if (confirm(`Tem certeza que deseja excluir permanentemente o cadastro de ${name}?`)) {
-      try {
-        const res = await deleteCollaboratorAction(id);
-        if (res.success) {
-          setCollaborators(res.updatedList);
-          setLocalCollaboratorsCache(res.updatedList);
-          setIsCloudSynced(res.isCloudSynced);
-          showFeedback(`Colaborador ${name} excluído com sucesso!`);
-        } else {
-          showFeedback(res.error || 'Não foi possível excluir o colaborador.', 'error');
-        }
-      } catch {
-        showFeedback(`Falha ao excluir ${name}.`, 'error');
+  // Excluir Colaborador via ConfirmDialog
+  const handleConfirmDeleteCollab = async () => {
+    if (!collabToDelete) return;
+    setIsDeletingCollab(true);
+    try {
+      const res = await deleteCollaboratorAction(collabToDelete.id);
+      if (res.success) {
+        setCollaborators(res.updatedList);
+        setLocalCollaboratorsCache(res.updatedList);
+        setIsCloudSynced(res.isCloudSynced);
+        const name = collabToDelete.name;
+        setCollabToDelete(null);
+        notify({
+          title: 'Colaborador excluído',
+          description: `O cadastro de ${name} foi removido com sucesso.`,
+          tone: 'success'
+        });
+      } else {
+        notify({ title: 'Não foi possível excluir', description: res.error || 'Ação negada pelo servidor.', tone: 'danger' });
       }
+    } catch {
+      notify({ title: 'Erro ao excluir', description: `Falha na exclusão de ${collabToDelete.name}.`, tone: 'danger' });
+    } finally {
+      setIsDeletingCollab(false);
     }
   };
 
   const handleCopySql = () => {
     const sql = 'Configuração de segurança: consulte SECURITY-SETUP.md no projeto. A migração deve ser aplicada pelo responsável técnico em uma janela de manutenção.';
-
     navigator.clipboard.writeText(sql);
     setCopiedSql(true);
     setTimeout(() => setCopiedSql(false), 3000);
+    notify({ title: 'Orientação copiada!', tone: 'info' });
   };
 
-  // Filtragem e Busca
+  // Filtragem e Busca usando o helper desacoplado
   const filteredCollaborators = useMemo(() => {
-    return collaborators.filter(c => {
-      const matchesRole = filterRole === 'todos' || c.role === filterRole;
-      const matchesQuery = 
-        c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (c.phone && c.phone.includes(searchQuery));
-      return matchesRole && matchesQuery;
+    return filterCollaborators(collaborators, {
+      role: filterRole,
+      searchQuery: searchQuery,
     });
   }, [collaborators, filterRole, searchQuery]);
 
-  // KPIs
+  // KPIs usando o helper desacoplado
   const kpis = useMemo(() => {
-    const total = collaborators.length;
-    const ativos = collaborators.filter(c => c.isActive).length;
-    const caixas = collaborators.filter(c => c.role === 'caixa' && c.isActive).length;
-    const cozinha = collaborators.filter(c => c.role === 'cozinha' && c.isActive).length;
-    const gerentes = collaborators.filter(c => (c.role === 'gerente' || c.role === 'admin') && c.isActive).length;
-
-    return { total, ativos, caixas, cozinha, gerentes };
+    return computeCollaboratorKpis(collaborators);
   }, [collaborators]);
 
-  const getRoleBadge = (role: CollaboratorRole) => {
-    switch (role) {
-      case 'admin':
-        return <StatusBadge status="danger" label="Administrador Master" />;
-      case 'gerente':
-        return <StatusBadge status="partial" label="Gerente Operacional" />;
-      case 'caixa':
-        return <StatusBadge status="occupied" label="Operador de Caixa" />;
-      case 'cozinha':
-        return <StatusBadge status="free" label="Equipe Cozinha" />;
-      default:
-        return <StatusBadge status="neutral" label="Colaborador" />;
-    }
-  };
+  if (isLoadingServer && collaborators.length === 0) {
+    return (
+      <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6" data-testid="colaboradores-skeleton">
+        <Skeleton className="h-14 w-1/3" />
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          <Skeleton className="h-20 rounded-dialog" />
+          <Skeleton className="h-20 rounded-dialog" />
+          <Skeleton className="h-20 rounded-dialog" />
+          <Skeleton className="h-20 rounded-dialog" />
+          <Skeleton className="h-20 rounded-dialog" />
+        </div>
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-64 w-full rounded-dialog" />
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-surface-ground text-slate-100 p-4 md:p-6 space-y-6">
-      
-      {/* Toast Flutuante Discreto */}
-      {feedback && (
-        <div className={`fixed top-5 right-5 z-50 px-4 py-3 rounded-xl border shadow-xl text-xs font-semibold flex items-center gap-2.5 animate-in slide-in-from-top duration-200 ${
-          feedback.type === 'success' 
-            ? 'bg-surface-card border-status-free/40 text-status-free' 
-            : 'bg-surface-card border-status-danger/40 text-status-danger'
-        }`}>
-          {feedback.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-          <span>{feedback.text}</span>
-        </div>
-      )}
+    <div className="min-h-screen relative p-4 md:p-8 overflow-hidden pb-20">
+      <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-brand-primary/10 blur-[150px] pointer-events-none" />
 
-      {/* Cabeçalho com Navegação & Ações */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-surface-border">
-        <div className="flex items-center gap-3">
-          <Link 
-            href="/"
-            className="p-2.5 bg-surface-card border border-surface-border text-slate-400 hover:text-white rounded-lg transition-colors cursor-pointer"
-            title="Voltar para a Home"
-          >
-            <ArrowLeft size={18} />
-          </Link>
-          <div>
-            <div className="inline-flex items-center gap-1.5 text-brand-accent font-medium text-xs tracking-wider mb-0.5">
-              <Users size={14} /> Gestão de Pessoas & Acessos
-            </div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">Equipe & Colaboradores</h1>
-            <p className="text-xs text-slate-400">
-              Cadastre operadores de Caixa, Chapeiros de Cozinha e Gerentes com credenciais e PINs individuais.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* Badge de Sincronização */}
-          {isCloudSynced ? (
-            <div className="py-1.5 px-3 bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 rounded-lg text-xs font-semibold flex items-center gap-1.5" title="Sincronizado na nuvem Supabase em tempo real com todos os dispositivos">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Nuvem Ativa</span>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setIsSqlModalOpen(true)}
-              className="py-1.5 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
-              title="Clique para ativar a sincronização na nuvem Supabase"
-            >
-              <span className="w-2 h-2 rounded-full bg-amber-400" />
-              <span>Servidor Local Ativo</span>
-              <span className="underline ml-1 font-bold text-[10px]">Ativar Nuvem</span>
-            </button>
-          )}
-
-          <Link
-            href="/admin/dashboard"
-            className="py-2 px-3.5 bg-surface-card hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors shadow-xs"
-          >
-            📊 DRE & Dashboard
-          </Link>
-
-          <button
-            type="button"
-            onClick={handleOpenNewSheet}
-            className="py-2 px-4 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg font-semibold text-xs flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-          >
-            <Plus size={15} /> + Novo Colaborador
-          </button>
-        </div>
-      </div>
-
-      {/* Sub-Abas de Navegação Principal */}
-      <div className="flex items-center gap-2 border-b border-surface-border pb-3">
-        <button
-          type="button"
-          onClick={() => setActiveMainTab('equipe')}
-          className={`py-2 px-4 rounded-xl text-xs md:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-            activeMainTab === 'equipe'
-              ? 'bg-brand-primary text-white shadow-md shadow-brand-primary/20'
-              : 'bg-surface-card hover:bg-surface-elevated text-slate-400 hover:text-slate-200 border border-surface-border'
-          }`}
-        >
-          <Users size={16} /> Equipe & Senhas ({collaborators.length})
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveMainTab('escala_diarias')}
-          className={`py-2 px-4 rounded-xl text-xs md:text-sm font-bold flex items-center gap-2 transition-all cursor-pointer ${
-            activeMainTab === 'escala_diarias'
-              ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20 font-black'
-              : 'bg-surface-card hover:bg-surface-elevated text-slate-400 hover:text-slate-200 border border-surface-border'
-          }`}
-        >
-          <Calendar size={16} /> Escala Quinzenal & Acerto de Diárias
-          {totalDueAllDiaristas > 0 && (
-            <span className="ml-1 px-2 py-0.5 bg-rose-600 text-white rounded-full font-mono text-[10px] font-black animate-pulse">
-              R$ {totalDueAllDiaristas.toFixed(2)} pendente
-            </span>
-          )}
-        </button>
-      </div>
-
-      {activeMainTab === 'equipe' ? (
-        <>
-          {/* Cards de KPIs da Equipe */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
-          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Total Cadastrado</span>
-          <p className="text-xl font-mono tabular-nums font-bold text-slate-100">{kpis.total}</p>
-          <span className="text-[10px] text-slate-500 font-medium">{kpis.ativos} ativos no sistema</span>
-        </div>
-
-        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
-          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Frente de Caixa</span>
-          <p className="text-xl font-mono tabular-nums font-bold text-status-occupied">{kpis.caixas}</p>
-          <span className="text-[10px] text-status-occupied/80 font-medium">PDV & Mesas</span>
-        </div>
-
-        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
-          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Cozinha & KDS</span>
-          <p className="text-xl font-mono tabular-nums font-bold text-status-free">{kpis.cozinha}</p>
-          <span className="text-[10px] text-status-free/80 font-medium">Chapa & Perdas</span>
-        </div>
-
-        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
-          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Gerentes & Admins</span>
-          <p className="text-xl font-mono tabular-nums font-bold text-status-partial">{kpis.gerentes}</p>
-          <span className="text-[10px] text-status-partial/80 font-medium">Acesso Executivo</span>
-        </div>
-
-        <div className="bg-surface-card p-3.5 rounded-xl border border-surface-border space-y-1">
-          <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">Segurança de PIN</span>
-          <p className="text-xl font-mono tabular-nums font-bold text-brand-accent">Individual</p>
-          <span className="text-[10px] text-slate-500 font-medium">Rastreável por turno</span>
-        </div>
-      </div>
-
-      {/* Barra de Filtro e Busca */}
-      <div className="bg-surface-card p-3 rounded-xl border border-surface-border flex flex-col sm:flex-row items-center justify-between gap-3">
-        
-        {/* Filtro por Papel / Cargo */}
-        <div className="flex flex-wrap items-center gap-1 bg-surface-ground p-1 rounded-lg border border-surface-border w-full sm:w-auto">
-          {[
-            { id: 'todos', label: 'Todos' },
-            { id: 'caixa', label: 'Caixa' },
-            { id: 'cozinha', label: 'Cozinha' },
-            { id: 'gerente', label: 'Gerente' },
-            { id: 'admin', label: 'Admin' }
-          ].map(f => (
-            <button
-              key={f.id}
-              type="button"
-              onClick={() => setFilterRole(f.id as any)}
-              className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all cursor-pointer ${
-                filterRole === f.id
-                  ? 'bg-surface-elevated text-slate-100 border border-surface-borderHover shadow-xs'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {f.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Input de Busca */}
-        <div className="relative w-full sm:w-72">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Buscar por nome ou telefone..."
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            className="w-full input-util pl-9 text-xs"
-          />
-        </div>
-      </div>
-
-      {/* Tabela de Colaboradores (Data Grid) */}
-      <div className="bg-surface-card rounded-xl border border-surface-border overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="border-b border-surface-border bg-surface-ground/60">
-                <th className="py-3 px-4 text-[10px] font-medium tracking-wider text-slate-400 uppercase">Colaborador</th>
-                <th className="py-3 px-4 text-[10px] font-medium tracking-wider text-slate-400 uppercase">Cargo / Perfil</th>
-                <th className="py-3 px-4 text-[10px] font-medium tracking-wider text-slate-400 uppercase">Turno</th>
-                <th className="py-3 px-4 text-[10px] font-medium tracking-wider text-slate-400 uppercase">PIN de Acesso</th>
-                <th className="py-3 px-4 text-[10px] font-medium tracking-wider text-slate-400 uppercase">Status</th>
-                <th className="py-3 px-4 text-[10px] font-medium tracking-wider text-slate-400 uppercase text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-surface-border text-xs">
-              {filteredCollaborators.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="py-12 text-center text-slate-500">
-                    <Users size={32} className="mx-auto opacity-30 mb-2" />
-                    <p className="text-xs font-medium">Nenhum colaborador encontrado com os filtros atuais.</p>
-                  </td>
-                </tr>
+      <div className="max-w-7xl mx-auto relative z-10 space-y-6">
+        {/* Cabeçalho da Página */}
+        <PageHeader
+          title="Equipe & Colaboradores"
+          eyebrow="Gestão de Pessoas & Acessos"
+          description="Cadastre operadores de Caixa, Chapeiros de Cozinha e Gerentes com credenciais e PINs individuais."
+          actions={
+            <div className="flex flex-wrap items-center gap-2.5">
+              {/* Badge de Sincronização */}
+              {isCloudSynced ? (
+                <Badge variant="success" dot className="font-semibold text-xs py-1.5 px-3">
+                  Nuvem Ativa
+                </Badge>
               ) : (
-                filteredCollaborators.map(c => {
-                  const isPinVisible = showPinId === c.id;
-
-                  return (
-                    <tr key={c.id} className="hover:bg-surface-elevated/40 transition-colors">
-                      {/* Nome e Telefone */}
-                      <td className="py-3.5 px-4">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-surface-elevated border border-surface-border flex items-center justify-center font-bold text-brand-primary text-xs uppercase">
-                            {c.name.slice(0, 2)}
-                          </div>
-                          <div>
-                            <span className="font-semibold text-slate-100 block">{c.name}</span>
-                            {c.phone ? (
-                              <span className="text-[10px] text-slate-500 flex items-center gap-1">
-                                <Phone size={10} /> {c.phone}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-slate-600">Sem telefone</span>
-                            )}
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Cargo */}
-                      <td className="py-3.5 px-4">
-                        {getRoleBadge(c.role)}
-                      </td>
-
-                      {/* Turno */}
-                      <td className="py-3.5 px-4 capitalize text-slate-300">
-                        <span className="inline-flex items-center gap-1.5 text-slate-400">
-                          <Clock size={12} className="text-slate-500" />
-                          {c.shift || 'Integral'}
-                        </span>
-                      </td>
-
-                      {/* PIN de Acesso */}
-                      <td className="py-3.5 px-4">
-                        <div className="inline-flex items-center gap-2 bg-surface-ground px-2.5 py-1 rounded-md border border-surface-border font-mono tabular-nums">
-                          <KeyRound size={12} className="text-brand-accent" />
-                          <span className="text-slate-200 font-bold tracking-widest">
-                            {'Protegida'}
-                          </span>
-                        </div>
-                      </td>
-
-                      {/* Status */}
-                      <td className="py-3.5 px-4">
-                        <button
-                          type="button"
-                          onClick={() => handleToggleActive(c.id, c.name, c.isActive)}
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold cursor-pointer transition-colors border ${
-                            c.isActive
-                              ? 'bg-status-free/10 text-status-free border-status-free/20 hover:bg-status-free/20'
-                              : 'bg-status-danger/10 text-status-danger border-status-danger/20 hover:bg-status-danger/20'
-                          }`}
-                          title="Clique para alternar o status do colaborador"
-                        >
-                          {c.isActive ? <UserCheck size={12} /> : <UserX size={12} />}
-                          {c.isActive ? 'Ativo' : 'Inativo'}
-                        </button>
-                      </td>
-
-                      {/* Ações */}
-                      <td className="py-3.5 px-4 text-right">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditSheet(c)}
-                            className="p-1.5 text-slate-400 hover:text-slate-100 hover:bg-surface-elevated rounded-md cursor-pointer transition-colors"
-                            title="Editar Dados do Colaborador"
-                          >
-                            <Edit2 size={14} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDelete(c.id, c.name)}
-                            className="p-1.5 text-slate-500 hover:text-status-danger hover:bg-surface-elevated rounded-md cursor-pointer transition-colors"
-                            title="Excluir Colaborador"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      </>
-      ) : (
-        <div className="space-y-6 animate-in fade-in duration-200">
-          {/* CARDS DE KPIS DE DIÁRIAS */}
-          <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="p-4 rounded-2xl bg-gradient-to-br from-rose-950/40 via-red-950/20 to-surface-card border-2 border-rose-500/40 space-y-1 shadow-lg">
-              <span className="text-[10px] font-black uppercase tracking-wider text-rose-300">
-                Total Devedor (Diárias Acumuladas)
-              </span>
-              <p className="text-2xl md:text-3xl font-mono font-black text-white">
-                R$ {totalDueAllDiaristas.toFixed(2)}
-              </p>
-              <span className="text-[11px] text-rose-300/80 font-semibold block">
-                {Object.values(balancesMap).filter(b => b.totalDue > 0).length} diarista(s) com saldo a receber
-              </span>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-surface-card border border-surface-border space-y-1">
-              <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">
-                Diaristas Cadastrados
-              </span>
-              <p className="text-2xl md:text-3xl font-mono font-bold text-amber-400">
-                {diaristasList.length}
-              </p>
-              <span className="text-[11px] text-slate-500">
-                Colaboradores remunerados por diária
-              </span>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-surface-card border border-surface-border space-y-1">
-              <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">
-                Diárias no Mês
-              </span>
-              <p className="text-2xl md:text-3xl font-mono font-bold text-emerald-400">
-                {totalWorkedShiftsMonth} turnos
-              </p>
-              <span className="text-[11px] text-slate-500">
-                Trabalhadas neste mês corrente
-              </span>
-            </div>
-
-            <div className="p-4 rounded-2xl bg-surface-card border border-surface-border space-y-1">
-              <span className="text-[10px] font-medium tracking-wider text-slate-400 uppercase">
-                Total Pago em Acertos (Mês)
-              </span>
-              <p className="text-2xl md:text-3xl font-mono font-bold text-purple-400">
-                R$ {totalPaidMonth.toFixed(2)}
-              </p>
-              <span className="text-[11px] text-slate-500">
-                Valores já quitados via PIX/Dinheiro
-              </span>
-            </div>
-          </div>
-
-          {/* PAINEL DE ACERTO DE DIÁRIAS (CARDS INDIVIDUAIS DE QUITAÇÃO) */}
-          <div className="space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-surface-border">
-              <div>
-                <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                  <Wallet className="text-amber-400" size={20} />
-                  Painel de Acerto de Diárias & Agrados
-                </h2>
-                <p className="text-xs text-slate-400">
-                  Acompanhe em tempo real quem está juntando diárias, adicione bônus/agrados e realize acertos parciais ou totais.
-                </p>
-              </div>
-            </div>
-
-            {diaristasList.length === 0 ? (
-              <div className="glass-card rounded-2xl p-10 text-center border border-slate-800 space-y-3">
-                <Users className="w-12 h-12 text-slate-600 mx-auto" />
-                <h3 className="text-base font-bold text-white">Nenhum Diarista Cadastrado</h3>
-                <p className="text-xs text-slate-400 max-w-md mx-auto">
-                  Para utilizar o controle de diárias e acertos, edite um colaborador existente ou cadastre um novo selecionando o regime <strong>Diarista (Recebe por Diária)</strong>.
-                </p>
                 <button
                   type="button"
-                  onClick={handleOpenNewSheet}
-                  className="py-2 px-4 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors inline-flex items-center gap-1.5"
+                  onClick={() => setIsSqlModalOpen(true)}
+                  className="py-1.5 px-3 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer transition-colors"
+                  title="Clique para ativar a sincronização na nuvem Supabase"
                 >
-                  <Plus size={14} /> Cadastrar Diarista
+                  <span className="w-2 h-2 rounded-full bg-amber-400" />
+                  <span>Servidor Local Ativo</span>
+                  <span className="underline ml-1 font-bold text-[10px]">Ativar Nuvem</span>
                 </button>
+              )}
+
+              <Link href="/admin/dashboard">
+                <Button variant="secondary" leadingIcon={<BarChart3 size={15} aria-hidden="true" />}>
+                  DRE & Dashboard
+                </Button>
+              </Link>
+
+              <Button
+                onClick={handleOpenNewSheet}
+                leadingIcon={<Plus size={16} aria-hidden="true" />}
+              >
+                Novo Colaborador
+              </Button>
+            </div>
+          }
+        />
+
+        {/* Sub-Abas de Navegação Principal */}
+        <div className="flex items-center gap-2 border-b border-border-default pb-3">
+          <Button
+            variant={activeMainTab === 'equipe' ? 'primary' : 'secondary'}
+            onClick={() => setActiveMainTab('equipe')}
+            leadingIcon={<Users size={16} aria-hidden="true" />}
+          >
+            Equipe & Senhas ({collaborators.length})
+          </Button>
+
+          <Button
+            variant={activeMainTab === 'escala_diarias' ? 'primary' : 'secondary'}
+            onClick={() => setActiveMainTab('escala_diarias')}
+            leadingIcon={<Calendar size={16} aria-hidden="true" />}
+          >
+            Escala Quinzenal & Acerto de Diárias
+            {totalDueAllDiaristas > 0 && (
+              <span className="ml-1.5 px-2 py-0.5 bg-rose-600 text-white rounded-full font-mono text-[10px] font-black animate-pulse tabular-nums">
+                R$ {totalDueAllDiaristas.toFixed(2)}
+              </span>
+            )}
+          </Button>
+        </div>
+
+        {activeMainTab === 'equipe' ? (
+          <>
+            {/* Cards de KPIs da Equipe */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              <div className="bg-surface-card p-3.5 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-[10px] font-medium tracking-wider text-text-muted uppercase">Total Cadastrado</span>
+                <p className="text-xl font-mono tabular-nums font-bold text-text-primary">{kpis.total}</p>
+                <span className="text-[10px] text-text-muted font-medium">{kpis.ativos} ativos no sistema</span>
               </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {diaristasList.map(collab => {
-                  const balance = balancesMap[collab.id] || {
-                    totalEarned: 0,
-                    totalPaid: 0,
-                    totalDue: 0,
-                    daysWorkedCount: 0,
-                    bonusCount: 0,
-                    entries: []
-                  };
-                  const dailyRate = Number(collab.dailyRate) || 100;
-                  const hasDebt = balance.totalDue > 0;
 
-                  return (
-                    <div
-                      key={collab.id}
-                      className={`rounded-2xl p-5 border-2 flex flex-col justify-between gap-4 transition-all shadow-xl ${
-                        hasDebt
-                          ? 'bg-surface-card border-amber-500/50 hover:border-amber-400'
-                          : 'bg-surface-card border-surface-border'
-                      }`}
+              <div className="bg-surface-card p-3.5 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-[10px] font-medium tracking-wider text-text-muted uppercase">Frente de Caixa</span>
+                <p className="text-xl font-mono tabular-nums font-bold text-sky-400">{kpis.caixas}</p>
+                <span className="text-[10px] text-sky-400/80 font-medium">PDV & Mesas</span>
+              </div>
+
+              <div className="bg-surface-card p-3.5 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-[10px] font-medium tracking-wider text-text-muted uppercase">Cozinha & KDS</span>
+                <p className="text-xl font-mono tabular-nums font-bold text-emerald-400">{kpis.cozinha}</p>
+                <span className="text-[10px] text-emerald-400/80 font-medium">Chapa & Perdas</span>
+              </div>
+
+              <div className="bg-surface-card p-3.5 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-[10px] font-medium tracking-wider text-text-muted uppercase">Gerentes & Admins</span>
+                <p className="text-xl font-mono tabular-nums font-bold text-amber-400">{kpis.gerentes}</p>
+                <span className="text-[10px] text-amber-400/80 font-medium">Acesso Executivo</span>
+              </div>
+
+              <div className="bg-surface-card p-3.5 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-[10px] font-medium tracking-wider text-text-muted uppercase">Segurança de PIN</span>
+                <p className="text-xl font-mono tabular-nums font-bold text-brand-primary">Individual</p>
+                <span className="text-[10px] text-text-muted font-medium">Rastreável por turno</span>
+              </div>
+            </div>
+
+            {/* FilterBar Padronizada */}
+            <FilterBar
+              search={searchQuery}
+              onSearchChange={setSearchQuery}
+              searchLabel="Buscar colaboradores"
+              placeholder="Buscar por nome ou telefone..."
+              resultCount={filteredCollaborators.length}
+              totalCount={collaborators.length}
+              active={Boolean(searchQuery || filterRole !== 'todos')}
+              onClear={() => {
+                setSearchQuery('');
+                setFilterRole('todos');
+              }}
+            >
+              <div className="space-y-1.5 sm:w-48">
+                <label htmlFor="filter-role-select" className="block text-sm font-medium text-text-secondary">
+                  Filtrar por Cargo
+                </label>
+                <select
+                  id="filter-role-select"
+                  value={filterRole}
+                  onChange={(e) => setFilterRole(e.target.value as any)}
+                  className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-text-primary text-sm font-medium focus:outline-none focus:border-brand-primary cursor-pointer"
+                >
+                  <option value="todos">Todos os cargos</option>
+                  <option value="caixa">Operador de Caixa</option>
+                  <option value="cozinha">Equipe Cozinha</option>
+                  <option value="gerente">Gerente Operacional</option>
+                  <option value="admin">Administrador Master</option>
+                </select>
+              </div>
+            </FilterBar>
+
+            {/* Data Grid de Colaboradores */}
+            {filteredCollaborators.length === 0 ? (
+              <EmptyState
+                title={collaborators.length ? 'Nenhum colaborador encontrado' : 'Nenhum colaborador cadastrado'}
+                description={collaborators.length ? 'Tente buscar com outro termo ou alterar o filtro de cargo.' : 'Cadastre os operadores para controle de acesso seguro.'}
+                icon={<Users aria-hidden="true" />}
+                action={
+                  collaborators.length ? (
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setFilterRole('todos');
+                      }}
                     >
-                      <div>
-                        {/* Topo do Card */}
-                        <div className="flex items-start justify-between gap-2 pb-3 border-b border-surface-border">
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h3 className="text-base font-bold text-white">{collab.name}</h3>
-                              {getRoleBadge(collab.role)}
+                      Limpar filtros
+                    </Button>
+                  ) : (
+                    <Button onClick={handleOpenNewSheet} leadingIcon={<Plus size={16} aria-hidden="true" />}>
+                      Cadastrar Colaborador
+                    </Button>
+                  )
+                }
+              />
+            ) : (
+              <div className="overflow-x-auto rounded-dialog border border-border-default bg-surface-card shadow-elevated">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-border-default bg-surface-elevated/60 text-xs font-semibold text-text-muted uppercase tracking-wider">
+                      <th className="p-4">Colaborador</th>
+                      <th className="p-4">Cargo / Perfil</th>
+                      <th className="p-4">Turno</th>
+                      <th className="p-4">PIN de Acesso</th>
+                      <th className="p-4">Status</th>
+                      <th className="p-4 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-default/50 text-sm">
+                    {filteredCollaborators.map(c => {
+                      const isPinVisible = showPinId === c.id;
+
+                      return (
+                        <tr key={c.id} className="hover:bg-surface-elevated/40 transition-colors">
+                          {/* Nome e Telefone */}
+                          <td className="p-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-9 h-9 rounded-full bg-surface-elevated border border-border-default flex items-center justify-center font-bold text-brand-primary text-xs uppercase shrink-0">
+                                {c.name.slice(0, 2)}
+                              </div>
+                              <div>
+                                <span className="font-bold text-text-primary block">{c.name}</span>
+                                {c.phone ? (
+                                  <span className="text-xs text-text-muted flex items-center gap-1 font-mono tabular-nums">
+                                    <Phone size={11} aria-hidden="true" /> {c.phone}
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-text-muted">Sem telefone</span>
+                                )}
+                              </div>
                             </div>
-                            <span className="text-xs text-slate-400 font-medium mt-0.5 block">
-                              Diária Base: <strong className="text-slate-200">R$ {dailyRate.toFixed(2)}</strong>
+                          </td>
+
+                          {/* Cargo */}
+                          <td className="p-4">
+                            <Badge variant={getRoleBadgeVariant(c.role)} className="text-xs">
+                              {getRoleLabel(c.role)}
+                            </Badge>
+                          </td>
+
+                          {/* Turno */}
+                          <td className="p-4 capitalize text-text-secondary text-xs">
+                            <span className="inline-flex items-center gap-1.5">
+                              <Clock size={13} className="text-text-muted" aria-hidden="true" />
+                              {c.shift || 'Integral'}
                             </span>
-                          </div>
+                          </td>
 
-                          <button
-                            type="button"
-                            onClick={() => setHistoryModalCollab(collab)}
-                            className="p-2 bg-surface-ground hover:bg-surface-elevated text-slate-400 hover:text-white rounded-lg border border-surface-border text-xs flex items-center gap-1 cursor-pointer transition-colors"
-                            title="Ver histórico completo de lançamentos e acertos"
-                          >
-                            <History size={14} />
-                            <span className="text-[11px] font-semibold">Extrato</span>
-                          </button>
-                        </div>
+                          {/* PIN de Acesso */}
+                          <td className="p-4">
+                            <div className="inline-flex items-center gap-2 bg-surface-input px-2.5 py-1 rounded-control border border-border-default font-mono tabular-nums">
+                              <KeyRound size={13} className="text-brand-primary" aria-hidden="true" />
+                              <span className="text-text-primary font-bold tracking-widest text-xs">
+                                {isPinVisible ? (c.pin || '••••••') : '••••••'}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => setShowPinId(isPinVisible ? null : c.id)}
+                                className="text-text-muted hover:text-text-primary p-0.5 cursor-pointer transition-colors"
+                                title={isPinVisible ? 'Ocultar PIN' : 'Ver PIN'}
+                                aria-label={isPinVisible ? `Ocultar PIN de ${c.name}` : `Ver PIN de ${c.name}`}
+                              >
+                                {isPinVisible ? <EyeOff size={14} aria-hidden="true" /> : <Eye size={14} aria-hidden="true" />}
+                              </button>
+                            </div>
+                          </td>
 
-                        {/* Bloco de Saldo Devedor em Destaque */}
-                        <div className={`mt-3.5 p-3.5 rounded-xl border flex items-center justify-between gap-3 ${
-                          hasDebt
-                            ? 'bg-rose-950/30 border-rose-500/40 text-rose-200'
-                            : 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
-                        }`}>
-                          <div>
-                            <span className="text-[10px] font-black uppercase tracking-wider block opacity-80">
-                              {hasDebt ? 'Saldo Devedor a Pagar' : 'Status Financeiro'}
-                            </span>
-                            <span className="text-xl md:text-2xl font-mono font-black">
-                              {hasDebt ? `R$ ${balance.totalDue.toFixed(2)}` : 'R$ 0,00 (Em dia)'}
-                            </span>
-                          </div>
+                          {/* Status */}
+                          <td className="p-4">
+                            <Badge variant={c.isActive ? 'success' : 'neutral'} dot className="text-xs">
+                              {c.isActive ? 'Ativo' : 'Inativo'}
+                            </Badge>
+                          </td>
 
-                          {hasDebt ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setAcertoModalCollab(collab);
-                                setAcertoAmount(String(balance.totalDue));
-                                setAcertoNotes(`Quitação de diárias acumuladas (${collab.name})`);
-                              }}
-                              className="py-2 px-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95"
-                            >
-                              <DollarSign size={15} /> Pagar / Acerto
-                            </button>
-                          ) : (
-                            <span className="px-2.5 py-1 bg-emerald-500/20 text-emerald-300 text-xs font-bold rounded-lg border border-emerald-500/30 flex items-center gap-1">
-                              <CheckCircle2 size={14} /> Quitado
-                            </span>
-                          )}
-                        </div>
+                          {/* Ações */}
+                          <td className="p-4 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              {/* Toggle Ativo */}
+                              <button
+                                type="button"
+                                onClick={() => handleToggleActive(c.id, c.name, c.isActive)}
+                                className={`p-1.5 rounded-control transition-colors cursor-pointer ${
+                                  c.isActive 
+                                    ? 'text-text-muted hover:text-status-warning hover:bg-amber-500/10' 
+                                    : 'text-text-muted hover:text-emerald-400 hover:bg-emerald-500/10'
+                                }`}
+                                title={c.isActive ? 'Desativar colaborador' : 'Reativar colaborador'}
+                                aria-label={c.isActive ? `Desativar ${c.name}` : `Reativar ${c.name}`}
+                              >
+                                {c.isActive ? <UserX size={15} aria-hidden="true" /> : <UserCheck size={15} aria-hidden="true" />}
+                              </button>
 
-                        {/* Detalhamento dos Registros Acumulados */}
-                        <div className="grid grid-cols-3 gap-2 text-center text-xs mt-3 pt-2 border-t border-surface-border/60">
-                          <div className="bg-surface-ground p-2 rounded-xl">
-                            <span className="text-[10px] text-slate-500 block uppercase font-semibold">Diárias</span>
-                            <span className="font-mono font-bold text-slate-200">{balance.daysWorkedCount}x</span>
-                          </div>
-                          <div className="bg-surface-ground p-2 rounded-xl">
-                            <span className="text-[10px] text-slate-500 block uppercase font-semibold">Agrados</span>
-                            <span className="font-mono font-bold text-amber-400">{balance.bonusCount}x</span>
-                          </div>
-                          <div className="bg-surface-ground p-2 rounded-xl">
-                            <span className="text-[10px] text-slate-500 block uppercase font-semibold">Total Pago</span>
-                            <span className="font-mono font-bold text-purple-300">R$ {balance.totalPaid.toFixed(0)}</span>
-                          </div>
-                        </div>
+                              {/* Editar */}
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditSheet(c)}
+                                className="p-1.5 text-text-muted hover:text-text-primary hover:bg-surface-elevated rounded-control transition-colors cursor-pointer"
+                                title="Editar colaborador"
+                                aria-label={`Editar cadastro de ${c.name}`}
+                              >
+                                <Edit2 size={15} aria-hidden="true" />
+                              </button>
 
-                        {/* Status na Quinzena Atual */}
-                        <div className="mt-3 flex items-center justify-between text-[11px] pt-2 border-t border-surface-border">
-                          <span className="text-slate-400 font-medium">Plantões na quinzena:</span>
-                          <span className="font-mono font-bold text-amber-300">
-                            {currentQuinzenaInfo.days.filter(d => (collab.weeklySchedule || []).includes(d.dateStr)).length} de {currentQuinzenaInfo.days.length} dias
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Botões Rápidos de Ação Operacional */}
-                      <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-surface-border">
-                        <button
-                          type="button"
-                          onClick={() => handleQuickLogShift(collab)}
-                          className="py-2 px-2 bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors"
-                          title="Registra 1 diária de trabalho na data de hoje"
-                        >
-                          <CheckSquare size={14} className="text-emerald-400" />
-                          <span className="text-[10px]">+ Diária Hoje</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setBonusModalCollab(collab);
-                            setBonusAmount('30');
-                            setBonusNotes('Agrado pelo dia movimentado');
-                          }}
-                          className="py-2 px-2 bg-surface-ground hover:bg-surface-elevated text-amber-300 hover:text-amber-200 border border-surface-border rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors"
-                          title="Lançar valor extra de agrado ou bônus"
-                        >
-                          <Gift size={14} className="text-amber-400" />
-                          <span className="text-[10px]">+ Agrado</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setExtraShiftModalCollab(collab);
-                            setExtraShiftAmount(String(dailyRate));
-                            setExtraShiftDate(new Date().toISOString().slice(0, 10));
-                            setExtraShiftNotes('Diária extra / Cobertura');
-                          }}
-                          className="py-2 px-2 bg-surface-ground hover:bg-surface-elevated text-blue-300 hover:text-blue-200 border border-surface-border rounded-xl text-xs font-bold flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors"
-                          title="Lançar turno extra com data e valor ajustável"
-                        >
-                          <Calendar size={14} className="text-blue-400" />
-                          <span className="text-[10px]">+ Extra</span>
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
+                              {/* Excluir (Abre ConfirmDialog) */}
+                              <button
+                                type="button"
+                                onClick={() => setCollabToDelete(c)}
+                                className="p-1.5 text-text-muted hover:text-status-danger hover:bg-rose-500/10 rounded-control transition-colors cursor-pointer"
+                                title="Excluir cadastro permanentemente"
+                                aria-label={`Excluir cadastro de ${c.name}`}
+                              >
+                                <Trash2 size={15} aria-hidden="true" />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             )}
-          </div>
-
-          {/* MATRIZ VISUAL DA ESCALA QUINZENAL (15 EM 15 DIAS) COM REVEZAMENTO */}
-          <div className="bg-surface-card rounded-2xl border border-surface-border overflow-hidden shadow-xl space-y-4 p-5">
-            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-surface-border">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Calendar className="text-amber-400" size={18} />
-                  Matriz de Escala Quinzenal (Revezamento 15 em 15 Dias)
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Finais de semana e feriados destacados para planejar folgas alternadas. Clique no dia para alternar entre Plantão (Trabalha) e Folga.
+          </>
+        ) : (
+          /* ABA ESCALA QUINZENAL & DIÁRIAS */
+          <div className="space-y-6 animate-in fade-in duration-200">
+            {/* Cards de KPIs de Diárias */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="p-4 rounded-dialog bg-surface-card border-2 border-rose-500/30 space-y-1 shadow-card">
+                <span className="text-[10px] font-black uppercase tracking-wider text-rose-300">
+                  Total Devedor (Diárias Acumuladas)
+                </span>
+                <p className="text-2xl md:text-3xl font-mono font-black text-text-primary tabular-nums">
+                  R$ {totalDueAllDiaristas.toFixed(2)}
                 </p>
+                <span className="text-xs text-rose-300/80 font-semibold block">
+                  {Object.values(balancesMap).filter(b => b.totalDue > 0).length} diarista(s) com saldo a receber
+                </span>
               </div>
 
-              {/* Seletor e Navegador de Quinzena */}
-              <div className="flex items-center gap-2 bg-surface-ground p-1.5 rounded-xl border border-surface-border self-start md:self-auto">
-                <button
-                  type="button"
-                  onClick={handlePrevQuinzena}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-surface-elevated transition-colors cursor-pointer"
-                  title="Quinzena anterior"
-                >
-                  <ChevronLeft size={16} />
-                </button>
+              <div className="p-4 rounded-dialog bg-surface-card border border-border-default space-y-1 shadow-card">
+                <span className="text-[10px] font-medium tracking-wider text-text-muted uppercase">
+                  Diaristas Cadastrados
+                </span>
+                <p className="text-2xl md:text-3xl font-mono font-bold text-amber-400 tabular-nums">
+                  {diaristasList.length}
+                </p>
+                <span className="text-xs text-text-muted">
+                  Colaboradores remunerados por diária
+                </span>
+              </div>
 
-                <div className="px-3 py-1 bg-surface-card rounded-lg border border-surface-border text-center min-w-[210px]">
-                  <span className="text-xs font-black text-white block">
-                    {currentQuinzenaInfo.label}
-                  </span>
-                  <span className="text-[10px] text-slate-400 font-medium">
-                    {currentQuinzenaInfo.monthName} de {currentQuinzenaInfo.year}
-                  </span>
+              <div className="p-4 rounded-dialog bg-surface-card border border-border-default space-y-1 shadow-card">
+                <span className="text-[10px] font-medium tracking-wider text-text-muted uppercase">
+                  Diárias no Mês
+                </span>
+                <p className="text-2xl md:text-3xl font-mono font-bold text-emerald-400 tabular-nums">
+                  {totalWorkedShiftsMonth} turnos
+                </p>
+                <span className="text-xs text-text-muted">
+                  Trabalhadas no mês corrente
+                </span>
+              </div>
+
+              <div className="p-4 rounded-dialog bg-surface-card border border-border-default space-y-1 shadow-card">
+                <span className="text-[10px] font-medium tracking-wider text-text-muted uppercase">
+                  Total Pago em Acertos (Mês)
+                </span>
+                <p className="text-2xl md:text-3xl font-mono font-bold text-sky-400 tabular-nums">
+                  R$ {totalPaidMonth.toFixed(2)}
+                </p>
+                <span className="text-xs text-text-muted">
+                  Valores já quitados via PIX/Dinheiro
+                </span>
+              </div>
+            </div>
+
+            {/* PAINEL DE ACERTO DE DIÁRIAS (CARDS INDIVIDUAIS DE QUITAÇÃO) */}
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-border-default">
+                <div>
+                  <h2 className="text-lg font-bold text-text-primary flex items-center gap-2">
+                    <Wallet className="text-amber-400" size={20} aria-hidden="true" />
+                    Painel de Acerto de Diárias & Agrados
+                  </h2>
+                  <p className="text-xs text-text-muted">
+                    Acompanhe em tempo real quem está acumulando diárias, lance agrados e realize acertos de quitação.
+                  </p>
                 </div>
-
-                <button
-                  type="button"
-                  onClick={handleNextQuinzena}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-surface-elevated transition-colors cursor-pointer"
-                  title="Próxima quinzena"
-                >
-                  <ChevronRight size={16} />
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleGoToCurrentQuinzena}
-                  className="px-2.5 py-1 text-[11px] font-bold rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-colors cursor-pointer ml-1"
-                  title="Voltar para a quinzena atual"
-                >
-                  Hoje
-                </button>
               </div>
-            </div>
 
-            {/* Legenda Explicativa */}
-            <div className="flex items-center gap-3 text-[11px] flex-wrap text-slate-400 bg-surface-ground/50 p-2.5 rounded-xl border border-surface-border/50">
-              <span className="font-semibold text-slate-300">Legenda:</span>
-              <span className="inline-flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded-sm bg-emerald-500 inline-block" />
-                <strong className="text-emerald-300">Trabalha</strong> (Plantão)
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded-sm bg-slate-800 border border-slate-700 inline-block" />
-                <span className="text-slate-400">Folga</span>
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded-sm bg-amber-500/40 border border-amber-500 inline-block" />
-                <span className="text-amber-300 font-medium">Fim de Semana (Sáb/Dom)</span>
-              </span>
-              <span className="inline-flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded-sm bg-blue-500 ring-2 ring-blue-400 inline-block" />
-                <span className="text-blue-300 font-medium">Dia de Hoje</span>
-              </span>
-            </div>
-
-            {/* Tabela de Escala Quinzenal */}
-            <div className="overflow-x-auto rounded-xl border border-surface-border">
-              <table className="w-full text-xs text-left border-collapse min-w-[850px]">
-                <thead>
-                  <tr className="border-b border-surface-border text-slate-300 uppercase text-[10px] font-bold bg-surface-ground/90">
-                    <th className="py-3 px-3 min-w-[170px] sticky left-0 bg-surface-ground z-10">Colaborador</th>
-                    <th className="py-3 px-2 text-center min-w-[95px]">Regime</th>
-                    {currentQuinzenaInfo.days.map(d => {
-                      const isWeekend = d.isWeekend;
-                      const isToday = d.isToday;
-                      return (
-                        <th 
-                          key={d.dateStr} 
-                          className={`py-2 px-1 text-center min-w-[38px] transition-colors ${
-                            isToday
-                              ? 'bg-blue-600/25 border-x border-blue-500/40'
-                              : isWeekend
-                              ? 'bg-amber-500/10 border-x border-amber-500/20'
-                              : ''
-                          }`}
-                          title={d.holidayName ? `Feriado: ${d.holidayName}` : undefined}
-                        >
-                          <div className="flex flex-col items-center">
-                            <span className={`text-xs font-black ${
-                              isToday 
-                                ? 'text-blue-400 font-extrabold' 
-                                : isWeekend 
-                                ? 'text-amber-300 font-bold' 
-                                : 'text-slate-200'
-                            }`}>
-                              {d.dayNumber}
-                            </span>
-                            <span className={`text-[9px] uppercase font-bold tracking-tight ${
-                              isToday 
-                                ? 'text-blue-300' 
-                                : isWeekend 
-                                ? 'text-amber-400' 
-                                : 'text-slate-400'
-                            }`}>
-                              {d.dayNameShort}
-                            </span>
-                            {d.holidayName && (
-                              <span className="text-[8px] px-1 rounded bg-rose-500/30 text-rose-300 font-bold mt-0.5" title={d.holidayName}>
-                                Feriado
-                              </span>
-                            )}
-                          </div>
-                        </th>
-                      );
-                    })}
-                    <th className="py-3 px-3 text-center min-w-[120px]">Resumo Quinzena</th>
-                    <th className="py-3 px-3 text-right min-w-[130px]">Ação de Hoje</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-surface-border">
-                  {collaborators.filter(c => c.isActive).map(collab => {
-                    const scheduledDates: string[] = Array.isArray(collab.weeklySchedule) ? collab.weeklySchedule : [];
-                    const isDiarista = collab.payType === 'diarista';
-
-                    // Totais do Colaborador nesta Quinzena
-                    const shiftsInQuinzena = currentQuinzenaInfo.days.filter(d => scheduledDates.includes(d.dateStr)).length;
-                    const offDaysInQuinzena = currentQuinzenaInfo.days.length - shiftsInQuinzena;
-                    const weekendsWorked = currentQuinzenaInfo.days.filter(d => d.isWeekend && scheduledDates.includes(d.dateStr)).length;
-                    const totalWeekends = currentQuinzenaInfo.days.filter(d => d.isWeekend).length;
-
-                    // Diária hoje
-                    const todayStr = new Date().toISOString().slice(0, 10);
-                    const isScheduledToday = scheduledDates.includes(todayStr);
-                    const alreadyLoggedToday = wageEntries.some(e => e.collaboratorId === collab.id && e.date === todayStr && (e.type === 'diaria' || e.type === 'diaria_extra'));
+              {diaristasList.length === 0 ? (
+                <EmptyState
+                  title="Nenhum diarista cadastrado"
+                  description="Para utilizar o controle de diárias e acertos, edite um colaborador existente ou cadastre um novo selecionando o regime Diarista."
+                  icon={<Users aria-hidden="true" />}
+                  action={
+                    <Button onClick={handleOpenNewSheet} leadingIcon={<Plus size={16} aria-hidden="true" />}>
+                      Cadastrar Diarista
+                    </Button>
+                  }
+                />
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                  {diaristasList.map(collab => {
+                    const balance = balancesMap[collab.id] || {
+                      totalEarned: 0,
+                      totalPaid: 0,
+                      totalDue: 0,
+                      daysWorkedCount: 0,
+                      bonusCount: 0,
+                      entries: []
+                    };
+                    const dailyRate = Number(collab.dailyRate) || 100;
+                    const hasDebt = balance.totalDue > 0;
 
                     return (
-                      <tr key={collab.id} className="hover:bg-surface-ground/50 transition-colors">
-                        <td className="py-2.5 px-3 font-semibold text-white sticky left-0 bg-surface-card z-10 border-r border-surface-border/50">
-                          <div className="flex flex-col">
-                            <span className="truncate max-w-[150px] font-bold text-slate-100">{collab.name}</span>
-                            <div className="flex items-center gap-1.5 mt-0.5">
-                              <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold ${
-                                collab.role === 'admin' ? 'bg-purple-500/20 text-purple-300' :
-                                collab.role === 'gerente' ? 'bg-amber-500/20 text-amber-300' :
-                                collab.role === 'cozinha' ? 'bg-emerald-500/20 text-emerald-300' :
-                                'bg-blue-500/20 text-blue-300'
-                              }`}>
-                                {collab.role.toUpperCase()}
+                      <div
+                        key={collab.id}
+                        className={`rounded-dialog p-5 border-2 flex flex-col justify-between gap-4 transition-all shadow-elevated ${
+                          hasDebt
+                            ? 'bg-surface-card border-amber-500/50 hover:border-amber-400'
+                            : 'bg-surface-card border-border-default'
+                        }`}
+                      >
+                        <div>
+                          {/* Topo do Card */}
+                          <div className="flex items-start justify-between gap-2 pb-3 border-b border-border-default">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <h3 className="text-base font-bold text-text-primary">{collab.name}</h3>
+                                <Badge variant={getRoleBadgeVariant(collab.role)} className="text-[10px]">
+                                  {getRoleLabel(collab.role)}
+                                </Badge>
+                              </div>
+                              <span className="text-xs text-text-muted font-medium mt-0.5 block">
+                                Diária Base: <strong className="text-text-primary font-mono tabular-nums">R$ {dailyRate.toFixed(2)}</strong>
                               </span>
-                              <span className="text-[10px] text-slate-500">{collab.shift}</span>
                             </div>
-                          </div>
-                        </td>
 
-                        <td className="py-2.5 px-2 text-center">
-                          {isDiarista ? (
-                            <span className="px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold text-[10px] border border-amber-500/30 whitespace-nowrap">
-                              Diarista (R$ {Number(collab.dailyRate || 100).toFixed(0)})
-                            </span>
-                          ) : (
-                            <span className="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 font-bold text-[10px] border border-blue-500/30">
-                              Mensalista
-                            </span>
-                          )}
-                        </td>
-
-                        {currentQuinzenaInfo.days.map(d => {
-                          const isScheduled = scheduledDates.includes(d.dateStr);
-                          const isWeekend = d.isWeekend;
-                          const isToday = d.isToday;
-
-                          return (
-                            <td 
-                              key={d.dateStr} 
-                              className={`py-1 px-1 text-center ${
-                                isToday 
-                                  ? 'bg-blue-600/10 border-x border-blue-500/20' 
-                                  : isWeekend 
-                                  ? 'bg-amber-500/5 border-x border-amber-500/10' 
-                                  : ''
-                              }`}
+                            <Button
+                              size="sm"
+                              variant="secondary"
+                              onClick={() => setHistoryModalCollab(collab)}
+                              leadingIcon={<History size={14} aria-hidden="true" />}
                             >
-                              <button
-                                type="button"
-                                onClick={() => handleToggleScheduleDate(collab, d.dateStr)}
-                                className={`w-8 h-8 rounded-lg text-[11px] font-black cursor-pointer transition-all flex items-center justify-center mx-auto shadow-xs ${
-                                  isScheduled
-                                    ? 'bg-emerald-600 text-white hover:bg-emerald-500 shadow-emerald-900/30'
-                                    : 'bg-surface-ground text-slate-600 hover:text-slate-300 hover:bg-surface-elevated border border-surface-border/60'
-                                }`}
-                                title={
-                                  isScheduled
-                                    ? `${collab.name}: Escalado para trabalhar no dia ${d.dayNumber} (${d.dayNameShort}). Clique para colocar de folga.`
-                                    : `${collab.name}: Folga no dia ${d.dayNumber} (${d.dayNameShort}). Clique para escalar plantão.`
-                                }
-                              >
-                                {isScheduled ? 'T' : 'F'}
-                              </button>
-                            </td>
-                          );
-                        })}
+                              Extrato
+                            </Button>
+                          </div>
 
-                        {/* Resumo da Quinzena */}
-                        <td className="py-2.5 px-3 text-center border-l border-surface-border/50">
-                          <div className="flex flex-col items-center">
-                            <div className="flex items-center gap-1 font-mono text-[11px]">
-                              <span className="text-emerald-400 font-bold" title="Dias trabalhados">{shiftsInQuinzena}T</span>
-                              <span className="text-slate-500">/</span>
-                              <span className="text-slate-400" title="Folgas">{offDaysInQuinzena}F</span>
-                            </div>
-                            <span className="text-[9px] text-amber-300/80 font-medium mt-0.5">
-                              {weekendsWorked}/{totalWeekends} fds trab.
-                            </span>
-                            {isDiarista && (
-                              <span className="text-[10px] font-mono font-bold text-white mt-0.5">
-                                ~ R$ {(shiftsInQuinzena * (Number(collab.dailyRate) || 100)).toFixed(0)}
+                          {/* Bloco de Saldo Devedor em Destaque */}
+                          <div className={`mt-3.5 p-3.5 rounded-control border flex items-center justify-between gap-3 ${
+                            hasDebt
+                              ? 'bg-rose-950/30 border-rose-500/40 text-rose-200'
+                              : 'bg-emerald-950/30 border-emerald-500/30 text-emerald-300'
+                          }`}>
+                            <div>
+                              <span className="text-[10px] font-black uppercase tracking-wider block opacity-80">
+                                {hasDebt ? 'Saldo Devedor a Pagar' : 'Status Financeiro'}
                               </span>
+                              <span className="text-xl md:text-2xl font-mono font-black tabular-nums">
+                                {hasDebt ? `R$ ${balance.totalDue.toFixed(2)}` : 'R$ 0,00 (Em dia)'}
+                              </span>
+                            </div>
+
+                            {hasDebt ? (
+                              <Button
+                                size="sm"
+                                onClick={() => {
+                                  setAcertoModalCollab(collab);
+                                  setAcertoAmount(String(balance.totalDue));
+                                  setAcertoNotes(`Quitação de diárias acumuladas (${collab.name})`);
+                                }}
+                                leadingIcon={<DollarSign size={15} aria-hidden="true" />}
+                              >
+                                Pagar
+                              </Button>
+                            ) : (
+                              <Badge variant="success" dot className="text-xs font-bold">
+                                Quitado
+                              </Badge>
                             )}
                           </div>
-                        </td>
 
-                        {/* Ação Hoje */}
-                        <td className="py-2.5 px-3 text-right">
-                          {isDiarista ? (
-                            alreadyLoggedToday ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] text-emerald-400 font-bold py-1 px-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30">
-                                <CheckCircle2 size={12} /> Diária Lançada
-                              </span>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => handleQuickLogShift(collab)}
-                                className={`py-1 px-2.5 rounded-lg font-bold text-[11px] transition-all cursor-pointer inline-flex items-center gap-1 ${
-                                  isScheduledToday
-                                    ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 font-black shadow-xs'
-                                    : 'bg-surface-ground hover:bg-surface-elevated text-slate-400 hover:text-slate-200 border border-surface-border'
-                                }`}
-                                title={isScheduledToday ? 'Confirmar diária trabalhada de hoje' : 'Lançar diária avulsa de hoje'}
-                              >
-                                <CheckSquare size={12} /> + Diária Hoje
-                              </button>
-                            )
-                          ) : (
-                            <span className="text-[10px] text-slate-500 italic">Salário Fixo</span>
-                          )}
-                        </td>
-                      </tr>
+                          {/* Detalhamento dos Registros Acumulados */}
+                          <div className="grid grid-cols-3 gap-2 text-center text-xs mt-3 pt-2 border-t border-border-default">
+                            <div className="bg-surface-elevated/40 p-2 rounded-control">
+                              <span className="text-[10px] text-text-muted block uppercase font-semibold">Diárias</span>
+                              <span className="font-mono font-bold text-text-primary tabular-nums">{balance.daysWorkedCount}x</span>
+                            </div>
+                            <div className="bg-surface-elevated/40 p-2 rounded-control">
+                              <span className="text-[10px] text-text-muted block uppercase font-semibold">Agrados</span>
+                              <span className="font-mono font-bold text-amber-400 tabular-nums">{balance.bonusCount}x</span>
+                            </div>
+                            <div className="bg-surface-elevated/40 p-2 rounded-control">
+                              <span className="text-[10px] text-text-muted block uppercase font-semibold">Total Pago</span>
+                              <span className="font-mono font-bold text-sky-300 tabular-nums">R$ {balance.totalPaid.toFixed(0)}</span>
+                            </div>
+                          </div>
+
+                          {/* Status na Quinzena Atual */}
+                          <div className="mt-3 flex items-center justify-between text-xs pt-2 border-t border-border-default">
+                            <span className="text-text-muted font-medium">Plantões na quinzena:</span>
+                            <span className="font-mono font-bold text-amber-300 tabular-nums">
+                              {currentQuinzenaInfo.days.filter(d => (collab.weeklySchedule || []).includes(d.dateStr)).length} de {currentQuinzenaInfo.days.length} dias
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Botões Rápidos de Ação Operacional */}
+                        <div className="grid grid-cols-3 gap-1.5 pt-2 border-t border-border-default">
+                          <button
+                            type="button"
+                            onClick={() => handleQuickLogShift(collab)}
+                            className="py-2 px-2 bg-surface-elevated/60 hover:bg-surface-elevated text-text-secondary hover:text-text-primary border border-border-default rounded-control text-xs font-bold flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors"
+                            title="Registra 1 diária de trabalho na data de hoje"
+                          >
+                            <CheckSquare size={14} className="text-emerald-400" aria-hidden="true" />
+                            <span className="text-[10px]">+ Diária Hoje</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBonusModalCollab(collab);
+                              setBonusAmount('30');
+                              setBonusNotes('Agrado pelo dia movimentado');
+                            }}
+                            className="py-2 px-2 bg-surface-elevated/60 hover:bg-surface-elevated text-amber-300 hover:text-amber-200 border border-border-default rounded-control text-xs font-bold flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors"
+                            title="Lançar valor extra de agrado ou bônus"
+                          >
+                            <Gift size={14} className="text-amber-400" aria-hidden="true" />
+                            <span className="text-[10px]">+ Agrado</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setExtraShiftModalCollab(collab);
+                              setExtraShiftAmount(String(dailyRate));
+                              setExtraShiftDate(new Date().toISOString().slice(0, 10));
+                              setExtraShiftNotes('Diária extra / Cobertura');
+                            }}
+                            className="py-2 px-2 bg-surface-elevated/60 hover:bg-surface-elevated text-sky-300 hover:text-sky-200 border border-border-default rounded-control text-xs font-bold flex flex-col items-center justify-center gap-1 cursor-pointer transition-colors"
+                            title="Lançar turno extra com data e valor ajustável"
+                          >
+                            <Calendar size={14} className="text-sky-400" aria-hidden="true" />
+                            <span className="text-[10px]">+ Extra</span>
+                          </button>
+                        </div>
+                      </div>
                     );
                   })}
-                </tbody>
+                </div>
+              )}
+            </div>
 
-                {/* Rodapé com Total de Colaboradores Escalados por Dia */}
-                <tfoot>
-                  <tr className="bg-surface-ground/90 border-t-2 border-surface-border text-[10px] font-bold text-slate-300">
-                    <td className="py-2.5 px-3 sticky left-0 bg-surface-ground z-10">
-                      Total Escalados / Dia:
-                    </td>
-                    <td className="py-2.5 px-2 text-center text-slate-500">
-                      —
-                    </td>
-                    {currentQuinzenaInfo.days.map(d => {
-                      const totalOnDuty = collaborators.filter(c => c.isActive && (c.weeklySchedule || []).includes(d.dateStr)).length;
-                      const isWeekend = d.isWeekend;
-                      const isToday = d.isToday;
+            {/* MATRIZ VISUAL DA ESCALA QUINZENAL */}
+            <div className="bg-surface-card rounded-dialog border border-border-default overflow-hidden shadow-elevated space-y-4 p-5">
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-border-default">
+                <div>
+                  <h3 className="text-base font-bold text-text-primary flex items-center gap-2">
+                    <Calendar className="text-amber-400" size={18} aria-hidden="true" />
+                    Matriz de Escala Quinzenal (Revezamento 15 em 15 Dias)
+                  </h3>
+                  <p className="text-xs text-text-muted mt-0.5">
+                    Finais de semana e feriados destacados para planejar folgas alternadas. Clique no dia para alternar entre Plantão (T) e Folga (F).
+                  </p>
+                </div>
+
+                {/* Seletor e Navegador de Quinzena */}
+                <div className="flex items-center gap-2 bg-surface-elevated/40 p-1.5 rounded-control border border-border-default self-start md:self-auto">
+                  <button
+                    type="button"
+                    onClick={handlePrevQuinzena}
+                    className="p-1.5 rounded-control text-text-muted hover:text-text-primary hover:bg-surface-elevated transition-colors cursor-pointer"
+                    title="Quinzena anterior"
+                    aria-label="Quinzena anterior"
+                  >
+                    <ChevronLeft size={16} aria-hidden="true" />
+                  </button>
+
+                  <div className="px-3 py-1 bg-surface-card rounded-control border border-border-default text-center min-w-[210px]">
+                    <span className="text-xs font-black text-text-primary block">
+                      {currentQuinzenaInfo.label}
+                    </span>
+                    <span className="text-[10px] text-text-muted font-medium">
+                      {currentQuinzenaInfo.monthName} de {currentQuinzenaInfo.year}
+                    </span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleNextQuinzena}
+                    className="p-1.5 rounded-control text-text-muted hover:text-text-primary hover:bg-surface-elevated transition-colors cursor-pointer"
+                    title="Próxima quinzena"
+                    aria-label="Próxima quinzena"
+                  >
+                    <ChevronRight size={16} aria-hidden="true" />
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleGoToCurrentQuinzena}
+                    className="px-2.5 py-1 text-[11px] font-bold rounded-control bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 transition-colors cursor-pointer ml-1"
+                    title="Voltar para a quinzena atual"
+                  >
+                    Hoje
+                  </button>
+                </div>
+              </div>
+
+              {/* Legenda Explicativa */}
+              <div className="flex items-center gap-3 text-xs flex-wrap text-text-muted bg-surface-elevated/30 p-2.5 rounded-control border border-border-default">
+                <span className="font-semibold text-text-secondary">Legenda:</span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-emerald-500 inline-block" />
+                  <strong className="text-emerald-300">Trabalha</strong> (T)
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-surface-ground border border-border-default inline-block" />
+                  <span className="text-text-muted">Folga (F)</span>
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-amber-500/40 border border-amber-500 inline-block" />
+                  <span className="text-amber-300 font-medium">Fim de Semana (Sáb/Dom)</span>
+                </span>
+                <span className="inline-flex items-center gap-1">
+                  <span className="w-2.5 h-2.5 rounded-xs bg-sky-500 ring-2 ring-sky-400 inline-block" />
+                  <span className="text-sky-300 font-medium">Dia de Hoje</span>
+                </span>
+              </div>
+
+              {/* Tabela de Escala Quinzenal */}
+              <div className="overflow-x-auto rounded-control border border-border-default">
+                <table className="w-full text-xs text-left border-collapse min-w-[850px]">
+                  <thead>
+                    <tr className="border-b border-border-default text-text-muted uppercase text-[10px] font-bold bg-surface-elevated/60">
+                      <th className="p-3 min-w-[170px] sticky left-0 bg-surface-card z-10">Colaborador</th>
+                      <th className="p-2 text-center min-w-[95px]">Regime</th>
+                      {currentQuinzenaInfo.days.map(d => {
+                        const isWeekend = d.isWeekend;
+                        const isToday = d.isToday;
+                        return (
+                          <th 
+                            key={d.dateStr} 
+                            className={`py-2 px-1 text-center min-w-[38px] transition-colors ${
+                              isToday
+                                ? 'bg-sky-600/25 border-x border-sky-500/40'
+                                : isWeekend
+                                ? 'bg-amber-500/10 border-x border-amber-500/20'
+                                : ''
+                            }`}
+                            title={d.holidayName ? `Feriado: ${d.holidayName}` : undefined}
+                          >
+                            <div className="flex flex-col items-center font-mono tabular-nums">
+                              <span className={`text-xs font-black ${
+                                isToday 
+                                  ? 'text-sky-400 font-extrabold' 
+                                  : isWeekend 
+                                  ? 'text-amber-300 font-bold' 
+                                  : 'text-text-primary'
+                              }`}>
+                                {d.dayNumber}
+                              </span>
+                              <span className={`text-[9px] uppercase font-bold tracking-tight ${
+                                isToday 
+                                  ? 'text-sky-300' 
+                                  : isWeekend 
+                                  ? 'text-amber-400' 
+                                  : 'text-text-muted'
+                              }`}>
+                                {d.dayNameShort}
+                              </span>
+                              {d.holidayName && (
+                                <span className="text-[8px] px-1 rounded bg-rose-500/30 text-rose-300 font-bold mt-0.5" title={d.holidayName}>
+                                  Feriado
+                                </span>
+                              )}
+                            </div>
+                          </th>
+                        );
+                      })}
+                      <th className="p-3 text-center min-w-[120px]">Resumo Quinzena</th>
+                      <th className="p-3 text-right min-w-[130px]">Ação de Hoje</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-default/50">
+                    {collaborators.filter(c => c.isActive).map(collab => {
+                      const scheduledDates: string[] = Array.isArray(collab.weeklySchedule) ? collab.weeklySchedule : [];
+                      const isDiarista = collab.payType === 'diarista';
+
+                      const shiftsInQuinzena = currentQuinzenaInfo.days.filter(d => scheduledDates.includes(d.dateStr)).length;
+                      const offDaysInQuinzena = currentQuinzenaInfo.days.length - shiftsInQuinzena;
+                      const weekendsWorked = currentQuinzenaInfo.days.filter(d => d.isWeekend && scheduledDates.includes(d.dateStr)).length;
+                      const totalWeekends = currentQuinzenaInfo.days.filter(d => d.isWeekend).length;
+
+                      const todayStr = new Date().toISOString().slice(0, 10);
+                      const isScheduledToday = scheduledDates.includes(todayStr);
+                      const alreadyLoggedToday = wageEntries.some(e => e.collaboratorId === collab.id && e.date === todayStr && (e.type === 'diaria' || e.type === 'diaria_extra'));
 
                       return (
-                        <td 
-                          key={d.dateStr} 
-                          className={`py-2 px-1 text-center font-mono ${
-                            isToday 
-                              ? 'bg-blue-600/20 text-blue-300 font-black' 
-                              : isWeekend 
-                              ? 'bg-amber-500/10 text-amber-300' 
-                              : 'text-slate-300'
-                          }`}
-                          title={`Total de ${totalOnDuty} pessoas escaladas em ${d.dayNumber}/${currentQuinzenaInfo.month + 1}`}
-                        >
-                          <span className={`inline-block px-1.5 py-0.5 rounded ${
-                            totalOnDuty === 0 
-                              ? 'bg-rose-500/20 text-rose-300' 
-                              : 'bg-surface-card text-white font-bold'
-                          }`}>
-                            {totalOnDuty}
-                          </span>
-                        </td>
+                        <tr key={collab.id} className="hover:bg-surface-elevated/40 transition-colors">
+                          <td className="py-2.5 px-3 font-semibold text-text-primary sticky left-0 bg-surface-card z-10 border-r border-border-default">
+                            <div className="flex flex-col">
+                              <span className="truncate max-w-[150px] font-bold text-text-primary">{collab.name}</span>
+                              <div className="flex items-center gap-1.5 mt-0.5">
+                                <Badge variant={getRoleBadgeVariant(collab.role)} className="text-[9px] px-1.5 py-0">
+                                  {collab.role.toUpperCase()}
+                                </Badge>
+                                <span className="text-[10px] text-text-muted capitalize">{collab.shift}</span>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="py-2.5 px-2 text-center">
+                            {isDiarista ? (
+                              <Badge variant="warning" className="text-[10px] font-mono tabular-nums whitespace-nowrap">
+                                Diarista (R$ {Number(collab.dailyRate || 100).toFixed(0)})
+                              </Badge>
+                            ) : (
+                              <Badge variant="info" className="text-[10px]">
+                                Mensalista
+                              </Badge>
+                            )}
+                          </td>
+
+                          {currentQuinzenaInfo.days.map(d => {
+                            const isScheduled = scheduledDates.includes(d.dateStr);
+                            const isWeekend = d.isWeekend;
+                            const isToday = d.isToday;
+
+                            return (
+                              <td 
+                                key={d.dateStr} 
+                                className={`py-1 px-1 text-center ${
+                                  isToday 
+                                    ? 'bg-sky-600/10 border-x border-sky-500/20' 
+                                    : isWeekend 
+                                    ? 'bg-amber-500/5 border-x border-amber-500/10' 
+                                    : ''
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleScheduleDate(collab, d.dateStr)}
+                                  className={`w-8 h-8 rounded-control text-xs font-black cursor-pointer transition-all flex items-center justify-center mx-auto shadow-xs ${
+                                    isScheduled
+                                      ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                                      : 'bg-surface-elevated/40 text-text-muted hover:text-text-primary hover:bg-surface-elevated border border-border-default'
+                                  }`}
+                                  title={
+                                    isScheduled
+                                      ? `${collab.name}: Escalado para trabalhar no dia ${d.dayNumber}. Clique para folga.`
+                                      : `${collab.name}: Folga no dia ${d.dayNumber}. Clique para escalar plantão.`
+                                  }
+                                  aria-label={`${collab.name} no dia ${d.dayNumber}: ${isScheduled ? 'Trabalha' : 'Folga'}`}
+                                >
+                                  {isScheduled ? 'T' : 'F'}
+                                </button>
+                              </td>
+                            );
+                          })}
+
+                          {/* Resumo da Quinzena */}
+                          <td className="py-2.5 px-3 text-center border-l border-border-default">
+                            <div className="flex flex-col items-center font-mono tabular-nums">
+                              <div className="flex items-center gap-1 text-xs">
+                                <span className="text-emerald-400 font-bold" title="Dias trabalhados">{shiftsInQuinzena}T</span>
+                                <span className="text-text-muted">/</span>
+                                <span className="text-text-secondary" title="Folgas">{offDaysInQuinzena}F</span>
+                              </div>
+                              <span className="text-[10px] text-amber-300/80 font-medium mt-0.5">
+                                {weekendsWorked}/{totalWeekends} fds trab.
+                              </span>
+                              {isDiarista && (
+                                <span className="text-[10px] font-bold text-text-primary mt-0.5">
+                                  ~ R$ {(shiftsInQuinzena * (Number(collab.dailyRate) || 100)).toFixed(0)}
+                                </span>
+                              )}
+                            </div>
+                          </td>
+
+                          {/* Ação Hoje */}
+                          <td className="py-2.5 px-3 text-right">
+                            {isDiarista ? (
+                              alreadyLoggedToday ? (
+                                <Badge variant="success" dot className="text-xs">
+                                  Diária Lançada
+                                </Badge>
+                              ) : (
+                                <Button
+                                  size="sm"
+                                  variant={isScheduledToday ? 'primary' : 'secondary'}
+                                  onClick={() => handleQuickLogShift(collab)}
+                                  leadingIcon={<CheckSquare size={13} aria-hidden="true" />}
+                                >
+                                  + Diária
+                                </Button>
+                              )
+                            ) : (
+                              <span className="text-xs text-text-muted italic">Mensalista</span>
+                            )}
+                          </td>
+                        </tr>
                       );
                     })}
-                    <td colSpan={2} className="py-2.5 px-3 text-right text-slate-500 text-[10px]">
-                      Dica: Alterne os fins de semana (Sáb/Dom) para revezar a equipe.
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* GAVETA LATERAL DESLIZANTE (SLIDING SHEET): CADASTRO / EDIÇÃO */}
       <SlidingSheet
@@ -1349,64 +1316,62 @@ export default function ColaboradoresPage() {
         onClose={() => setIsSheetOpen(false)}
         title={
           <div className="flex items-center gap-2">
-            <Shield className="text-brand-primary" size={18} />
+            <Shield className="text-brand-primary" size={18} aria-hidden="true" />
             <span>{editingCollab ? `Editar: ${editingCollab.name}` : 'Cadastrar Colaborador'}</span>
           </div>
         }
         description="Defina as credenciais, nível de permissão e remuneração do colaborador."
         footer={
-          <div className="flex gap-2">
-            <button
-              type="button"
+          <div className="flex gap-2 w-full justify-end">
+            <Button
+              variant="secondary"
               onClick={() => setIsSheetOpen(false)}
-              className="flex-1 py-2.5 bg-surface-ground hover:bg-surface-elevated text-slate-300 border border-surface-border rounded-lg text-xs font-semibold cursor-pointer transition-colors"
             >
               Cancelar
-            </button>
-            <button
-              type="button"
-              onClick={handleSaveCollaborator}
-              disabled={isSaving}
-              className="flex-1 py-2.5 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold cursor-pointer transition-colors disabled:opacity-50"
+            </Button>
+            <Button
+              onClick={() => handleSaveCollaborator()}
+              loading={isSaving}
             >
-              {isSaving ? 'Salvando...' : editingCollab ? 'Salvar Alterações' : 'Confirmar Cadastro'}
-            </button>
+              {editingCollab ? 'Salvar Alterações' : 'Confirmar Cadastro'}
+            </Button>
           </div>
         }
       >
         <form onSubmit={handleSaveCollaborator} className="space-y-4 text-xs">
-          
-          {/* SEÇÃO 1: DADOS BÁSICOS */}
+          {/* Nome */}
           <div>
-            <label className="block text-slate-300 font-semibold mb-1">
+            <label htmlFor="collab-name-input" className="block text-text-secondary font-semibold mb-1">
               Nome Completo do Colaborador *
             </label>
             <input
+              id="collab-name-input"
               type="text"
               required
               placeholder="Ex: João da Silva"
               value={nameInput}
               onChange={e => setNameInput(e.target.value)}
-              className="w-full input-util text-sm"
+              className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-text-primary text-sm font-medium focus:outline-none focus:border-brand-primary"
             />
           </div>
 
-          {/* Cargo / Perfil */}
+          {/* Cargo */}
           <div>
-            <label className="block text-slate-300 font-semibold mb-1">
+            <label htmlFor="collab-role-input" className="block text-text-secondary font-semibold mb-1">
               Função / Perfil de Acesso *
             </label>
             <select
+              id="collab-role-input"
               value={roleInput}
               onChange={e => setRoleInput(e.target.value as CollaboratorRole)}
-              className="w-full input-util text-xs cursor-pointer"
+              className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-text-primary text-xs font-medium focus:outline-none focus:border-brand-primary cursor-pointer"
             >
               <option value="caixa">Operador de Caixa (Frente de Caixa, PDV & Mesas)</option>
               <option value="cozinha">Equipe de Cozinha (KDS Chapa, Fila & Perdas)</option>
               <option value="gerente">Gerente Operacional (Gestão Executiva, DRE, Estoque, Caixa & KDS)</option>
               <option value="admin">Administrador Master (Acesso Irrestrito + Gestão de Pessoas)</option>
             </select>
-            <span className="text-[10px] text-slate-500 mt-1 block">
+            <span className="text-[10px] text-text-muted mt-1 block">
               {roleInput === 'caixa' && 'Acesso restrito ao Caixa, lançamento de pedidos e mapa do salão.'}
               {roleInput === 'cozinha' && 'Acesso restrito à tela do KDS da chapa e controle de perdas.'}
               {roleInput === 'gerente' && 'Acesso a DRE, compras, suprimentos, auditoria e fechamento de turnos.'}
@@ -1414,13 +1379,14 @@ export default function ColaboradoresPage() {
             </span>
           </div>
 
-          {/* SEÇÃO 2: SENHA / PIN DE ACESSO */}
-          <div className="p-3 rounded-xl bg-surface-ground border border-surface-border space-y-1.5">
-            <label className="block text-slate-200 font-semibold">
+          {/* Senha / PIN */}
+          <div className="p-3.5 rounded-control bg-surface-elevated/40 border border-border-default space-y-1.5">
+            <label htmlFor="collab-pin-input" className="block text-text-primary font-semibold">
               {editingCollab ? 'Alterar Senha / PIN de Acesso' : 'Senha / PIN de Acesso *'}
             </label>
             <div className="relative">
               <input
+                id="collab-pin-input"
                 type={showModalPin ? 'text' : 'password'}
                 required={!editingCollab}
                 maxLength={128}
@@ -1428,82 +1394,81 @@ export default function ColaboradoresPage() {
                 value={pinInput} 
                 autoComplete="new-password"
                 onChange={e => setPinInput(e.target.value)}
-                className="w-full input-util font-mono tabular-nums text-sm pr-10 tracking-wider text-brand-accent font-bold"
+                className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default font-mono tabular-nums text-sm pr-10 tracking-wider text-brand-primary font-bold focus:outline-none focus:border-brand-primary"
               />
               <button
                 type="button"
                 onClick={() => setShowModalPin(prev => !prev)}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-200 p-1 rounded-md cursor-pointer transition-colors"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary p-1 rounded-control cursor-pointer transition-colors"
                 tabIndex={-1}
                 title={showModalPin ? 'Ocultar senha' : 'Ver senha digitada'}
+                aria-label={showModalPin ? 'Ocultar senha' : 'Ver senha digitada'}
               >
-                {showModalPin ? <EyeOff size={15} /> : <Eye size={15} />}
+                {showModalPin ? <EyeOff size={15} aria-hidden="true" /> : <Eye size={15} aria-hidden="true" />}
               </button>
             </div>
-            <span className="text-[10px] text-slate-400 block leading-tight">
+            <span className="text-[10px] text-text-muted block leading-tight">
               {editingCollab 
-                ? 'Deixe o campo vazio para preservar a senha atual. Para alterar, digite a nova credencial.' 
+                ? 'Deixe o campo vazio para preservar a senha atual.' 
                 : 'Mínimo de 6 dígitos numéricos para operadores ou 12 caracteres para gestores.'}
             </span>
           </div>
 
-          {/* SEÇÃO 3: REGIME DE REMUNERAÇÃO & DIÁRIA */}
-          <div className="p-3.5 rounded-xl bg-surface-ground border border-surface-border space-y-3">
-            <label className="block text-slate-300 font-semibold">
+          {/* Regime de Remuneração */}
+          <div className="p-3.5 rounded-control bg-surface-elevated/40 border border-border-default space-y-3">
+            <label className="block text-text-secondary font-semibold">
               Regime de Pagamento
             </label>
             <div className="grid grid-cols-2 gap-2">
               <button
                 type="button"
                 onClick={() => setPayTypeInput('mensalista')}
-                className={`py-2 px-3 rounded-lg border text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
+                className={`py-2 px-3 rounded-control border text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
                   payTypeInput === 'mensalista'
-                    ? 'bg-blue-600/20 border-blue-500 text-blue-300 shadow-sm'
-                    : 'bg-surface-card border-surface-border text-slate-400 hover:text-slate-200'
+                    ? 'bg-brand-primary/10 border-brand-primary text-brand-primary'
+                    : 'bg-surface-card border-border-default text-text-muted hover:text-text-primary'
                 }`}
               >
-                <Briefcase size={14} /> Salário Mensal (Mensalista)
+                <Briefcase size={14} aria-hidden="true" /> Salário Mensal
               </button>
               <button
                 type="button"
                 onClick={() => setPayTypeInput('diarista')}
-                className={`py-2 px-3 rounded-lg border text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
+                className={`py-2 px-3 rounded-control border text-xs font-bold cursor-pointer transition-all flex items-center justify-center gap-1.5 ${
                   payTypeInput === 'diarista'
-                    ? 'bg-amber-500/20 border-amber-500 text-amber-300 shadow-sm'
-                    : 'bg-surface-card border-surface-border text-slate-400 hover:text-slate-200'
+                    ? 'bg-amber-500/10 border-amber-500 text-amber-300'
+                    : 'bg-surface-card border-border-default text-text-muted hover:text-text-primary'
                 }`}
               >
-                <Coins size={14} /> Diarista (Recebe por Diária)
+                <Coins size={14} aria-hidden="true" /> Diarista (Por Turno)
               </button>
             </div>
 
             {payTypeInput === 'diarista' && (
-              <div className="space-y-2 pt-3 border-t border-surface-border animate-in fade-in duration-200">
-                <label className="block text-slate-300 font-semibold">
+              <div className="space-y-2 pt-3 border-t border-border-default animate-in fade-in duration-200">
+                <label htmlFor="daily-rate-input" className="block text-text-secondary font-semibold">
                   Valor Padrão da Diária (R$) *
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs pointer-events-none">R$</span>
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted font-bold text-xs pointer-events-none">R$</span>
                   <input
+                    id="daily-rate-input"
                     type="number"
                     step="0.50"
                     required
                     placeholder="100.00"
                     value={dailyRateInput}
                     onChange={e => setDailyRateInput(e.target.value)}
-                    className="w-full input-util pl-9 text-xs font-mono font-bold text-white"
+                    className="w-full h-10 pl-9 pr-3 rounded-control bg-surface-input border border-border-default text-xs font-mono font-bold text-text-primary tabular-nums focus:outline-none focus:border-brand-primary"
                   />
                 </div>
-                <span className="text-[10px] text-slate-500 block leading-tight">
-                  Valor base pago por turno trabalhado. Na aba &quot;Escala Quinzenal&quot; você monta a escala de 15 em 15 dias com revezamento de finais de semana.
-                </span>
               </div>
             )}
           </div>
 
-          {/* SEÇÃO 4: TURNO DE TRABALHO */}
+          {/* Turno */}
           <div>
-            <label className="block text-slate-300 font-semibold mb-1">
+            <label className="block text-text-secondary font-semibold mb-1">
               Turno de Trabalho
             </label>
             <div className="grid grid-cols-2 gap-2">
@@ -1517,10 +1482,10 @@ export default function ColaboradoresPage() {
                   key={s.id}
                   type="button"
                   onClick={() => setShiftInput(s.id as any)}
-                  className={`py-2 rounded-lg border text-xs font-semibold cursor-pointer transition-colors ${
+                  className={`py-2 rounded-control border text-xs font-semibold cursor-pointer transition-colors ${
                     shiftInput === s.id
                       ? 'bg-brand-primary/10 border-brand-primary text-brand-primary font-bold'
-                      : 'bg-surface-ground border-surface-border text-slate-400 hover:text-slate-200'
+                      : 'bg-surface-card border-border-default text-text-muted hover:text-text-primary'
                   }`}
                 >
                   {s.label}
@@ -1529,417 +1494,275 @@ export default function ColaboradoresPage() {
             </div>
           </div>
 
-          {/* SEÇÃO 5: TELEFONE / CONTATO */}
+          {/* Telefone */}
           <div>
-            <label className="block text-slate-300 font-semibold mb-1">
+            <label htmlFor="collab-phone-input" className="block text-text-secondary font-semibold mb-1">
               Telefone / Contato (Opcional)
             </label>
             <input
+              id="collab-phone-input"
               type="text"
               placeholder="(11) 99999-9999"
               value={phoneInput}
               onChange={e => setPhoneInput(e.target.value)}
-              className="w-full input-util text-xs font-mono tabular-nums"
+              className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-xs font-mono tabular-nums text-text-primary focus:outline-none focus:border-brand-primary"
             />
           </div>
 
-          {/* SEÇÃO 6: STATUS ATIVO */}
-          <div className="pt-2 border-t border-surface-border">
+          {/* Status Ativo */}
+          <div className="pt-2 border-t border-border-default">
             <label className="flex items-center gap-2.5 cursor-pointer">
               <input
                 type="checkbox"
                 checked={isActiveInput}
                 onChange={e => setIsActiveInput(e.target.checked)}
-                className="rounded border-surface-border accent-brand-primary cursor-pointer w-4 h-4"
+                className="rounded border-border-default accent-brand-primary cursor-pointer w-4 h-4"
               />
-              <span className="text-xs font-semibold text-slate-200">
-                Colaborador ativo na escala de trabalho
+              <span className="text-xs font-semibold text-text-primary">
+                Colaborador ativo no sistema e na escala
               </span>
             </label>
           </div>
-
         </form>
       </SlidingSheet>
 
-      {/* MODAL DE ATIVAÇÃO NA NUVEM (SUPABASE SQL) */}
-      {isSqlModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-          <div className="bg-surface-card border border-surface-border rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl space-y-4 p-6 text-slate-200">
-            
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                  <Shield className="text-amber-400" size={20} />
-                  Ativar Sincronização na Nuvem (Supabase)
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Não foi possível confirmar a conexão segura com o banco. Solicite ao responsável técnico a configuração do servidor antes de cadastrar colaboradores.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsSqlModalOpen(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-md"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Passo a Passo Rápido */}
-            <div className="bg-surface-ground p-3.5 rounded-xl border border-surface-border text-xs space-y-2 text-slate-300">
-              <p className="font-semibold text-white">Preparação pelo responsável técnico:</p>
-              <ol className="list-decimal list-inside space-y-1 text-slate-400">
-                <li>Faça backup e programe uma janela de manutenção.</li>
-                <li>Configure o acesso privado e aplique a migração de segurança.</li>
-                <li>Prepare as credenciais e valide os acessos antes de reabrir o caixa.</li>
-              </ol>
-            </div>
-
-            {/* Bloco de Código SQL com Botão Copiar */}
+      {/* MODAL 1: LANÇAR AGRADO / BÔNUS (Dialog) */}
+      <Dialog
+        open={Boolean(bonusModalCollab)}
+        onClose={() => setBonusModalCollab(null)}
+        title="Lançar Agrado / Bônus"
+        description={`Colaborador: ${bonusModalCollab?.name}`}
+        size="md"
+      >
+        <form onSubmit={handleConfirmBonus} className="space-y-4 text-xs">
+          <div>
+            <label htmlFor="bonus-val-input" className="block text-text-secondary font-semibold mb-1">
+              Valor do Agrado / Bônus (R$) *
+            </label>
             <div className="relative">
-              <pre className="bg-slate-950 p-4 rounded-xl border border-slate-800 text-[11px] font-mono text-emerald-300 max-h-48 overflow-y-auto leading-relaxed select-all">
-{'Consulte o procedimento de ativação de segurança do projeto. Não execute scripts antigos que liberem o acesso público ao banco.'}
-              </pre>
-
-              <button
-                type="button"
-                onClick={handleCopySql}
-                className="absolute top-3 right-3 py-1.5 px-3 bg-brand-primary hover:bg-brand-primaryHover text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
-              >
-                {copiedSql ? <Check size={14} /> : <Sparkles size={14} />}
-                {copiedSql ? 'Copiado!' : 'Copiar orientação'}
-              </button>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted font-bold text-xs">R$</span>
+              <input
+                id="bonus-val-input"
+                type="number"
+                step="0.50"
+                required
+                min="1"
+                placeholder="30.00"
+                value={bonusAmount}
+                onChange={e => setBonusAmount(e.target.value)}
+                className="w-full h-10 pl-9 pr-3 rounded-control bg-surface-input border border-border-default text-sm font-mono font-bold text-text-primary tabular-nums focus:outline-none focus:border-brand-primary"
+              />
             </div>
-
-            <div className="flex justify-end gap-2 pt-2 border-t border-surface-border">
-              <button
-                type="button"
-                onClick={() => setIsSqlModalOpen(false)}
-                className="py-2 px-4 bg-surface-elevated hover:bg-surface-border text-slate-200 rounded-lg text-xs font-semibold cursor-pointer transition-colors"
-              >
-                Entendido / Fechar
-              </button>
-            </div>
-
           </div>
-        </div>
-      )}
 
-      {/* MODAL 1: LANÇAR AGRADO / BÔNUS */}
-      {bonusModalCollab && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-          <div className="bg-surface-card border border-amber-500/40 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-6 text-slate-200 space-y-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Gift className="text-amber-400" size={18} />
-                  Lançar Agrado / Bônus
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Colaborador: <strong className="text-amber-300">{bonusModalCollab.name}</strong>
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setBonusModalCollab(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-md cursor-pointer"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <form onSubmit={handleConfirmBonus} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Valor do Agrado / Bônus (R$) *
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">R$</span>
-                  <input
-                    type="number"
-                    step="0.50"
-                    required
-                    min="1"
-                    placeholder="30.00"
-                    value={bonusAmount}
-                    onChange={e => setBonusAmount(e.target.value)}
-                    className="w-full input-util pl-9 text-sm font-mono font-bold text-white"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Motivo / Observação
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ex: Noite puxada, muito capricho no fechamento"
-                  value={bonusNotes}
-                  onChange={e => setBonusNotes(e.target.value)}
-                  className="w-full input-util text-xs"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-surface-border">
-                <button
-                  type="button"
-                  onClick={() => setBonusModalCollab(null)}
-                  className="py-2 px-3 bg-surface-ground hover:bg-surface-elevated text-slate-300 rounded-lg text-xs font-semibold cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="py-2 px-4 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-lg text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-                >
-                  <Gift size={14} /> Confirmar Agrado (+R$)
-                </button>
-              </div>
-            </form>
+          <div>
+            <label htmlFor="bonus-notes-input" className="block text-text-secondary font-semibold mb-1">
+              Motivo / Observação
+            </label>
+            <input
+              id="bonus-notes-input"
+              type="text"
+              placeholder="Ex: Noite movimentada, capricho no fechamento"
+              value={bonusNotes}
+              onChange={e => setBonusNotes(e.target.value)}
+              className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-xs text-text-primary focus:outline-none focus:border-brand-primary"
+            />
           </div>
-        </div>
-      )}
 
-      {/* MODAL 2: LANÇAR DIÁRIA EXTRA */}
-      {extraShiftModalCollab && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-          <div className="bg-surface-card border border-blue-500/40 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-6 text-slate-200 space-y-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <Calendar className="text-blue-400" size={18} />
-                  Lançar Diária Extra / Cobertura
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Colaborador: <strong className="text-blue-300">{extraShiftModalCollab.name}</strong>
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setExtraShiftModalCollab(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-md cursor-pointer"
-              >
-                <X size={18} />
-              </button>
+          <div className="flex justify-end gap-2 pt-3 border-t border-border-default">
+            <Button variant="secondary" onClick={() => setBonusModalCollab(null)}>
+              Cancelar
+            </Button>
+            <Button type="submit" leadingIcon={<Gift size={14} aria-hidden="true" />}>
+              Confirmar Agrado
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+
+      {/* MODAL 2: LANÇAR DIÁRIA EXTRA (Dialog) */}
+      <Dialog
+        open={Boolean(extraShiftModalCollab)}
+        onClose={() => setExtraShiftModalCollab(null)}
+        title="Lançar Diária Extra / Cobertura"
+        description={`Colaborador: ${extraShiftModalCollab?.name}`}
+        size="md"
+      >
+        <form onSubmit={handleConfirmExtraShift} className="space-y-4 text-xs">
+          <div>
+            <label htmlFor="extra-shift-date" className="block text-text-secondary font-semibold mb-1">
+              Data do Turno Trabalhado *
+            </label>
+            <input
+              id="extra-shift-date"
+              type="date"
+              required
+              value={extraShiftDate}
+              onChange={e => setExtraShiftDate(e.target.value)}
+              className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-xs font-mono tabular-nums text-text-primary focus:outline-none focus:border-brand-primary"
+            />
+          </div>
+
+          <div>
+            <label htmlFor="extra-shift-amount" className="block text-text-secondary font-semibold mb-1">
+              Valor da Diária (R$) *
+            </label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted font-bold text-xs">R$</span>
+              <input
+                id="extra-shift-amount"
+                type="number"
+                step="0.50"
+                required
+                min="1"
+                value={extraShiftAmount}
+                onChange={e => setExtraShiftAmount(e.target.value)}
+                className="w-full h-10 pl-9 pr-3 rounded-control bg-surface-input border border-border-default text-sm font-mono font-bold text-text-primary tabular-nums focus:outline-none focus:border-brand-primary"
+              />
             </div>
+          </div>
 
-            <form onSubmit={handleConfirmExtraShift} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Data do Turno Trabalhado *
-                </label>
+          <div>
+            <label htmlFor="extra-shift-notes" className="block text-text-secondary font-semibold mb-1">
+              Observação
+            </label>
+            <input
+              id="extra-shift-notes"
+              type="text"
+              placeholder="Ex: Cobriu folga de colega na chapa"
+              value={extraShiftNotes}
+              onChange={e => setExtraShiftNotes(e.target.value)}
+              className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-xs text-text-primary focus:outline-none focus:border-brand-primary"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-3 border-t border-border-default">
+            <Button variant="secondary" onClick={() => setExtraShiftModalCollab(null)}>
+              Cancelar
+            </Button>
+            <Button type="submit" leadingIcon={<Check size={14} aria-hidden="true" />}>
+              Registrar Diária Extra
+            </Button>
+          </div>
+        </form>
+      </Dialog>
+
+      {/* MODAL 3: REALIZAR ACERTO DE DIÁRIAS (Dialog) */}
+      <Dialog
+        open={Boolean(acertoModalCollab)}
+        onClose={() => setAcertoModalCollab(null)}
+        title="Realizar Acerto de Diárias"
+        description={`Colaborador: ${acertoModalCollab?.name}`}
+        size="md"
+      >
+        <div className="space-y-4 text-xs">
+          {/* Saldo Devedor Atual */}
+          <div className="p-3 bg-rose-950/30 border border-rose-500/30 rounded-control flex items-center justify-between">
+            <span className="text-xs font-bold text-rose-300 uppercase">Saldo Devedor Atual:</span>
+            <span className="text-lg font-mono font-black text-text-primary tabular-nums">
+              R$ {(acertoModalCollab ? balancesMap[acertoModalCollab.id]?.totalDue || 0 : 0).toFixed(2)}
+            </span>
+          </div>
+
+          <form onSubmit={handleConfirmAcerto} className="space-y-4">
+            <div>
+              <label htmlFor="acerto-val-input" className="block text-text-secondary font-semibold mb-1">
+                Valor a Pagar / Quitar (R$) *
+              </label>
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted font-bold text-xs">R$</span>
                 <input
-                  type="date"
+                  id="acerto-val-input"
+                  type="number"
+                  step="0.50"
                   required
-                  value={extraShiftDate}
-                  onChange={e => setExtraShiftDate(e.target.value)}
-                  className="w-full input-util text-xs font-mono"
+                  min="1"
+                  value={acertoAmount}
+                  onChange={e => setAcertoAmount(e.target.value)}
+                  className="w-full h-10 pl-9 pr-3 rounded-control bg-surface-input border border-border-default text-sm font-mono font-bold text-emerald-400 tabular-nums focus:outline-none focus:border-brand-primary"
                 />
               </div>
+            </div>
 
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Valor da Diária (R$) *
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">R$</span>
-                  <input
-                    type="number"
-                    step="0.50"
-                    required
-                    min="1"
-                    value={extraShiftAmount}
-                    onChange={e => setExtraShiftAmount(e.target.value)}
-                    className="w-full input-util pl-9 text-sm font-mono font-bold text-white"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Observação
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ex: Cobriu folga de colega na chapa"
-                  value={extraShiftNotes}
-                  onChange={e => setExtraShiftNotes(e.target.value)}
-                  className="w-full input-util text-xs"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-surface-border">
-                <button
-                  type="button"
-                  onClick={() => setExtraShiftModalCollab(null)}
-                  className="py-2 px-3 bg-surface-ground hover:bg-surface-elevated text-slate-300 rounded-lg text-xs font-semibold cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="py-2 px-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-                >
-                  <Check size={14} /> Registrar Diária Extra
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* MODAL 3: REALIZAR ACERTO DE DIÁRIAS (PAGAR) */}
-      {acertoModalCollab && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-          <div className="bg-surface-card border border-emerald-500/40 rounded-2xl w-full max-w-md overflow-hidden shadow-2xl p-6 text-slate-200 space-y-4">
-            <div className="flex items-start justify-between">
-              <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <DollarSign className="text-emerald-400" size={20} />
-                  Realizar Acerto de Diárias
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Colaborador: <strong className="text-emerald-300">{acertoModalCollab.name}</strong>
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAcertoModalCollab(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-md cursor-pointer"
+            <div>
+              <label htmlFor="acerto-method-select" className="block text-text-secondary font-semibold mb-1">
+                Forma de Pagamento *
+              </label>
+              <select
+                id="acerto-method-select"
+                value={acertoMethod}
+                onChange={e => setAcertoMethod(e.target.value as any)}
+                className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-xs cursor-pointer font-semibold text-text-primary focus:outline-none focus:border-brand-primary"
               >
-                <X size={18} />
-              </button>
+                <option value="pix">PIX (Chave Celular / CPF / Banco)</option>
+                <option value="dinheiro">Dinheiro Físico (Espécie)</option>
+                <option value="transferencia">Transferência Bancária / TED</option>
+                <option value="outro">Outro Meio de Pagamento</option>
+              </select>
             </div>
 
-            {/* Saldo Devedor Atual */}
-            <div className="p-3 bg-rose-950/30 border border-rose-500/30 rounded-xl flex items-center justify-between">
-              <span className="text-xs font-bold text-rose-300 uppercase">Saldo Devedor Atual:</span>
-              <span className="text-lg font-mono font-black text-white">
-                R$ {(balancesMap[acertoModalCollab.id]?.totalDue || 0).toFixed(2)}
-              </span>
+            <div>
+              <label htmlFor="acerto-notes-input" className="block text-text-secondary font-semibold mb-1">
+                Observação / Comprovante
+              </label>
+              <input
+                id="acerto-notes-input"
+                type="text"
+                placeholder="Ex: PIX enviado, comprovante arquivado"
+                value={acertoNotes}
+                onChange={e => setAcertoNotes(e.target.value)}
+                className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-xs text-text-primary focus:outline-none focus:border-brand-primary"
+              />
             </div>
 
-            <form onSubmit={handleConfirmAcerto} className="space-y-3 text-xs">
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Valor a Pagar / Quitar (R$) *
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-slate-400 font-bold text-xs">R$</span>
-                  <input
-                    type="number"
-                    step="0.50"
-                    required
-                    min="1"
-                    value={acertoAmount}
-                    onChange={e => setAcertoAmount(e.target.value)}
-                    className="w-full input-util pl-9 text-sm font-mono font-bold text-emerald-400"
-                  />
-                </div>
-                <span className="text-[10px] text-slate-500 mt-1 block">
-                  Você pode pagar o valor total acumulado ou fazer um pagamento parcial.
-                </span>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Forma de Pagamento *
-                </label>
-                <select
-                  value={acertoMethod}
-                  onChange={e => setAcertoMethod(e.target.value as any)}
-                  className="w-full input-util text-xs cursor-pointer font-semibold"
-                >
-                  <option value="pix">PIX (Chave Celular / CPF / Banco)</option>
-                  <option value="dinheiro">Dinheiro Físico (Espécie)</option>
-                  <option value="transferencia">Transferência Bancária / TED</option>
-                  <option value="outro">Outro Meio de Pagamento</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Observação / Comprovante
-                </label>
-                <input
-                  type="text"
-                  placeholder="Ex: PIX enviado às 23:45, comprovante arquivado"
-                  value={acertoNotes}
-                  onChange={e => setAcertoNotes(e.target.value)}
-                  className="w-full input-util text-xs"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-surface-border">
-                <button
-                  type="button"
-                  onClick={() => setAcertoModalCollab(null)}
-                  className="py-2 px-3 bg-surface-ground hover:bg-surface-elevated text-slate-300 rounded-lg text-xs font-semibold cursor-pointer"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="py-2 px-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-lg text-xs flex items-center gap-1.5 cursor-pointer shadow-md"
-                >
-                  <Check size={14} /> Confirmar Pagamento do Acerto
-                </button>
-              </div>
-            </form>
-          </div>
+            <div className="flex justify-end gap-2 pt-3 border-t border-border-default">
+              <Button variant="secondary" onClick={() => setAcertoModalCollab(null)}>
+                Cancelar
+              </Button>
+              <Button type="submit" leadingIcon={<Check size={14} aria-hidden="true" />}>
+                Confirmar Pagamento
+              </Button>
+            </div>
+          </form>
         </div>
-      )}
+      </Dialog>
 
-      {/* MODAL 4: EXTRATO COMPLETO DE DIÁRIAS & ACERTOS */}
-      {historyModalCollab && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-xs">
-          <div className="bg-surface-card border border-surface-border rounded-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden shadow-2xl text-slate-200">
-            <div className="p-5 border-b border-surface-border flex items-start justify-between">
+      {/* MODAL 4: EXTRATO COMPLETO DE DIÁRIAS (Dialog) */}
+      <Dialog
+        open={Boolean(historyModalCollab)}
+        onClose={() => setHistoryModalCollab(null)}
+        title={`Extrato Completo: ${historyModalCollab?.name || ''}`}
+        description="Histórico detalhado de diárias trabalhadas, bônus, agrados e pagamentos realizados."
+        size="lg"
+      >
+        {historyModalCollab && (
+          <div className="space-y-4 text-xs">
+            {/* Resumo do Saldo */}
+            <div className="p-4 bg-surface-elevated/40 border border-border-default rounded-control grid grid-cols-3 gap-3 text-center">
               <div>
-                <h3 className="text-base font-bold text-white flex items-center gap-2">
-                  <History className="text-amber-400" size={18} />
-                  Extrato Completo: {historyModalCollab.name}
-                </h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  Histórico detalhado de diárias trabalhadas, bônus, agrados e pagamentos realizados.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setHistoryModalCollab(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-md cursor-pointer"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            {/* Resumo do Saldo no Topo do Extrato */}
-            <div className="p-4 bg-surface-ground border-b border-surface-border grid grid-cols-3 gap-3 text-center text-xs">
-              <div>
-                <span className="text-[10px] text-slate-500 uppercase font-semibold">Total Ganho</span>
-                <p className="font-mono font-bold text-white text-sm">
+                <span className="text-[10px] text-text-muted uppercase font-semibold">Total Ganho</span>
+                <p className="font-mono font-bold text-text-primary text-sm tabular-nums">
                   R$ {(balancesMap[historyModalCollab.id]?.totalEarned || 0).toFixed(2)}
                 </p>
               </div>
               <div>
-                <span className="text-[10px] text-slate-500 uppercase font-semibold">Total Já Pago</span>
-                <p className="font-mono font-bold text-purple-300 text-sm">
+                <span className="text-[10px] text-text-muted uppercase font-semibold">Total Já Pago</span>
+                <p className="font-mono font-bold text-sky-300 text-sm tabular-nums">
                   R$ {(balancesMap[historyModalCollab.id]?.totalPaid || 0).toFixed(2)}
                 </p>
               </div>
               <div>
                 <span className="text-[10px] font-black uppercase text-rose-300">Saldo Devedor</span>
-                <p className="font-mono font-black text-rose-300 text-sm">
+                <p className="font-mono font-black text-rose-300 text-sm tabular-nums">
                   R$ {(balancesMap[historyModalCollab.id]?.totalDue || 0).toFixed(2)}
                 </p>
               </div>
             </div>
 
-            {/* Lista com Rolagem dos Lançamentos */}
-            <div className="p-5 overflow-y-auto flex-1 space-y-2.5 text-xs">
+            {/* Lista dos Lançamentos */}
+            <div className="max-h-80 overflow-y-auto space-y-2 pr-1">
               {(!balancesMap[historyModalCollab.id]?.entries || balancesMap[historyModalCollab.id]?.entries.length === 0) ? (
-                <div className="p-8 text-center text-slate-500 italic">
+                <div className="p-8 text-center text-text-muted italic">
                   Nenhum lançamento registrado para este colaborador até o momento.
                 </div>
               ) : (
@@ -1951,36 +1774,36 @@ export default function ColaboradoresPage() {
                   return (
                     <div
                       key={entry.id}
-                      className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${
+                      className={`p-3 rounded-control border flex items-center justify-between gap-3 ${
                         isPayment
-                          ? 'bg-blue-950/20 border-blue-500/30'
+                          ? 'bg-sky-950/20 border-sky-500/30'
                           : isBonus
                             ? 'bg-amber-950/20 border-amber-500/30'
                             : isExtra
                               ? 'bg-purple-950/20 border-purple-500/30'
-                              : 'bg-surface-ground border-surface-border'
+                              : 'bg-surface-elevated/20 border-border-default'
                       }`}
                     >
                       <div className="flex items-center gap-3">
-                        <div className={`p-2 rounded-lg shrink-0 ${
+                        <div className={`p-2 rounded-control shrink-0 ${
                           isPayment 
-                            ? 'bg-blue-600/20 text-blue-400' 
+                            ? 'bg-sky-600/20 text-sky-400' 
                             : isBonus 
                               ? 'bg-amber-500/20 text-amber-400' 
                               : 'bg-emerald-600/20 text-emerald-400'
                         }`}>
-                          {isPayment ? <ArrowDownCircle size={16} /> : isBonus ? <Gift size={16} /> : <ArrowUpCircle size={16} />}
+                          {isPayment ? <ArrowDownCircle size={16} aria-hidden="true" /> : isBonus ? <Gift size={16} aria-hidden="true" /> : <ArrowUpCircle size={16} aria-hidden="true" />}
                         </div>
                         <div>
                           <div className="flex items-center gap-2">
-                            <span className="font-bold text-white">
-                              {isPayment ? 'Acerto / Pagamento Realizado' : isBonus ? 'Agrado / Bônus' : isExtra ? 'Diária Extra' : 'Diária de Trabalho'}
+                            <span className="font-bold text-text-primary">
+                              {isPayment ? 'Acerto / Pagamento' : isBonus ? 'Agrado / Bônus' : isExtra ? 'Diária Extra' : 'Diária de Trabalho'}
                             </span>
-                            <span className="text-[10px] text-slate-500 font-mono">
+                            <span className="text-[10px] text-text-muted font-mono tabular-nums">
                               {new Date(entry.date + 'T12:00:00').toLocaleDateString('pt-BR')}
                             </span>
                           </div>
-                          <p className="text-[11px] text-slate-400 mt-0.5">
+                          <p className="text-[11px] text-text-muted mt-0.5">
                             {entry.notes || 'Sem observações'}
                             {entry.paymentMethod && ` • Via ${entry.paymentMethod.toUpperCase()}`}
                           </p>
@@ -1988,18 +1811,19 @@ export default function ColaboradoresPage() {
                       </div>
 
                       <div className="flex items-center gap-3 shrink-0">
-                        <span className={`font-mono font-extrabold text-sm ${
-                          isPayment ? 'text-blue-300' : isBonus ? 'text-amber-300' : 'text-emerald-400'
+                        <span className={`font-mono font-extrabold text-sm tabular-nums ${
+                          isPayment ? 'text-sky-300' : isBonus ? 'text-amber-300' : 'text-emerald-400'
                         }`}>
                           {isPayment ? '-' : '+'} R$ {Number(entry.amount).toFixed(2)}
                         </span>
                         <button
                           type="button"
-                          onClick={() => handleDeleteEntry(entry.id)}
-                          className="p-1.5 text-slate-600 hover:text-rose-400 hover:bg-rose-950/30 rounded-lg cursor-pointer transition-colors"
+                          onClick={() => setEntryToDeleteId(entry.id)}
+                          className="p-1.5 text-text-muted hover:text-status-danger hover:bg-rose-500/10 rounded-control cursor-pointer transition-colors"
                           title="Excluir este lançamento"
+                          aria-label="Excluir lançamento"
                         >
-                          <Trash2 size={13} />
+                          <Trash2 size={13} aria-hidden="true" />
                         </button>
                       </div>
                     </div>
@@ -2008,19 +1832,80 @@ export default function ColaboradoresPage() {
               )}
             </div>
 
-            <div className="p-4 border-t border-surface-border flex justify-end">
-              <button
-                type="button"
-                onClick={() => setHistoryModalCollab(null)}
-                className="py-2 px-4 bg-surface-elevated hover:bg-surface-border text-slate-200 rounded-lg text-xs font-semibold cursor-pointer"
-              >
+            <div className="flex justify-end pt-3 border-t border-border-default">
+              <Button variant="secondary" onClick={() => setHistoryModalCollab(null)}>
                 Fechar Extrato
-              </button>
+              </Button>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </Dialog>
 
+      {/* MODAL 5: ATIVAÇÃO NA NUVEM / SEGURANÇA (Dialog) */}
+      <Dialog
+        open={isSqlModalOpen}
+        onClose={() => setIsSqlModalOpen(false)}
+        title="Ativar Sincronização na Nuvem (Supabase)"
+        description="Orientações técnicas para migração e segurança do banco de dados."
+        size="md"
+      >
+        <div className="space-y-4 text-xs text-text-secondary">
+          <div className="bg-surface-elevated/40 p-3.5 rounded-control border border-border-default space-y-2">
+            <p className="font-semibold text-text-primary">Instruções para o responsável técnico:</p>
+            <ol className="list-decimal list-inside space-y-1 text-text-muted">
+              <li>Faça backup e programe uma janela de manutenção.</li>
+              <li>Configure o acesso privado e aplique a migração de segurança.</li>
+              <li>Prepare as credenciais e valide os acessos antes de reabrir o caixa.</li>
+            </ol>
+          </div>
+
+          <div className="relative">
+            <pre className="bg-surface-elevated p-4 rounded-control border border-border-default text-xs font-mono text-emerald-300 max-h-48 overflow-y-auto leading-relaxed select-all">
+              Consulte SECURITY-SETUP.md no projeto. A migração deve ser aplicada pelo responsável técnico em janela de manutenção.
+            </pre>
+
+            <button
+              type="button"
+              onClick={handleCopySql}
+              className="absolute top-2.5 right-2.5 py-1 px-2.5 bg-brand-primary hover:bg-brand-primary/90 text-white rounded-control text-xs font-semibold flex items-center gap-1.5 cursor-pointer shadow-md transition-colors"
+            >
+              {copiedSql ? <Check size={13} aria-hidden="true" /> : <Sparkles size={13} aria-hidden="true" />}
+              {copiedSql ? 'Copiado!' : 'Copiar'}
+            </button>
+          </div>
+
+          <div className="flex justify-end pt-3 border-t border-border-default">
+            <Button variant="secondary" onClick={() => setIsSqlModalOpen(false)}>
+              Entendido / Fechar
+            </Button>
+          </div>
+        </div>
+      </Dialog>
+
+      {/* CONFIRM DIALOG: EXCLUIR COLABORADOR */}
+      <ConfirmDialog
+        open={Boolean(collabToDelete)}
+        onClose={() => setCollabToDelete(null)}
+        onConfirm={handleConfirmDeleteCollab}
+        title="Excluir Colaborador"
+        description={`Tem certeza que deseja excluir permanentemente o cadastro de "${collabToDelete?.name}"? Esta ação não pode ser desfeita.`}
+        confirmLabel="Excluir Colaborador"
+        cancelLabel="Cancelar"
+        tone="danger"
+        loading={isDeletingCollab}
+      />
+
+      {/* CONFIRM DIALOG: EXCLUIR LANÇAMENTO DO EXTRATO */}
+      <ConfirmDialog
+        open={Boolean(entryToDeleteId)}
+        onClose={() => setEntryToDeleteId(null)}
+        onConfirm={handleConfirmDeleteEntry}
+        title="Excluir Lançamento"
+        description="Deseja remover este registro de diária/acerto? O saldo devedor do colaborador será recalculado."
+        confirmLabel="Excluir Lançamento"
+        cancelLabel="Cancelar"
+        tone="danger"
+      />
     </div>
   );
 }
