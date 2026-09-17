@@ -54,10 +54,12 @@ export function getDefaultStationForIngredient(name: string): KitchenStation {
   return 'nenhuma';
 }
 
+import { getActiveCentralConfig } from '../central-config';
+
 export function getSavedStationMap(): Record<string, KitchenStation> {
   if (typeof window === 'undefined') return {};
   try {
-    return JSON.parse(localStorage.getItem('hum_vicio_ingredient_stations_map') || '{}');
+    return getActiveCentralConfig().ingredientStations || {};
   } catch {
     return {};
   }

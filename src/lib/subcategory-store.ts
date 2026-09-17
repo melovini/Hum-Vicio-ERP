@@ -25,22 +25,15 @@ export const DEFAULT_SUBCATEGORIES_BY_CATEGORY: Record<string, string[]> = {
   ],
 };
 
-export type CustomSubcategoriesMap = Record<string, string[]>;
+import { getActiveCentralConfig, publishCentralConfig } from './central-config';
 
-const STORAGE_KEY = 'hum_vicio_custom_subcategories_by_category';
+export type CustomSubcategoriesMap = Record<string, string[]>;
 
 export function getCustomSubcategories(): CustomSubcategoriesMap {
   if (typeof window === 'undefined') return { ...DEFAULT_SUBCATEGORIES_BY_CATEGORY };
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_SUBCATEGORIES_BY_CATEGORY };
-    const parsed = JSON.parse(raw);
-    return {
-      lanche: Array.isArray(parsed.lanche) && parsed.lanche.length > 0 ? parsed.lanche : DEFAULT_SUBCATEGORIES_BY_CATEGORY.lanche,
-      porcao: Array.isArray(parsed.porcao) && parsed.porcao.length > 0 ? parsed.porcao : DEFAULT_SUBCATEGORIES_BY_CATEGORY.porcao,
-      bebida: Array.isArray(parsed.bebida) && parsed.bebida.length > 0 ? parsed.bebida : DEFAULT_SUBCATEGORIES_BY_CATEGORY.bebida,
-      combo: Array.isArray(parsed.combo) && parsed.combo.length > 0 ? parsed.combo : DEFAULT_SUBCATEGORIES_BY_CATEGORY.combo,
-    };
+    const central = getActiveCentralConfig();
+    return central.subcategoriesByCategory || { ...DEFAULT_SUBCATEGORIES_BY_CATEGORY };
   } catch {
     return { ...DEFAULT_SUBCATEGORIES_BY_CATEGORY };
   }
@@ -49,7 +42,7 @@ export function getCustomSubcategories(): CustomSubcategoriesMap {
 export function saveCustomSubcategories(data: CustomSubcategoriesMap): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    publishCentralConfig({ subcategoriesByCategory: data });
   } catch {}
 }
 

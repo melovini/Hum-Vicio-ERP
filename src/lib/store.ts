@@ -27,6 +27,7 @@ import {
 } from './store/cash-operations';
 import { inferDefaultSubcategory } from './recipe-helpers';
 import { calculateItemProduction } from './production-calculator';
+import { getActiveCentralConfig, publishCentralConfig } from './central-config';
 
 // === DOMÍNIO MODULARIZADO (Frente 5.1 - Separação de Responsabilidades) ===
 export * from './store/types';
@@ -275,12 +276,10 @@ export async function syncOfflineSalesQueue(supabaseClient?: any): Promise<{ syn
 function getSavedFixedExpensesConfig(): FixedExpensesConfig {
   if (typeof window === 'undefined') return DEFAULT_FIXED_EXPENSES;
   try {
-    const saved = localStorage.getItem('hum_vicio_fixed_expenses_config');
-    if (saved) {
-      return { ...DEFAULT_FIXED_EXPENSES, ...JSON.parse(saved) };
-    }
-  } catch {}
-  return DEFAULT_FIXED_EXPENSES;
+    return getActiveCentralConfig().fixedExpenses || DEFAULT_FIXED_EXPENSES;
+  } catch {
+    return DEFAULT_FIXED_EXPENSES;
+  }
 }
 
 export type ConnectionStatus = 'connected' | 'server_unreachable' | 'offline';
@@ -408,7 +407,7 @@ export function getInitialGlobalState(): GlobalStoreState {
     isOpen: !!activeSession,
     activeCashSession: activeSession,
     allCashSessions: cachedSessions,
-    targetPrepMinutes: 20,
+    targetPrepMinutes: typeof window !== 'undefined' ? (getActiveCentralConfig().targetPrepMinutes || 20) : 20,
     sales: cachedSales,
     movements: [],
     isTrainingMode: false,
@@ -1270,11 +1269,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   // Custos Fixos Mensais (DRE & Ponto de Equilíbrio)
   const saveFixedExpensesConfig = (config: FixedExpensesConfig) => {
     updateGlobalStore({ fixedExpensesConfig: config });
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem('hum_vicio_fixed_expenses_config', JSON.stringify(config));
-      } catch {}
-    }
+    publishCentralConfig({ fixedExpenses: config }, 'Gestor / Admin');
     const totalMonthly = config.rent + config.electricity + config.gas + config.water + config.internetSoftware + config.payroll + config.proLabore + config.otherExpenses;
     addAuditLog(
       'CUSTOS_FIXOS_CONFIG',
@@ -1286,9 +1281,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   // Tempo Médio Dinâmico de Preparo (KDS / Balcão)
   const setTargetPrepMinutes = (mins: number) => {
     updateGlobalStore({ targetPrepMinutes: mins });
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('hum_vicio_target_prep_minutes', mins.toString());
-    }
+    publishCentralConfig({ targetPrepMinutes: mins }, 'Operação / Gestor');
   };
 
   // Verificação ativa de comunicação efetiva com o servidor
