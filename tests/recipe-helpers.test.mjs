@@ -216,3 +216,70 @@ test('addSubcategory, renameSubcategory, moveSubcategory e deleteSubcategory ger
   assert.ok(!deleted.lanche.includes('Linha Teste Renomeada'));
 });
 
+test('renomeação atômica em produtos e reatribuição de categoria mantêm integridade hierárquica', () => {
+  let products = [
+    { id: 'p1', name: 'Burger Clássico', category: 'lanche', subcategory: 'Artesanais 180g', priceBalcao: 30, priceIfood: 35, recipe: [] },
+    { id: 'p2', name: 'Burger Duplo', category: 'lanche', subcategory: 'Artesanais 180g', priceBalcao: 38, priceIfood: 44, recipe: [] },
+  ];
+
+  // 1. Simulação da atualização atômica de renomeação de subcategoria
+  const oldSub = 'Artesanais 180g';
+  const newSub = 'Artesanais Especiais 200g';
+  products = products.map(p => {
+    if (p.category === 'lanche' && (p.subcategory === oldSub || inferDefaultSubcategory(p) === oldSub)) {
+      return { ...p, subcategory: newSub };
+    }
+    return p;
+  });
+
+  assert.equal(products[0].subcategory, newSub);
+  assert.equal(products[1].subcategory, newSub);
+
+  // 2. Agrupamento por subcategoria reflete imediatamente o novo nome
+  const groups = groupProductsBySubcategory(products);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].subcategory, newSub);
+  assert.equal(groups[0].products.length, 2);
+
+  // 3. Alteração de categoria de um item existente (ex: lanche -> porção) com reset de subcategoria
+  const targetProduct = products[0];
+  const newCat = 'porcao';
+  const porcaoSubs = getSubcategoriesForCategory(newCat);
+  const updatedProduct = {
+    ...targetProduct,
+    category: newCat,
+    subcategory: porcaoSubs.includes(targetProduct.subcategory) ? targetProduct.subcategory : porcaoSubs[0]
+  };
+
+  products = products.map(p => p.id === targetProduct.id ? updatedProduct : p);
+  assert.equal(products[0].category, 'porcao');
+  assert.equal(products[0].subcategory, porcaoSubs[0]);
+  assert.notEqual(products[0].subcategory, newSub);
+
+  // 4. Filtrar por porcao exibe o produto na subcategoria correta de porção
+  const porcaoFiltered = filterCardapioProducts(products, { category: 'porcao' });
+  assert.equal(porcaoFiltered.length, 1);
+  assert.equal(porcaoFiltered[0].id, 'p1');
+  assert.equal(porcaoFiltered[0].category, 'porcao');
+});
+
+test('calculateRecipeMetrics calcula corretamente mesmo com preços em formato brasileiro (vírgula)', () => {
+  const getCost = () => 10;
+  const recipe = [{ ingredientId: 'ing-1', quantity: 1 }];
+
+  // Com ponto
+  const mPonto = calculateRecipeMetrics(recipe, getCost, 30.0, 40.0);
+  assert.equal(mPonto.totalCost, 10);
+  assert.equal(mPonto.cmvBalcao, 33.3);
+
+  // Com parsing de string contendo vírgula
+  const rawBalcao = '30,00';
+  const rawIfood = '40,00';
+  const parsedBalcao = Number(rawBalcao.replace(',', '.'));
+  const parsedIfood = Number(rawIfood.replace(',', '.'));
+  const mVirgula = calculateRecipeMetrics(recipe, getCost, parsedBalcao, parsedIfood);
+  assert.equal(mVirgula.totalCost, 10);
+  assert.equal(mVirgula.cmvBalcao, 33.3);
+  assert.equal(mVirgula.cmvIfood, 25.0);
+});
+

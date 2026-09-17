@@ -559,7 +559,7 @@ export async function executeParallelLoadData(
         const recipesList = (recData as any[]) || [];
         const subcategoryMap = getSavedProductSubcategoriesMap();
         const addonsMap = getSavedProductAddonsMap();
-        mappedProducts = (prodData as any[]).map(p => {
+        const serverProducts = (prodData as any[]).map(p => {
           const rawSub = p.subcategory || subcategoryMap[p.id] || undefined;
           const addonConf = addonsMap[p.id] || {};
           const prodObj: Product = {
@@ -582,6 +582,13 @@ export async function executeParallelLoadData(
           }
           return prodObj;
         });
+
+        // Preservar produtos criados localmente que ainda não foram confirmados no servidor
+        const localOnlyProducts = globalStore.products.filter(
+          p => p.id.startsWith('prod_') && !serverProducts.some(sp => sp.id === p.id)
+        );
+        mappedProducts = [...serverProducts, ...localOnlyProducts];
+
         if (typeof window !== 'undefined') {
           try { localStorage.setItem('hum_vicio_cached_products', JSON.stringify(mappedProducts)); } catch {}
         }
@@ -1430,37 +1437,32 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     try {
       let data: any = null;
       let error: any = null;
+      const finalStation = item.station || getDefaultStationForIngredient(item.name);
 
       try {
         const res = await supabase.from('inventory').insert({
           name: item.name, category: item.category, unit: item.unit, 
           cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status,
-          min_stock: item.minStock,
-          station: item.station || getDefaultStationForIngredient(item.name)
+          min_stock: item.minStock
         }).select().single();
         data = res.data;
         error = res.error;
-      } catch {
-        const fallbackRes = await supabase.from('inventory').insert({
-          name: item.name, category: item.category, unit: item.unit, 
-          cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status
-        }).select().single();
-        data = fallbackRes.data;
-        error = fallbackRes.error;
+      } catch (insertErr) {
+        error = insertErr;
       }
       
       if (error) {
         console.error('Erro ao salvar insumo no Supabase:', error);
-        throw new Error('Não foi possível salvar o insumo no banco de dados.');
+        throw new Error(error.message || 'Não foi possível salvar o insumo no banco de dados.');
       }
       
       const newId = data ? data.id : ('inv_' + Date.now().toString(36));
       if (item.minStock !== undefined) {
         saveMinStockItem(newId, item.minStock);
       }
-      const finalStation = item.station || getDefaultStationForIngredient(item.name);
+      saveStationItem(newId, finalStation);
       const createdItem = { ...item, id: newId, station: finalStation };
-      setItems([...items, createdItem]);
+      setItems(prev => [...prev, createdItem]);
       return createdItem;
     } catch (err: any) {
       console.error('Falha ao adicionar insumo:', err);
@@ -1727,11 +1729,12 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   // --- PRODUTOS ACTIONS ---
   const addProduct = async (prod: Omit<Product, 'id'>) => {
     let pData: any = null;
+    let insertError: any = null;
     const subcategoryToSave = prod.subcategory?.trim() || inferDefaultSubcategory({ ...prod, id: '' } as Product);
 
     try {
       const res = await supabase.from('products').insert({
-        name: prod.name,
+        name: prod.name.trim(),
         category: prod.category,
         subcategory: subcategoryToSave,
         price_balcao: prod.priceBalcao,
@@ -1739,31 +1742,46 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       }).select().single();
 
       if (res.error) {
-        // Fallback caso a coluna subcategory não exista no schema remoto do Supabase
+        insertError = res.error;
+        console.warn('Tentativa com subcategoria falhou, testando fallback:', res.error);
         const fallbackRes = await supabase.from('products').insert({
-          name: prod.name,
+          name: prod.name.trim(),
           category: prod.category,
           price_balcao: prod.priceBalcao,
           price_ifood: prod.priceIfood
         }).select().single();
-        pData = fallbackRes.data;
+        if (fallbackRes.error) {
+          insertError = fallbackRes.error;
+        } else {
+          pData = fallbackRes.data;
+          insertError = null;
+        }
       } else {
         pData = res.data;
+        insertError = null;
       }
-    } catch {
+    } catch (err: any) {
+      insertError = err;
       try {
         const fallbackRes = await supabase.from('products').insert({
-          name: prod.name,
+          name: prod.name.trim(),
           category: prod.category,
           price_balcao: prod.priceBalcao,
           price_ifood: prod.priceIfood
         }).select().single();
-        pData = fallbackRes.data;
+        if (fallbackRes.data) {
+          pData = fallbackRes.data;
+          insertError = null;
+        }
       } catch {}
     }
 
-    // Identificador único garantido (mesmo offline ou se Supabase falhar)
-    const finalId = pData?.id || `prod_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+    if (insertError && !pData) {
+      console.error('Falha ao gravar produto no Supabase:', insertError);
+      throw new Error(insertError.message || 'Não foi possível gravar o produto no banco de dados.');
+    }
+
+    const finalId = pData ? pData.id : `prod_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
     if (prod.recipe && prod.recipe.length > 0) {
       try {
@@ -1771,7 +1789,9 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
           product_id: finalId, ingredient_id: r.ingredientId, quantity: r.quantity
         }));
         await supabase.from('recipes').insert(recipeInserts);
-      } catch {}
+      } catch (rErr) {
+        console.warn('Aviso ao gravar receita do produto:', rErr);
+      }
     }
 
     if (subcategoryToSave) {
@@ -1805,29 +1825,35 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   };
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
-    const existing = products.find(p => p.id === id);
+    const existing = globalStore.products.find(p => p.id === id);
 
-    const dbPayload: any = {
-      name: updates.name,
-      category: updates.category,
-      price_balcao: updates.priceBalcao,
-      price_ifood: updates.priceIfood
-    };
-    if (updates.subcategory !== undefined) {
-      dbPayload.subcategory = updates.subcategory.trim();
-    }
+    const dbPayload: any = {};
+    if (updates.name !== undefined) dbPayload.name = updates.name.trim();
+    if (updates.category !== undefined) dbPayload.category = updates.category;
+    if (updates.subcategory !== undefined) dbPayload.subcategory = updates.subcategory.trim();
+    if (updates.priceBalcao !== undefined) dbPayload.price_balcao = updates.priceBalcao;
+    if (updates.priceIfood !== undefined) dbPayload.price_ifood = updates.priceIfood;
+    if (updates.isActive !== undefined) dbPayload.is_active = updates.isActive;
 
-    try {
-      const res = await supabase.from('products').update(dbPayload).eq('id', id);
-      if (res.error) {
-        delete dbPayload.subcategory;
-        await supabase.from('products').update(dbPayload).eq('id', id);
-      }
-    } catch {
-      delete dbPayload.subcategory;
+    if (Object.keys(dbPayload).length > 0) {
       try {
-        await supabase.from('products').update(dbPayload).eq('id', id);
-      } catch {}
+        const res = await supabase.from('products').update(dbPayload).eq('id', id);
+        if (res.error) {
+          console.warn('Erro ao atualizar produto no Supabase:', res.error);
+          if (dbPayload.subcategory !== undefined) {
+            delete dbPayload.subcategory;
+            const fallbackRes = await supabase.from('products').update(dbPayload).eq('id', id);
+            if (fallbackRes.error) {
+              throw new Error(fallbackRes.error.message || 'Falha ao atualizar produto no banco.');
+            }
+          } else {
+            throw new Error(res.error.message || 'Falha ao atualizar produto no banco.');
+          }
+        }
+      } catch (err: any) {
+        console.error('Falha no updateProduct:', err);
+        throw err;
+      }
     }
 
     if (updates.subcategory) {
@@ -1851,7 +1877,9 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
           }));
           await supabase.from('recipes').insert(recipeInserts);
         }
-      } catch {}
+      } catch (e) {
+        console.error('Erro ao atualizar receitas no Supabase:', e);
+      }
     }
 
     if (existing && (updates.priceBalcao !== undefined || updates.priceIfood !== undefined)) {
@@ -1864,23 +1892,52 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       }
     }
 
-    setProducts(products.map(p => p.id === id ? { ...p, ...updates } : p));
+    setProducts(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
   };
 
   const removeProduct = async (id: string) => {
-    const prod = products.find(p => p.id === id);
+    const prod = globalStore.products.find(p => p.id === id);
     try {
       await supabase.from('products').update({ is_active: false }).eq('id', id);
     } catch {
       await supabase.from('products').delete().eq('id', id);
     }
-    setProducts(products.map(p => p.id === id ? { ...p, isActive: false } : p));
+    setProducts(prev => prev.map(p => p.id === id ? { ...p, isActive: false } : p));
 
     addAuditLog(
       'DESATIVACAO_PRODUTO',
       `Produto "${prod?.name || id}" desativado do cardápio.`,
       'Admin'
     );
+  };
+
+  const batchUpdateProductSubcategory = async (category: string, oldSub: string, newSub: string) => {
+    const trimmed = newSub.trim();
+    // 1. Atualização funcional atômica no estado
+    setProducts(prev => prev.map(p => {
+      if (p.category === category && (p.subcategory === oldSub || inferDefaultSubcategory(p) === oldSub)) {
+        return { ...p, subcategory: trimmed };
+      }
+      return p;
+    }));
+
+    // 2. Atualizar mapa no localStorage
+    const affected = globalStore.products.filter(p => p.category === category && (p.subcategory === oldSub || inferDefaultSubcategory(p) === oldSub));
+    if (affected.length > 0) {
+      const subcatMap = getSavedProductSubcategoriesMap();
+      affected.forEach(p => { subcatMap[p.id] = trimmed; });
+      try { localStorage.setItem('hum_vicio_product_subcategories_map', JSON.stringify(subcatMap)); } catch {}
+    }
+
+    // 3. Persistir no Supabase
+    try {
+      await supabase.from('products').update({ subcategory: trimmed }).eq('category', category).eq('subcategory', oldSub);
+      for (const p of affected) {
+        void supabase.from('products').update({ subcategory: trimmed }).eq('id', p.id);
+      }
+    } catch (err) {
+      console.warn('Erro ao atualizar subcategoria em lote no banco:', err);
+    }
   };
 
   // Vínculo em lote de um insumo/adicional à ficha técnica de múltiplos produtos (hambúrgueres)
@@ -3422,8 +3479,8 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
 
   return { 
     items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
-    products, addProduct, updateProduct, removeProduct, getProductCmv, getRealSalesCmv,
-    batchAddIngredientToProducts,
+    products, addProduct, updateProduct, removeProduct, getProductCmv, getRealSalesCmv, setProducts,
+    batchAddIngredientToProducts, batchUpdateProductSubcategory,
     isLoaded, isOpen, activeCashSession, allCashSessions, openCaixa, closeCaixa, toggleCaixa, deleteCashSession, deleteTestSales,
     sales, addSale, cancelSale, reopenOrderForEdit, updateReopenedOrder, acknowledgeOrderModification,
     movements, addMovement,

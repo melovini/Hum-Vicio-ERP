@@ -46,7 +46,8 @@ export default function CardapioAdminPage() {
   const { 
     items, products, addProduct, updateProduct, removeProduct, 
     isLoaded, subRecipes, saveSubRecipe, removeSubRecipe, 
-    getIngredientTrueCost, addInventoryItem, updateInventoryItem, batchAddIngredientToProducts 
+    getIngredientTrueCost, addInventoryItem, updateInventoryItem, batchAddIngredientToProducts,
+    batchUpdateProductSubcategory
   } = useInventory();
   const { notify } = useToast();
 
@@ -152,11 +153,13 @@ export default function CardapioAdminPage() {
 
   // Cálculos em Tempo Real da Ficha Técnica Sendo Editada
   const activeRecipeMetrics = useMemo(() => {
+    const pBalcao = Number(priceBalcao.toString().replace(',', '.')) || 0;
+    const pIfood = Number(priceIfood.toString().replace(',', '.')) || pBalcao;
     return calculateRecipeMetrics(
       recipe,
       getIngredientTrueCost,
-      Number(priceBalcao) || 0,
-      Number(priceIfood) || 0,
+      pBalcao,
+      pIfood,
       30,
     );
   }, [recipe, getIngredientTrueCost, priceBalcao, priceIfood]);
@@ -371,31 +374,26 @@ export default function CardapioAdminPage() {
     const updatedMap = renameSubcategory(cat, oldName, trimmed);
     setCustomSubcategoriesMap(updatedMap);
 
-    // Atualizar em lote todos os produtos da categoria que possuíam o nome antigo
-    const affectedProducts = products.filter(p => 
-      p.category === cat && (p.subcategory === oldName || inferDefaultSubcategory(p) === oldName)
-    );
-    for (const p of affectedProducts) {
-      try {
-        await updateProduct(p.id, { subcategory: trimmed });
-      } catch (e) {
-        console.error('Erro ao atualizar subcategoria do produto', p.id, e);
-      }
-    }
+    // Atualização funcional atômica no estado, cache e Supabase
+    await batchUpdateProductSubcategory(cat, oldName, trimmed);
 
     setEditingSubcat(null);
     notify({ 
       title: `Subcategoria renomeada para "${trimmed}"!`, 
-      description: affectedProducts.length > 0 ? `${affectedProducts.length} produto(s) atualizado(s).` : undefined,
       tone: 'success' 
     });
   };
 
-  const handleDeleteCustomSubcategory = (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', subName: string) => {
+  const handleDeleteCustomSubcategory = async (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', subName: string) => {
     const updatedMap = deleteSubcategory(cat, subName);
     setCustomSubcategoriesMap(updatedMap);
     setConfirmDeleteSubcat(null);
-    notify({ title: `Subcategoria "${subName}" excluída.`, tone: 'info' });
+
+    const remainingSubs = updatedMap[cat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] || [];
+    const fallbackSub = remainingSubs[0] || 'Geral';
+
+    await batchUpdateProductSubcategory(cat, subName, fallbackSub);
+    notify({ title: `Subcategoria "${subName}" excluída. Itens associados movidos para "${fallbackSub}".`, tone: 'info' });
   };
 
   const handleMoveCustomSubcategory = (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', index: number, direction: 'up' | 'down') => {
@@ -486,9 +484,16 @@ export default function CardapioAdminPage() {
       notify({ title: 'O nome do produto é obrigatório.', tone: 'warning' });
       return;
     }
-    const valBalcao = Number(priceBalcao);
+    const cleanBalcao = priceBalcao.toString().replace(',', '.').trim();
+    const valBalcao = Number(cleanBalcao);
     if (isNaN(valBalcao) || valBalcao <= 0) {
-      notify({ title: 'Informe um Preço Balcão válido maior que zero.', tone: 'warning' });
+      notify({ title: 'Informe um Preço Balcão válido maior que zero (ex: 28,50).', tone: 'warning' });
+      return;
+    }
+    const cleanIfood = priceIfood ? priceIfood.toString().replace(',', '.').trim() : '';
+    const valIfood = cleanIfood ? Number(cleanIfood) : valBalcao;
+    if (isNaN(valIfood) || valIfood <= 0) {
+      notify({ title: 'Informe um Preço iFood válido maior que zero.', tone: 'warning' });
       return;
     }
 
@@ -500,7 +505,7 @@ export default function CardapioAdminPage() {
         category, 
         subcategory: subcategoryFinal,
         priceBalcao: valBalcao, 
-        priceIfood: Number(priceIfood) || valBalcao,
+        priceIfood: valIfood,
         recipe,
         ncm: ncm.trim() || undefined,
         cfop: cfop.trim() || undefined,
@@ -529,7 +534,8 @@ export default function CardapioAdminPage() {
 
       resetForm();
     } catch (err: any) {
-      notify({ title: `Erro ao salvar produto: ${err.message || 'Falha de conexão'}`, tone: 'danger' });
+      console.error('Erro ao salvar produto:', err);
+      notify({ title: `Erro ao salvar produto: ${err.message || 'Falha de comunicação com o banco de dados.'}`, tone: 'danger' });
     } finally {
       setIsSavingProduct(false);
     }
@@ -1558,9 +1564,9 @@ export default function CardapioAdminPage() {
                   onChange={e => {
                     const newCat = e.target.value as any;
                     setCategory(newCat);
-                    const defs = DEFAULT_SUBCATEGORIES_BY_CATEGORY[newCat];
-                    if (defs && defs.length > 0 && !subcategory) {
-                      setSubcategory(defs[0]);
+                    const newSubs = getSubcategoriesForCategory(newCat, products);
+                    if (!newSubs.includes(subcategory)) {
+                      setSubcategory(newSubs[0] || '');
                     }
                   }}
                 >
@@ -1573,26 +1579,40 @@ export default function CardapioAdminPage() {
 
               <div className="md:col-span-3 space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <label htmlFor="prod-subcat-input" className="block text-xs font-bold text-text-secondary">
+                  <label htmlFor="prod-subcat-select" className="block text-xs font-bold text-text-secondary">
                     Subcategoria
                   </label>
                   <span className="text-[10px] text-text-muted">Hierarquia</span>
                 </div>
-                <div className="relative">
-                  <input
-                    id="prod-subcat-input"
-                    list="subcategories-datalist"
-                    type="text"
-                    value={subcategory}
-                    onChange={e => setSubcategory(e.target.value)}
-                    placeholder="Ex: Smash Burgers"
-                    className="w-full bg-surface-input border border-border-default rounded-control p-2.5 text-text-primary outline-none focus:border-brand-primary text-sm"
-                  />
-                  <datalist id="subcategories-datalist">
+                <div className="space-y-1.5">
+                  <Select
+                    id="prod-subcat-select"
+                    value={availableSubcategoriesForCategory.includes(subcategory) ? subcategory : '__custom__'}
+                    onChange={e => {
+                      if (e.target.value === '__custom__') {
+                        setSubcategory('');
+                      } else {
+                        setSubcategory(e.target.value);
+                      }
+                    }}
+                  >
                     {availableSubcategoriesForCategory.map(sub => (
-                      <option key={sub} value={sub} />
+                      <option key={sub} value={sub}>{sub}</option>
                     ))}
-                  </datalist>
+                    <option value="__custom__">+ Nova subcategoria personalizada...</option>
+                  </Select>
+
+                  {(!availableSubcategoriesForCategory.includes(subcategory) || subcategory === '') && (
+                    <input
+                      id="prod-subcat-input"
+                      type="text"
+                      value={subcategory}
+                      onChange={e => setSubcategory(e.target.value)}
+                      placeholder="Nome da subcategoria..."
+                      className="w-full bg-surface-input border border-brand-primary rounded-control p-2 text-text-primary outline-none text-xs"
+                      autoFocus
+                    />
+                  )}
                 </div>
               </div>
             </div>
@@ -1844,11 +1864,11 @@ export default function CardapioAdminPage() {
                     </label>
                     <input 
                       id="price-balcao-input"
-                      type="number" 
-                      step="0.50" 
+                      type="text" 
+                      inputMode="decimal"
                       value={priceBalcao} 
                       onChange={e => setPriceBalcao(e.target.value)}
-                      placeholder="0.00" 
+                      placeholder="0,00" 
                       className="w-full bg-surface-input border border-border-default rounded-control p-2.5 text-text-primary font-mono text-sm outline-none focus:border-brand-primary"
                     />
                   </div>
@@ -1859,11 +1879,11 @@ export default function CardapioAdminPage() {
                     </label>
                     <input 
                       id="price-ifood-input"
-                      type="number" 
-                      step="0.50" 
+                      type="text" 
+                      inputMode="decimal"
                       value={priceIfood} 
                       onChange={e => setPriceIfood(e.target.value)}
-                      placeholder="0.00" 
+                      placeholder="0,00" 
                       className="w-full bg-surface-input border border-border-default rounded-control p-2.5 text-text-primary font-mono text-sm outline-none focus:border-brand-primary"
                     />
                   </div>
