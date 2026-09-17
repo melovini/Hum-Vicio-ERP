@@ -112,3 +112,5 @@ export default function SlidingSheet({
     </dialog>
   );
 }
+
+export { SlidingSheet };

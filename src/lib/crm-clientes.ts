@@ -177,18 +177,19 @@ export function getStoredImportedCustomers(): ImportedCustomer[] {
 
 // Salva clientes importados localmente (Memória + IndexedDB ilimitado + localStorage rápido)
 export function setStoredImportedCustomers(customers: ImportedCustomer[]): void {
-  memoryImportedCustomers = customers;
+  const safeCustomers = Array.isArray(customers) ? customers : [];
+  memoryImportedCustomers = safeCustomers;
   if (typeof window === 'undefined') return;
 
   // 1. Salva no IndexedDB (suporta 10.000+ contatos sem restrição de 5MB)
-  idbSaveImportedCustomers(customers).catch(() => {});
+  idbSaveImportedCustomers(safeCustomers).catch(() => {});
 
   // 2. Salva no localStorage com salvaguarda de quota
   try {
-    localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(customers));
+    localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(safeCustomers));
   } catch {
     try {
-      localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(customers.slice(0, 1000)));
+      localStorage.setItem(STORAGE_IMPORTED_KEY, JSON.stringify(safeCustomers.slice(0, 1000)));
     } catch {}
   }
 
@@ -218,7 +219,9 @@ export async function fetchAllSupabaseCustomers(): Promise<ImportedCustomer[]> {
   const response = await fetch('/api/crm/customers', { cache: 'no-store' });
   if (!response.ok) throw new Error('Não foi possível consultar os clientes.');
   const result = await response.json();
-  return result.customers;
+  if (Array.isArray(result?.customers)) return result.customers;
+  if (Array.isArray(result)) return result;
+  return [];
 }
 
 // A leitura nunca publica nem substitui a base automaticamente a partir de um cache.
@@ -232,8 +235,9 @@ export async function syncImportedCustomers(options?: {
       if (!result.success) return { customers: local, syncedToCloud: false, count: local.length };
     }
     const cloud = await fetchAllSupabaseCustomers();
-    setStoredImportedCustomers(cloud);
-    return { customers: cloud, syncedToCloud: true, count: cloud.length };
+    const safeCloud = Array.isArray(cloud) ? cloud : [];
+    setStoredImportedCustomers(safeCloud);
+    return { customers: safeCloud, syncedToCloud: true, count: safeCloud.length };
   } catch { return { customers: local, syncedToCloud: false, count: local.length }; }
 }
 // Sincronizar clientes importados a partir do servidor / Supabase (Retrocompatibilidade)
