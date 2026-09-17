@@ -224,6 +224,7 @@ test.describe('Compras — fluxo guiado e acessibilidade', () => {
   });
 
   test('exibe skeleton enquanto os dados estão carregando', async ({ page }) => {
+    await page.addInitScript(() => localStorage.clear());
     await mockAdminApi(page, { bootstrapDelay: 700 });
     await page.goto('/admin/compras');
 

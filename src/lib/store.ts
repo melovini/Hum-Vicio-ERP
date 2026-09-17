@@ -751,10 +751,10 @@ export async function executeParallelLoadData(
       if (auditData) {
         mappedAudits = (auditData as any[]).map(a => ({
           id: a.id,
-          auditedBy: a.audited_by,
+          auditedBy: a.audited_by ?? a.auditedBy,
           items: a.items || [],
-          totalVarianceCost: Number(a.total_variance_cost) || 0,
-          createdAt: a.created_at
+          totalVarianceCost: Number(a.total_variance_cost ?? a.totalVarianceCost) || 0,
+          createdAt: a.created_at ?? a.createdAt
         }));
       }
 

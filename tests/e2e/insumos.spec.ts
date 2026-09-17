@@ -189,6 +189,7 @@ test.describe('Insumos — fundação visual e acessibilidade', () => {
   });
 
   test('exibe skeleton enquanto os dados ainda estão carregando', async ({ page }) => {
+    await page.addInitScript(() => localStorage.clear());
     await mockAdminApi(page, { bootstrapDelay: 700 });
     await page.goto('/admin/insumos');
 

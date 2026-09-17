@@ -142,7 +142,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       {children}
       <section
         aria-label="Notificações"
-        className="pointer-events-none fixed inset-x-4 bottom-4 z-[100] max-h-[50dvh] space-y-2 overflow-y-auto sm:left-auto sm:w-96"
+        className="pointer-events-none fixed top-4 right-4 z-[100] max-h-[50dvh] w-[calc(100vw-2rem)] sm:w-96 space-y-2 overflow-y-auto"
       >
         {toasts.map((toast) => (
           <div className="pointer-events-auto" key={toast.id}>
