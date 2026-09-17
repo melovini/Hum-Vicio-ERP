@@ -6,14 +6,12 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(function Input(
-  { className, invalid = false, autoFocus, ...props },
+  { className, invalid = false, ...props },
   ref,
 ) {
   return (
     <input
       ref={ref}
-      autoFocus={autoFocus}
-      data-autofocus={autoFocus || undefined}
       aria-invalid={invalid || undefined}
       className={cn(
         'min-h-10 w-full rounded-control border bg-surface-ground px-3 text-sm text-text-primary outline-none transition-[border-color,box-shadow]',

@@ -103,7 +103,7 @@ export default function FornecedoresPage() {
           footer={<><Button variant="ghost" onClick={() => setShowAddModal(false)} disabled={isSaving}>Cancelar</Button><Button type="submit" form="supplier-form" loading={isSaving}>Salvar fornecedor</Button></>}>
           <form id="supplier-form" onSubmit={handleSubmit} className="space-y-4">
             <FormField label="Nome da empresa ou fornecedor" required error={nameError}>
-              <Input required autoFocus value={name} onChange={(e) => { setName(e.target.value); if (nameError) setNameError(''); }} placeholder="Ex.: Açougue Premium Carnes" />
+              <Input required data-autofocus="true" value={name} onChange={(e) => { setName(e.target.value); if (nameError) setNameError(''); }} placeholder="Ex.: Açougue Premium Carnes" />
             </FormField>
             <div className="grid gap-4 sm:grid-cols-2">
               <FormField label="Contato ou vendedor"><Input value={contactName} onChange={(e) => setContactName(e.target.value)} placeholder="Ex.: Rodrigo" /></FormField>
@@ -182,7 +182,7 @@ export default function FornecedoresPage() {
                       <MessageSquare size={16} /> Pedir no WhatsApp
                     </a>
                   ) : (
-                    <p className="text-xs text-slate-600 text-center">Sem telefone cadastrado</p>
+                    <p className="text-center text-xs text-text-muted">Sem telefone cadastrado</p>
                   )}
                 </div>
               </div>
@@ -208,7 +208,7 @@ export default function FornecedoresPage() {
 
           <div className="overflow-x-auto">
             {purchaseRecords.length === 0 ? (
-              <p className="text-slate-500 text-center py-8">Nenhuma compra registrada com histórico detalhado ainda.</p>
+              <p className="py-8 text-center text-text-muted">Nenhuma compra registrada com histórico detalhado ainda.</p>
             ) : (
               <table className="w-full text-left text-sm">
                 <thead>
