@@ -32,7 +32,11 @@ export function Dialog({ open, onClose, title, description, children, footer, si
     previousFocus.current = document.activeElement as HTMLElement;
     const originalOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    requestAnimationFrame(() => panelRef.current?.querySelector<HTMLElement>(focusableSelector)?.focus());
+    requestAnimationFrame(() => {
+      const panel = panelRef.current;
+      const preferred = panel?.querySelector<HTMLElement>('[autofocus], [data-autofocus="true"]');
+      (preferred ?? panel?.querySelector<HTMLElement>(focusableSelector))?.focus();
+    });
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') onCloseRef.current();

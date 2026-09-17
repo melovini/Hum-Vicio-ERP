@@ -41,7 +41,7 @@ test.describe('Fornecedores — fundação visual', () => {
 
     await page.getByRole('searchbox', { name: 'Buscar fornecedores' }).fill('inexistente');
     await expect(page.getByRole('heading', { name: 'Nenhum fornecedor encontrado' })).toBeVisible();
-    await page.getByRole('button', { name: 'Limpar filtros' }).click();
+    await page.getByRole('button', { name: 'Limpar filtros' }).last().click();
 
     const accessibility = await new AxeBuilder({ page }).analyze();
     expect(accessibility.violations.filter((item) => ['critical', 'serious'].includes(item.impact || ''))).toEqual([]);
@@ -80,14 +80,14 @@ test.describe('Fornecedores — fundação visual', () => {
     await expect(page.getByRole('dialog', { name: 'Excluir fornecedor?' })).toBeVisible();
     await page.getByRole('button', { name: 'Excluir fornecedor', exact: true }).click();
     await expect(page.getByText('Não foi possível excluir')).toBeVisible();
-    await expect(page.getByText('Açougue Central')).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Açougue Central' })).toBeVisible();
   });
 
   test('orienta o primeiro cadastro quando a lista está vazia', async ({ page }) => {
     await mockAdminApi(page, { suppliers: [] });
     await page.goto('/admin/fornecedores');
     await expect(page.getByRole('heading', { name: 'Seu primeiro fornecedor' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Cadastrar fornecedor' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Cadastrar fornecedor' }).last()).toBeVisible();
   });
 
   test('exibe skeleton enquanto os dados ainda estão carregando', async ({ page }) => {
