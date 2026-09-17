@@ -74,20 +74,28 @@ export function cleanCustomerName(rawName: string): { cleanName: string; address
   let text = (rawName || '').trim();
   if (!text) return { cleanName: '' };
 
+  // Remove til inicial se houver (ex: "~joão")
+  if (text.startsWith('~')) {
+    text = text.replace(/^~+\s*/, '');
+  }
+
   // Remove prefixos de mesa como "Mesa 01 - " ou "Mesa 12 -"
   if (/^mesa\s+\d+\s*[-:]\s*/i.test(text)) {
     text = text.replace(/^mesa\s+\d+\s*[-:]\s*/i, '').trim();
   }
 
   // Se tiver separador de endereço com hífen (ex: "Carlos Silva - Rua XV, 120")
+  let addressPart: string | undefined;
   if (text.includes(' - ')) {
     const parts = text.split(' - ');
-    const nameCandidate = parts[0].trim();
-    const addressCandidate = parts.slice(1).join(' - ').trim();
-    return { cleanName: nameCandidate, addressPart: addressCandidate };
+    text = parts[0].trim();
+    addressPart = parts.slice(1).join(' - ').trim();
   }
 
-  return { cleanName: text };
+  // Remove sufixos operacionais do Cardápio Web se vierem colados no nome (ex: "Carlos DELIVERY", "Maria Retirada")
+  text = text.replace(/\s+(delivery|retirada|mesa(\s+\d+)?)$/i, '').trim();
+
+  return { cleanName: text, addressPart };
 }
 
 const IDB_NAME = 'hum_vicio_crm_db';
@@ -413,7 +421,7 @@ export function getNormalizedCustomerIndex(customers: ImportedCustomer[]): Norma
     const normName = normalizeSearchString(c.name || '');
     index[i] = {
       customer: c,
-      key: normName,
+      key: c.id || `${normName}_${c.phone || ''}_${i}`,
       normName,
       nameWords: normName.split(/\s+/),
       phoneDigits: (c.phone || '').replace(/\D/g, ''),
@@ -447,6 +455,7 @@ export function searchRecurringCustomers(
 
   const scoredResults: ScoredResult[] = [];
   const seenKeys = new Set<string>();
+  const seenErpNames = new Set<string>();
 
   const calculateScoreFromParts = (
     normName: string,
@@ -505,7 +514,8 @@ export function searchRecurringCustomers(
       normalizeSearchString(p.rawFullName || '')
     );
     if (score > 0) {
-      seenKeys.add(normName);
+      seenKeys.add(p.id || normName);
+      seenErpNames.add(normName);
       scoredResults.push({
         score: score + Math.min(p.totalOrders * 2, 20) + 15, // Bônus ERP
         result: {
@@ -527,6 +537,8 @@ export function searchRecurringCustomers(
   for (let i = 0; i < indexed.length; i++) {
     const entry = indexed[i];
     if (seenKeys.has(entry.key)) continue;
+    // Se o cliente exato do ERP já estiver incluído e for mesmo nome sem telefone/endereço adicional
+    if (seenErpNames.has(entry.normName) && !entry.normAddress && !entry.phoneDigits) continue;
 
     const score = calculateScoreFromParts(
       entry.normName,
@@ -537,12 +549,13 @@ export function searchRecurringCustomers(
     if (score > 0) {
       seenKeys.add(entry.key);
       const imp = entry.customer;
+      const cleanName = cleanCustomerName(imp.name).cleanName || imp.name;
       scoredResults.push({
         score: score + Math.min((imp.totalOrders || 1) * 2, 20),
         result: {
           id: imp.id,
-          name: imp.name,
-          rawFullName: imp.fullAddress ? `${imp.name} - ${imp.fullAddress}` : imp.name,
+          name: cleanName,
+          rawFullName: imp.fullAddress ? `${cleanName} - ${imp.fullAddress}` : cleanName,
           totalOrders: imp.totalOrders || 1,
           lastOrderSummary: imp.fullAddress ? imp.fullAddress : undefined,
           phone: imp.phone,
@@ -589,14 +602,44 @@ export async function searchCustomersFast(
     if (res.ok) {
       const data = await res.json();
       if (Array.isArray(data?.customers) && data.customers.length > 0) {
+        const cloudResults: CustomerSearchResult[] = (data.customers as ImportedCustomer[]).map(imp => {
+          const clean = cleanCustomerName(imp.name).cleanName || imp.name;
+          return {
+            id: imp.id,
+            name: clean,
+            rawFullName: imp.fullAddress ? `${clean} - ${imp.fullAddress}` : clean,
+            totalOrders: imp.totalOrders || 1,
+            lastOrderSummary: imp.fullAddress || undefined,
+            phone: imp.phone,
+            fullAddress: imp.fullAddress,
+            source: 'cardapio_web' as const,
+            importedCustomer: imp
+          };
+        });
+
+        // Mescla locais e remotos sem duplicados preservando ordem e prioridade dos locais
+        const resultMap = new Map<string, CustomerSearchResult>();
+        for (const item of local) {
+          const key = item.id || normalizeSearchString(item.name);
+          resultMap.set(key, item);
+        }
+        for (const item of cloudResults) {
+          const key = item.id || normalizeSearchString(item.name);
+          if (!resultMap.has(key)) {
+            resultMap.set(key, item);
+          }
+        }
+
+        // Atualiza cache em memória de forma leve e em background
         const currentStored = getStoredImportedCustomers();
         const existingIds = new Set(currentStored.map(c => c.id));
         const newFromCloud = (data.customers as ImportedCustomer[]).filter(c => !existingIds.has(c.id));
         if (newFromCloud.length > 0) {
-          const updatedList = [...newFromCloud, ...currentStored];
-          setStoredImportedCustomers(updatedList);
-          return searchRecurringCustomers(query, erpProfiles, updatedList, limit);
+          memoryImportedCustomers = [...newFromCloud, ...currentStored];
+          idbSaveImportedCustomers(memoryImportedCustomers).catch(() => {});
         }
+
+        return Array.from(resultMap.values()).slice(0, limit);
       }
     }
   } catch (err: any) {

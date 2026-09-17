@@ -2,6 +2,32 @@ import { createServerDatabase } from '@/lib/supabase-server';
 import { requireSession, requireSameOrigin, readJsonBody, apiError, AccessError } from '@/lib/security/server-session';
 import { validateCustomers } from '@/lib/security/customer-validation.mjs';
 
+function buildAccentRegex(str: string): string {
+  const map: Record<string, string> = {
+    a: '[aáàãâä]',
+    e: '[eéêë]',
+    i: '[iíîï]',
+    o: '[oóôõö]',
+    u: '[uúüû]',
+    c: '[cç]'
+  };
+  const base = str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const clean = base.replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return '';
+
+  let regex = '';
+  for (const ch of clean) {
+    if (map[ch]) {
+      regex += map[ch];
+    } else if (/\s+/.test(ch)) {
+      regex += '.*';
+    } else {
+      regex += ch;
+    }
+  }
+  return regex;
+}
+
 export async function GET(request?: Request) {
   try {
     await requireSession(['admin', 'gerente', 'caixa']);
@@ -21,27 +47,55 @@ export async function GET(request?: Request) {
     }
 
     if (search) {
-      const cleanSearch = search.replace(/[%_,()]/g, ' ').trim();
-      if (!cleanSearch) {
-        return Response.json({ success: true, customers: [], count: 0, source: 'supabase_search' }, { headers: { 'Cache-Control': 'no-store' } });
+      const pattern = buildAccentRegex(search);
+      const digits = search.replace(/\D/g, '');
+      const orParts: string[] = [];
+
+      if (pattern) {
+        orParts.push(`name.imatch.${pattern}`);
+        orParts.push(`full_address.imatch.${pattern}`);
+        orParts.push(`address.imatch.${pattern}`);
+      }
+      if (digits.length >= 3) {
+        orParts.push(`phone.ilike.%${digits}%`);
+      }
+
+      if (orParts.length === 0) {
+        return Response.json(
+          { success: true, customers: [], count: 0, source: 'supabase_search' },
+          { headers: { 'Cache-Control': 'no-store' } }
+        );
       }
 
       const { data, error } = await db
         .from('imported_customers')
         .select('*')
-        .or(`name.ilike.%${cleanSearch}%,phone.ilike.%${cleanSearch}%,full_address.ilike.%${cleanSearch}%`)
+        .or(orParts.join(','))
         .order('total_orders', { ascending: false })
         .limit(limit);
 
       if (error) throw error;
 
       const customers = (data || []).map(c => ({
-        id: c.id, name: c.name, phone: c.phone, address: c.address, number: c.number, neighborhood: c.neighborhood,
-        city: c.city, complement: c.complement, fullAddress: c.full_address, totalOrders: c.total_orders,
-        lastOrderDate: c.last_order_date, source: c.source, importedAt: c.imported_at,
+        id: c.id,
+        name: c.name,
+        phone: c.phone,
+        address: c.address,
+        number: c.number,
+        neighborhood: c.neighborhood,
+        city: c.city,
+        complement: c.complement,
+        fullAddress: c.full_address,
+        totalOrders: c.total_orders,
+        lastOrderDate: c.last_order_date,
+        source: c.source,
+        importedAt: c.imported_at,
       }));
 
-      return Response.json({ success: true, customers, count: customers.length, source: 'supabase_search' }, { headers: { 'Cache-Control': 'no-store' } });
+      return Response.json(
+        { success: true, customers, count: customers.length, source: 'supabase_search' },
+        { headers: { 'Cache-Control': 'no-store' } }
+      );
     }
 
     const customers = [];

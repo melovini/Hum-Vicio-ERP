@@ -7,7 +7,8 @@ import {
   CustomerSearchResult, 
   getStoredImportedCustomers, 
   searchRecurringCustomers, 
-  searchCustomersFast 
+  searchCustomersFast,
+  cleanCustomerName
 } from '@/lib/crm-clientes';
 import { formatPhone } from '@/lib/customer-filters';
 
@@ -34,10 +35,22 @@ export default function PosCustomerAutocomplete({
   const [results, setResults] = useState<CustomerSearchResult[]>([]);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [isSearchingCloud, setIsSearchingCloud] = useState(false);
+  const [customerCacheVersion, setCustomerCacheVersion] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const listboxId = useId();
+
+  // Escuta atualizações de clientes no IndexedDB ou sincronização em segundo plano
+  useEffect(() => {
+    const handleUpdate = () => setCustomerCacheVersion(v => v + 1);
+    window.addEventListener('crm_customers_updated', handleUpdate);
+    window.addEventListener('storage', handleUpdate);
+    return () => {
+      window.removeEventListener('crm_customers_updated', handleUpdate);
+      window.removeEventListener('storage', handleUpdate);
+    };
+  }, []);
 
   // Fecha dropdown ao clicar fora
   useEffect(() => {
@@ -68,7 +81,7 @@ export default function PosCustomerAutocomplete({
       setIsOpen(true);
     }
 
-    // 2. Consulta leve em background na nuvem com debounce de 250ms
+    // 2. Consulta leve em background na nuvem com debounce de 120ms
     const timer = setTimeout(async () => {
       try {
         setIsSearchingCloud(true);
@@ -82,16 +95,17 @@ export default function PosCustomerAutocomplete({
       } finally {
         setIsSearchingCloud(false);
       }
-    }, 250);
+    }, 120);
 
     return () => clearTimeout(timer);
-  }, [value, customerProfiles]);
+  }, [value, customerProfiles, customerCacheVersion]);
 
   const handleSelect = (cust: CustomerSearchResult) => {
-    let finalValue = cust.name;
+    const cleaned = cleanCustomerName(cust.name).cleanName || cust.name;
+    let finalValue = cleaned;
     if (orderType === 'delivery' && cust.fullAddress) {
       // Se for entrega e tiver endereço completo na base, formata amigavelmente
-      finalValue = `${cust.name} - ${cust.fullAddress}`;
+      finalValue = `${cleaned} - ${cust.fullAddress}`;
     } else if (cust.rawFullName && orderType === 'delivery') {
       finalValue = cust.rawFullName;
     }
@@ -206,7 +220,7 @@ export default function PosCustomerAutocomplete({
       </div>
 
       {/* Dropdown Flutuante de Sugestão de Clientes */}
-      {isOpen && results.length > 0 && (
+      {isOpen && (results.length > 0 || isSearchingCloud) && (
         <div
           id={listboxId}
           role="listbox"
@@ -216,32 +230,49 @@ export default function PosCustomerAutocomplete({
           <div className="bg-slate-950/90 px-3 py-1.5 flex items-center justify-between text-[10px] font-bold text-amber-400 border-b border-slate-800">
             <span className="flex items-center gap-1.5">
               <Sparkles size={11} className="text-amber-400" />
-              <span>Clientes Encontrados ({results.length})</span>
+              <span>
+                {results.length > 0 ? `Clientes Encontrados (${results.length})` : 'Consultando base de clientes...'}
+              </span>
             </span>
-            <span className="text-slate-500 font-normal">
-              Navegue com ↑ ↓ e pressione Enter
-            </span>
+            {results.length > 0 && (
+              <span className="text-slate-500 font-normal">
+                Navegue com ↑ ↓ e pressione Enter
+              </span>
+            )}
           </div>
 
-          {/* Lista de Sugestões */}
-          <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/60">
-            {results.map((cust, idx) => {
-              const isSelected = idx === activeIndex;
-              const isLoyal = cust.totalOrders >= 2;
-              const formattedPhone = cust.phone ? formatPhone(cust.phone) : '';
-              const addressSnippet = cust.fullAddress || cust.importedCustomer?.neighborhood || cust.importedCustomer?.address;
+          {/* Estado de Busca em Nuvem quando ainda não há locais */}
+          {results.length === 0 && isSearchingCloud && (
+            <div className="p-4 text-center text-xs text-slate-400 flex items-center justify-center gap-2">
+              <Loader2 size={13} className="text-amber-400 animate-spin" />
+              <span>Consultando base de clientes...</span>
+            </div>
+          )}
 
-              return (
-                <div
-                  key={cust.id || idx}
-                  role="option"
-                  aria-selected={isSelected}
-                  onMouseEnter={() => setActiveIndex(idx)}
-                  onClick={() => handleSelect(cust)}
-                  className={`p-2.5 transition-colors cursor-pointer flex items-center justify-between gap-3 text-left ${
-                    isSelected ? 'bg-amber-500/20 text-white' : 'hover:bg-slate-800/70 text-slate-200'
-                  }`}
-                >
+          {/* Lista de Sugestões */}
+          {results.length > 0 && (
+            <div className="max-h-60 overflow-y-auto divide-y divide-slate-800/60">
+              {results.map((cust, idx) => {
+                const isSelected = idx === activeIndex;
+                const isLoyal = cust.totalOrders >= 2;
+                const formattedPhone = cust.phone ? formatPhone(cust.phone) : '';
+                const addressSnippet = cust.fullAddress || cust.importedCustomer?.neighborhood || cust.importedCustomer?.address;
+
+                return (
+                  <div
+                    key={cust.id || idx}
+                    role="option"
+                    aria-selected={isSelected}
+                    onMouseEnter={() => setActiveIndex(idx)}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      handleSelect(cust);
+                    }}
+                    onClick={() => handleSelect(cust)}
+                    className={`p-2.5 transition-colors cursor-pointer flex items-center justify-between gap-3 text-left ${
+                      isSelected ? 'bg-amber-500/20 text-white' : 'hover:bg-slate-800/70 text-slate-200'
+                    }`}
+                  >
                   <div className="flex-1 min-w-0 space-y-0.5">
                     <div className="flex items-center gap-2 flex-wrap">
                       <strong className="text-xs font-bold text-white truncate">
@@ -294,8 +325,9 @@ export default function PosCustomerAutocomplete({
               );
             })}
           </div>
-        </div>
-      )}
-    </div>
-  );
+        )}
+      </div>
+    )}
+  </div>
+);
 }

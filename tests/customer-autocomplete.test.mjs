@@ -190,3 +190,45 @@ test('searchRecurringCustomers ignora termos menores que 2 caracteres para não 
   assert.deepEqual(searchRecurringCustomers('c', profiles, mockImportedCustomers), []);
   assert.deepEqual(searchRecurringCustomers('  ', profiles, mockImportedCustomers), []);
 });
+
+test('cleanCustomerName remove prefixos e sufixos operacionais do Cardápio Web', () => {
+  assert.equal(cleanCustomerName('Ana Vitoria DELIVERY').cleanName, 'Ana Vitoria');
+  assert.equal(cleanCustomerName('João Silva Retirada').cleanName, 'João Silva');
+  assert.equal(cleanCustomerName('Carlos Mesa 04').cleanName, 'Carlos');
+  assert.equal(cleanCustomerName('~João Gabriel').cleanName, 'João Gabriel');
+  assert.equal(cleanCustomerName('Mesa 02 - Mariana').cleanName, 'Mariana');
+});
+
+test('searchRecurringCustomers busca tolerando acentos em nomes', () => {
+  const customList = [
+    {
+      id: 'cust-1',
+      name: 'Vitória Morais Delivery',
+      phone: '34991112233',
+      address: 'Rua das Flores',
+      number: '10',
+      totalOrders: 5,
+      source: 'cardapio_web',
+      importedAt: '2026-09-01T10:00:00Z',
+    },
+    {
+      id: 'cust-2',
+      name: 'João Victor Retirada',
+      phone: '34992223344',
+      totalOrders: 3,
+      source: 'cardapio_web',
+      importedAt: '2026-09-01T10:00:00Z',
+    }
+  ];
+
+  // Busca sem acento "vitoria" deve encontrar "Vitória Morais" com nome limpo
+  const res1 = searchRecurringCustomers('vitoria', [], customList, 5);
+  assert.ok(res1.length >= 1);
+  assert.equal(res1[0].name, 'Vitória Morais');
+
+  // Busca sem acento "joao" deve encontrar "João Victor" com nome limpo
+  const res2 = searchRecurringCustomers('joao', [], customList, 5);
+  assert.ok(res2.length >= 1);
+  assert.equal(res2[0].name, 'João Victor');
+});
+
