@@ -39,6 +39,7 @@ export interface Product {
   id: string;
   name: string;
   category: 'lanche' | 'bebida' | 'porcao' | 'combo';
+  subcategory?: string;
   priceBalcao: number;
   priceIfood: number;
   recipe: RecipeIngredient[];

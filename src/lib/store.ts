@@ -25,6 +25,7 @@ import {
   DenominationCounts, INITIAL_DENOMINATIONS, calculateDenominationsTotal, 
   computeCashClosingVariances 
 } from './store/cash-operations';
+import { inferDefaultSubcategory } from './recipe-helpers';
 
 // === DOMÍNIO MODULARIZADO (Frente 5.1 - Separação de Responsabilidades) ===
 export * from './store/types';
@@ -83,6 +84,24 @@ export function saveStationItem(id: string, station: KitchenStation) {
     const map = getSavedStationMap();
     map[id] = station;
     localStorage.setItem('hum_vicio_ingredient_stations_map', JSON.stringify(map));
+  } catch {}
+}
+
+export function getSavedProductSubcategoriesMap(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem('hum_vicio_product_subcategories_map') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+export function saveProductSubcategoryItem(id: string, subcategory: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedProductSubcategoriesMap();
+    map[id] = subcategory;
+    localStorage.setItem('hum_vicio_product_subcategories_map', JSON.stringify(map));
   } catch {}
 }
 
@@ -514,15 +533,26 @@ export async function executeParallelLoadData(
       let mappedProducts = globalStore.products;
       if (prodData) {
         const recipesList = (recData as any[]) || [];
-        mappedProducts = (prodData as any[]).map(p => ({
-          id: p.id, name: p.name, category: p.category, 
-          priceBalcao: Number(p.price_balcao) || 0, 
-          priceIfood: Number(p.price_ifood) || 0,
-          recipe: recipesList.filter(r => r.product_id === p.id).map(r => ({
-            ingredientId: r.ingredient_id,
-            quantity: Number(r.quantity) || 0
-          }))
-        }));
+        const subcategoryMap = getSavedProductSubcategoriesMap();
+        mappedProducts = (prodData as any[]).map(p => {
+          const rawSub = p.subcategory || subcategoryMap[p.id] || undefined;
+          const prodObj: Product = {
+            id: p.id,
+            name: p.name,
+            category: p.category,
+            subcategory: rawSub,
+            priceBalcao: Number(p.price_balcao) || 0, 
+            priceIfood: Number(p.price_ifood) || 0,
+            recipe: recipesList.filter(r => r.product_id === p.id).map(r => ({
+              ingredientId: r.ingredient_id,
+              quantity: Number(r.quantity) || 0
+            }))
+          };
+          if (!prodObj.subcategory) {
+            prodObj.subcategory = inferDefaultSubcategory(prodObj);
+          }
+          return prodObj;
+        });
         if (typeof window !== 'undefined') {
           try { localStorage.setItem('hum_vicio_cached_products', JSON.stringify(mappedProducts)); } catch {}
         }
@@ -1667,9 +1697,27 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
 
   // --- PRODUTOS ACTIONS ---
   const addProduct = async (prod: Omit<Product, 'id'>) => {
-    const { data: pData } = await supabase.from('products').insert({
-      name: prod.name, category: prod.category, price_balcao: prod.priceBalcao, price_ifood: prod.priceIfood
-    }).select().single();
+    let pData: any = null;
+    const subcategoryToSave = prod.subcategory?.trim() || inferDefaultSubcategory({ ...prod, id: '' } as Product);
+
+    try {
+      const res = await supabase.from('products').insert({
+        name: prod.name,
+        category: prod.category,
+        subcategory: subcategoryToSave,
+        price_balcao: prod.priceBalcao,
+        price_ifood: prod.priceIfood
+      }).select().single();
+      pData = res.data;
+    } catch {
+      const fallbackRes = await supabase.from('products').insert({
+        name: prod.name,
+        category: prod.category,
+        price_balcao: prod.priceBalcao,
+        price_ifood: prod.priceIfood
+      }).select().single();
+      pData = fallbackRes.data;
+    }
 
     if (pData) {
       if (prod.recipe && prod.recipe.length > 0) {
@@ -1678,11 +1726,14 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
         }));
         await supabase.from('recipes').insert(recipeInserts);
       }
-      setProducts([...products, { ...prod, id: pData.id, isActive: true }]);
+      if (subcategoryToSave) {
+        saveProductSubcategoryItem(pData.id, subcategoryToSave);
+      }
+      setProducts([...products, { ...prod, subcategory: subcategoryToSave, id: pData.id, isActive: true }]);
 
       addAuditLog(
         'CADASTRO_PRODUTO',
-        `Produto "${prod.name}" cadastrado na categoria "${prod.category}". Preço Balcão: R$ ${prod.priceBalcao.toFixed(2)}`,
+        `Produto "${prod.name}" cadastrado na categoria "${prod.category}" (${subcategoryToSave}). Preço Balcão: R$ ${prod.priceBalcao.toFixed(2)}`,
         'Admin'
       );
     }
@@ -1691,10 +1742,26 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   const updateProduct = async (id: string, updates: Partial<Product>) => {
     const existing = products.find(p => p.id === id);
 
-    await supabase.from('products').update({
-      name: updates.name, category: updates.category,
-      price_balcao: updates.priceBalcao, price_ifood: updates.priceIfood
-    }).eq('id', id);
+    const dbPayload: any = {
+      name: updates.name,
+      category: updates.category,
+      price_balcao: updates.priceBalcao,
+      price_ifood: updates.priceIfood
+    };
+    if (updates.subcategory !== undefined) {
+      dbPayload.subcategory = updates.subcategory.trim();
+    }
+
+    try {
+      await supabase.from('products').update(dbPayload).eq('id', id);
+    } catch {
+      delete dbPayload.subcategory;
+      await supabase.from('products').update(dbPayload).eq('id', id);
+    }
+
+    if (updates.subcategory) {
+      saveProductSubcategoryItem(id, updates.subcategory.trim());
+    }
 
     if (updates.recipe) {
       await supabase.from('recipes').delete().eq('product_id', id);

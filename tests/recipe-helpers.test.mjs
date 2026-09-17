@@ -6,6 +6,8 @@ const {
   filterCardapioProducts,
   calculateRecipeMetrics,
   findMatchingInventoryItem,
+  inferDefaultSubcategory,
+  groupProductsBySubcategory,
 } = createLoader()('src/lib/recipe-helpers.ts');
 
 const mockProducts = [
@@ -39,6 +41,16 @@ const mockProducts = [
     isActive: false,
     recipe: [],
   },
+  {
+    id: 'prod-4',
+    name: 'Smash Salad Duplo',
+    category: 'lanche',
+    subcategory: 'Smash Burgers',
+    price: 32.0,
+    priceIfood: 40.0,
+    isActive: true,
+    recipe: [],
+  },
 ];
 
 const mockInventory = [
@@ -50,7 +62,7 @@ const mockInventory = [
 test('filterCardapioProducts filtra por categoria, busca textual e visibilidade de inativos', () => {
   // Filtro por categoria
   const lanches = filterCardapioProducts(mockProducts, { category: 'lanche' });
-  assert.equal(lanches.length, 1);
+  assert.equal(lanches.length, 2);
   assert.equal(lanches[0].id, 'prod-1');
 
   // Filtro por busca com acentuação
@@ -65,6 +77,37 @@ test('filterCardapioProducts filtra por categoria, busca textual e visibilidade 
   // Inativo exibido quando showInactive = true
   const bebidasComInativas = filterCardapioProducts(mockProducts, { category: 'bebida', showInactive: true });
   assert.equal(bebidasComInativas.length, 1);
+});
+
+test('filterCardapioProducts filtra por subcategoria', () => {
+  const smashList = filterCardapioProducts(mockProducts, { subcategory: 'Smash Burgers' });
+  assert.equal(smashList.length, 1);
+  assert.equal(smashList[0].id, 'prod-4');
+
+  const batataList = filterCardapioProducts(mockProducts, { subcategory: 'Batatas Fritas' });
+  assert.equal(batataList.length, 1);
+  assert.equal(batataList[0].id, 'prod-2');
+});
+
+test('inferDefaultSubcategory infere subcategorias corretas ou respeita a definida', () => {
+  assert.equal(inferDefaultSubcategory({ name: 'Smash Simples', category: 'lanche' }), 'Smash Burgers');
+  assert.equal(inferDefaultSubcategory({ name: 'Argentina Duplo', category: 'lanche' }), 'Linha Duplos');
+  assert.equal(inferDefaultSubcategory({ name: 'Costela Especial', category: 'lanche' }), 'Hambúrgueres Especiais');
+  assert.equal(inferDefaultSubcategory({ name: 'Hambúrguer Veggie', category: 'lanche' }), 'Vegetarianos');
+  assert.equal(inferDefaultSubcategory({ name: 'Batata Cheddar', category: 'porcao' }), 'Batatas Fritas');
+  assert.equal(inferDefaultSubcategory({ name: 'Anéis de Cebola 180g', category: 'porcao' }), 'Anéis de Cebola & Petiscos');
+  assert.equal(inferDefaultSubcategory({ name: 'Coca Cola Lata', category: 'bebida' }), 'Refrigerantes');
+  assert.equal(inferDefaultSubcategory({ name: 'Suco de Laranja', category: 'bebida' }), 'Sucos & Chás');
+  // Se já tiver subcategoria definida explicitamente
+  assert.equal(inferDefaultSubcategory({ name: 'Burger X', category: 'lanche', subcategory: 'Edição de Verão' }), 'Edição de Verão');
+});
+
+test('groupProductsBySubcategory agrupa os produtos em categorias hierárquicas', () => {
+  const groups = groupProductsBySubcategory(mockProducts);
+  assert.ok(groups.length >= 3);
+  const smashGroup = groups.find(g => g.subcategory === 'Smash Burgers');
+  assert.ok(smashGroup);
+  assert.equal(smashGroup.products.length, 1);
 });
 
 test('calculateRecipeMetrics calcula CMV, margens e identifica insumos sem custo', () => {

@@ -24,28 +24,131 @@ export function normalizeText(text: string): string {
     .trim();
 }
 
+export const DEFAULT_SUBCATEGORIES_BY_CATEGORY: Record<string, string[]> = {
+  lanche: [
+    'Smash Burgers',
+    'Artesanais 180g',
+    'Hambúrgueres Especiais',
+    'Linha Duplos',
+    'Vegetarianos',
+    'Kids',
+    'Clássicos da Casa',
+  ],
+  porcao: [
+    'Batatas Fritas',
+    'Anéis de Cebola & Petiscos',
+    'Adicionais & Carnes Extras',
+    'Molhos & Maioneses da Casa',
+  ],
+  bebida: [
+    'Refrigerantes',
+    'Sucos & Chás',
+    'Águas',
+    'Cervejas',
+  ],
+  combo: [
+    'Combos com Batata',
+    'Combos Especiais',
+  ],
+};
+
 /**
- * Filtra produtos do cardápio com suporte a busca insensível a acentos, categoria e ativos/inativos
+ * Infere uma subcategoria inteligente para produtos sem subcategoria explícita
+ */
+export function inferDefaultSubcategory(product: Product): string {
+  if (product.subcategory && product.subcategory.trim()) {
+    return product.subcategory.trim();
+  }
+  const nameNorm = normalizeText(product.name);
+  const cat = product.category;
+
+  if (cat === 'lanche') {
+    if (nameNorm.includes('duplo') || nameNorm.includes('2x')) return 'Linha Duplos';
+    if (nameNorm.includes('smash')) return 'Smash Burgers';
+    if (nameNorm.includes('vegetariano') || nameNorm.includes('veggie')) return 'Vegetarianos';
+    if (nameNorm.includes('kids') || nameNorm.includes('infantil')) return 'Kids';
+    if (
+      nameNorm.includes('costela') ||
+      nameNorm.includes('empanado') ||
+      nameNorm.includes('recheado') ||
+      nameNorm.includes('especial') ||
+      nameNorm.includes('edicao')
+    ) {
+      return 'Hambúrgueres Especiais';
+    }
+    return 'Artesanais 180g';
+  }
+
+  if (cat === 'porcao') {
+    if (nameNorm.includes('batata') || nameNorm.includes('frita')) return 'Batatas Fritas';
+    if (nameNorm.includes('anel') || nameNorm.includes('aneis') || nameNorm.includes('cebola')) return 'Anéis de Cebola & Petiscos';
+    if (nameNorm.includes('pote') || nameNorm.includes('maionese') || nameNorm.includes('molho')) return 'Molhos & Maioneses da Casa';
+    if (nameNorm.includes('adicional') || nameNorm.includes('extra')) return 'Adicionais & Carnes Extras';
+    return 'Porções da Casa';
+  }
+
+  if (cat === 'bebida') {
+    if (nameNorm.includes('suco') || nameNorm.includes('cha') || nameNorm.includes('nectar')) return 'Sucos & Chás';
+    if (nameNorm.includes('agua')) return 'Águas';
+    if (nameNorm.includes('cerveja') || nameNorm.includes('long neck') || nameNorm.includes('chope')) return 'Cervejas';
+    return 'Refrigerantes';
+  }
+
+  if (cat === 'combo') {
+    if (nameNorm.includes('batata')) return 'Combos com Batata';
+    return 'Combos Especiais';
+  }
+
+  return 'Geral';
+}
+
+/**
+ * Agrupa produtos por subcategoria para visualização hierárquica
+ */
+export function groupProductsBySubcategory(products: Product[]): { subcategory: string; products: Product[] }[] {
+  const map = new Map<string, Product[]>();
+
+  for (const product of products) {
+    const sub = inferDefaultSubcategory(product);
+    const list = map.get(sub) || [];
+    list.push(product);
+    map.set(sub, list);
+  }
+
+  return Array.from(map.entries()).map(([subcategory, prods]) => ({
+    subcategory,
+    products: prods,
+  }));
+}
+
+/**
+ * Filtra produtos do cardápio com suporte a busca insensível a acentos, categoria, subcategoria e ativos/inativos
  */
 export function filterCardapioProducts(
   products: Product[],
   options: {
     category?: CardapioCategoryFilter;
+    subcategory?: string;
     search?: string;
     showInactive?: boolean;
   } = {},
 ): Product[] {
-  const { category = 'todos', search = '', showInactive = false } = options;
+  const { category = 'todos', subcategory = 'todas', search = '', showInactive = false } = options;
   const q = normalizeText(search);
 
   return products.filter((p) => {
     if (!showInactive && p.isActive === false) return false;
     if (category !== 'todos' && p.category !== category) return false;
+    if (subcategory && subcategory !== 'todas') {
+      const pSub = inferDefaultSubcategory(p);
+      if (normalizeText(pSub) !== normalizeText(subcategory)) return false;
+    }
     if (!q) return true;
 
     const nameNorm = normalizeText(p.name);
     const catNorm = normalizeText(p.category);
-    return nameNorm.includes(q) || catNorm.includes(q);
+    const subNorm = normalizeText(p.subcategory || inferDefaultSubcategory(p));
+    return nameNorm.includes(q) || catNorm.includes(q) || subNorm.includes(q);
   });
 }
 
