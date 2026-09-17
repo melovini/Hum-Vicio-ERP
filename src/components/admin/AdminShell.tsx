@@ -23,7 +23,7 @@ const groups: NavGroup[] = [
     { href: '/admin/fiscal', label: 'Fiscal e NFC-e', icon: ReceiptText },
   ] },
   { label: 'Cardápio e preço', items: [
-    { href: '/admin/cardapio', label: 'Fichas técnicas', icon: BookOpen },
+    { href: '/admin/cardapio', label: 'Cardápio', icon: BookOpen },
     { href: '/admin/engenharia', label: 'Engenharia de cardápio', icon: LayoutGrid },
     { href: '/admin/precificacao', label: 'Precificação', icon: Tags },
     { href: '/admin/simulador', label: 'Simulador', icon: Calculator },

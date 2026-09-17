@@ -1,0 +1,122 @@
+export const DEFAULT_SUBCATEGORIES_BY_CATEGORY: Record<string, string[]> = {
+  lanche: [
+    'Smash Burgers',
+    'Artesanais 180g',
+    'Hambúrgueres Especiais',
+    'Linha Duplos',
+    'Vegetarianos',
+    'Kids',
+  ],
+  porcao: [
+    'Batatas Fritas',
+    'Adicionais de Hambúrguer',
+    'Molhos & Maioneses da Casa',
+    'Petiscos & Empanados',
+  ],
+  bebida: [
+    'Refrigerantes',
+    'Sucos & Chás',
+    'Águas',
+    'Cervejas',
+  ],
+  combo: [
+    'Combos com Batata',
+    'Combos Especiais',
+  ],
+};
+
+export type CustomSubcategoriesMap = Record<string, string[]>;
+
+const STORAGE_KEY = 'hum_vicio_custom_subcategories_by_category';
+
+export function getCustomSubcategories(): CustomSubcategoriesMap {
+  if (typeof window === 'undefined') return { ...DEFAULT_SUBCATEGORIES_BY_CATEGORY };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_SUBCATEGORIES_BY_CATEGORY };
+    const parsed = JSON.parse(raw);
+    return {
+      lanche: Array.isArray(parsed.lanche) && parsed.lanche.length > 0 ? parsed.lanche : DEFAULT_SUBCATEGORIES_BY_CATEGORY.lanche,
+      porcao: Array.isArray(parsed.porcao) && parsed.porcao.length > 0 ? parsed.porcao : DEFAULT_SUBCATEGORIES_BY_CATEGORY.porcao,
+      bebida: Array.isArray(parsed.bebida) && parsed.bebida.length > 0 ? parsed.bebida : DEFAULT_SUBCATEGORIES_BY_CATEGORY.bebida,
+      combo: Array.isArray(parsed.combo) && parsed.combo.length > 0 ? parsed.combo : DEFAULT_SUBCATEGORIES_BY_CATEGORY.combo,
+    };
+  } catch {
+    return { ...DEFAULT_SUBCATEGORIES_BY_CATEGORY };
+  }
+}
+
+export function saveCustomSubcategories(data: CustomSubcategoriesMap): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch {}
+}
+
+export function getSubcategoriesForCategory(category: string, products?: { category: string; subcategory?: string }[]): string[] {
+  const all = getCustomSubcategories();
+  const base = [...(all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [])];
+  if (!products || products.length === 0) return base;
+
+  // Inclui eventuais subcategorias existentes em produtos que ainda não estejam na lista base
+  const set = new Set(base);
+  products.forEach(p => {
+    if (p.category === category && p.subcategory && !set.has(p.subcategory)) {
+      base.push(p.subcategory);
+      set.add(p.subcategory);
+    }
+  });
+
+  return base;
+}
+
+export function addSubcategory(category: string, name: string): CustomSubcategoriesMap {
+  const trimmed = name.trim();
+  const all = getCustomSubcategories();
+  if (!trimmed) return all;
+  const current = all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [];
+  if (current.includes(trimmed)) return all;
+  all[category] = [...current, trimmed];
+  saveCustomSubcategories(all);
+  return all;
+}
+
+export function renameSubcategory(category: string, oldName: string, newName: string): CustomSubcategoriesMap {
+  const trimmedNew = newName.trim();
+  const all = getCustomSubcategories();
+  if (!trimmedNew || oldName === trimmedNew) return all;
+  const current = all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [];
+  all[category] = current.map(item => item === oldName ? trimmedNew : item);
+  saveCustomSubcategories(all);
+  return all;
+}
+
+export function deleteSubcategory(category: string, name: string): CustomSubcategoriesMap {
+  const all = getCustomSubcategories();
+  const current = all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [];
+  all[category] = current.filter(item => item !== name);
+  saveCustomSubcategories(all);
+  return all;
+}
+
+export function moveSubcategory(category: string, fromIndex: number, toIndexOrDirection: number | 'up' | 'down'): CustomSubcategoriesMap {
+  const all = getCustomSubcategories();
+  const current = [...(all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [])];
+  let targetIndex: number;
+  if (toIndexOrDirection === 'up') {
+    targetIndex = fromIndex - 1;
+  } else if (toIndexOrDirection === 'down') {
+    targetIndex = fromIndex + 1;
+  } else {
+    targetIndex = toIndexOrDirection;
+  }
+
+  if (fromIndex < 0 || fromIndex >= current.length || targetIndex < 0 || targetIndex >= current.length) {
+    return all;
+  }
+  const [removed] = current.splice(fromIndex, 1);
+  current.splice(targetIndex, 0, removed);
+  all[category] = current;
+  saveCustomSubcategories(all);
+  return all;
+}

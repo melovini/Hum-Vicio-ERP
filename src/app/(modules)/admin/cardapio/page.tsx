@@ -1,12 +1,13 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { 
   ChefHat, Plus, Trash2, Edit2, 
   FlaskConical, Sparkles, Layers, Store, Smartphone, Search, Copy,
   Landmark, AlertTriangle, CheckCircle2, X, FolderTree, Grid,
-  ChevronDown, ChevronRight, ExternalLink, Info
+  ChevronDown, ChevronRight, ExternalLink, Info, FolderKanban,
+  ArrowUp, ArrowDown, Pencil, Check
 } from 'lucide-react';
 import { useInventory, type Product, type RecipeIngredient, type InventoryItem } from '@/lib/store';
 import { FISCAL_CATEGORY_PRESETS } from '@/lib/fiscal';
@@ -19,6 +20,16 @@ import {
   DEFAULT_SUBCATEGORIES_BY_CATEGORY,
   type CardapioCategoryFilter 
 } from '@/lib/recipe-helpers';
+import {
+  getCustomSubcategories,
+  saveCustomSubcategories,
+  getSubcategoriesForCategory,
+  addSubcategory,
+  renameSubcategory,
+  deleteSubcategory,
+  moveSubcategory,
+  type CustomSubcategoriesMap,
+} from '@/lib/subcategory-store';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { FilterBar } from '@/components/ui/FilterBar';
@@ -58,6 +69,25 @@ export default function CardapioAdminPage() {
   const [isSavingProduct, setIsSavingProduct] = useState(false);
   const [isCreatingIngOnTheFly, setIsCreatingIngOnTheFly] = useState(false);
   const [inlineCostInputs, setInlineCostInputs] = useState<Record<string, string>>({});
+
+  // Subcategorias Customizadas & Modal de Gestão
+  const [customSubcategoriesMap, setCustomSubcategoriesMap] = useState<CustomSubcategoriesMap>({});
+  const [isSubcategoryModalOpen, setIsSubcategoryModalOpen] = useState(false);
+  const [selectedCatForSubMgmt, setSelectedCatForSubMgmt] = useState<'lanche' | 'porcao' | 'bebida' | 'combo'>('lanche');
+  const [newSubcategoryInput, setNewSubcategoryInput] = useState('');
+  const [editingSubcat, setEditingSubcat] = useState<{ oldName: string; newName: string } | null>(null);
+  const [confirmDeleteSubcat, setConfirmDeleteSubcat] = useState<string | null>(null);
+
+  // Adicionais e Personalização de Venda do Produto no Caixa
+  const [acceptsAddons, setAcceptsAddons] = useState<boolean>(true);
+  const [addonMode, setAddonMode] = useState<'all' | 'custom'>('all');
+  const [allowedAddonIds, setAllowedAddonIds] = useState<string[]>([]);
+  const [isAddon, setIsAddon] = useState<boolean>(false);
+
+  // Carregar subcategorias customizadas do armazenamento persistente
+  useEffect(() => {
+    setCustomSubcategoriesMap(getCustomSubcategories());
+  }, []);
 
   // Parâmetros Tributários Fiscais (NFC-e)
   const [ncm, setNcm] = useState('');
@@ -151,30 +181,40 @@ export default function CardapioAdminPage() {
     ? subRecipes.filter(s => s.parentIngredientId === activePrep.id) 
     : [];
 
+  // Subcategorias disponíveis para a categoria sendo editada no formulário
   const availableSubcategoriesForCategory = useMemo(() => {
-    const defaults = DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [];
-    const fromProds = Array.from(
-      new Set(
-        products
-          .filter(p => p.category === category)
-          .map(p => p.subcategory || inferDefaultSubcategory(p))
-          .filter(Boolean)
-      )
-    );
-    return Array.from(new Set([...defaults, ...fromProds]));
-  }, [category, products]);
+    return getSubcategoriesForCategory(category, products);
+  }, [category, products, customSubcategoriesMap]);
 
+  // Subcategorias para filtros no topo
   const filterSubcategories = useMemo(() => {
-    const relevantProducts = categoryFilter === 'todos' 
-      ? products 
-      : products.filter(p => p.category === categoryFilter);
-    const subcats = Array.from(
-      new Set(
-        relevantProducts.map(p => p.subcategory || inferDefaultSubcategory(p)).filter(Boolean)
-      )
-    );
-    return subcats;
-  }, [products, categoryFilter]);
+    if (categoryFilter === 'todos') {
+      const allSubcats = new Set<string>();
+      (['lanche', 'porcao', 'bebida', 'combo'] as const).forEach(cat => {
+        getSubcategoriesForCategory(cat, products).forEach(s => allSubcats.add(s));
+      });
+      products.forEach(p => {
+        const s = p.subcategory || inferDefaultSubcategory(p);
+        if (s) allSubcats.add(s);
+      });
+      return Array.from(allSubcats);
+    }
+    return getSubcategoriesForCategory(categoryFilter, products);
+  }, [products, categoryFilter, customSubcategoriesMap]);
+
+  // Ordem hierárquica configurada para exibição em grupos
+  const currentSubcategoryOrder = useMemo(() => {
+    if (categoryFilter !== 'todos') {
+      return getSubcategoriesForCategory(categoryFilter, products);
+    }
+    const order: string[] = [];
+    (['lanche', 'porcao', 'bebida', 'combo'] as const).forEach(cat => {
+      getSubcategoriesForCategory(cat, products).forEach(s => {
+        if (!order.includes(s)) order.push(s);
+      });
+    });
+    return order;
+  }, [categoryFilter, products, customSubcategoriesMap]);
 
   const filteredProducts = useMemo(() => {
     return filterCardapioProducts(products, {
@@ -186,8 +226,182 @@ export default function CardapioAdminPage() {
   }, [products, categoryFilter, subcategoryFilter, searchTerm, showInactive]);
 
   const groupedProducts = useMemo(() => {
-    return groupProductsBySubcategory(filteredProducts);
-  }, [filteredProducts]);
+    return groupProductsBySubcategory(filteredProducts, currentSubcategoryOrder);
+  }, [filteredProducts, currentSubcategoryOrder]);
+
+  // Produtos adicionais disponíveis no sistema para seleção restrita
+  const availableSystemAddonProducts = useMemo(() => {
+    return products.filter(p => 
+      p.isActive !== false && (
+        p.isAddon === true ||
+        p.category === 'porcao' ||
+        p.name.startsWith('Adicional:') ||
+        p.name.startsWith('Pote Maionese') ||
+        p.name.toLowerCase().includes('adicional') ||
+        p.name.toLowerCase().includes('extra')
+      )
+    );
+  }, [products]);
+
+  // Prévia em tempo real das observações rápidas para a chapa com base na receita
+  const previewQuickNotes = useMemo(() => {
+    const meatPoints = ['AO PONTO', 'BEM PASSADO', 'AO PONTO P/ BEM'];
+    const removalChips: string[] = [];
+    let hasSalad = false;
+
+    if (recipe && recipe.length > 0 && items && items.length > 0) {
+      recipe.forEach(r => {
+        const ing = items.find(i => i.id === r.ingredientId);
+        if (!ing) return;
+
+        const rawName = ing.name.toUpperCase().trim();
+        const cat = (ing.category || '').toUpperCase().trim();
+
+        const isNonFood = 
+          cat === 'EMBALAGENS' ||
+          cat === 'DIVERSOS' ||
+          cat === 'OPERACIONAL' ||
+          cat === 'UTILIDADES' ||
+          cat === 'LIMPEZA' ||
+          rawName.includes('GÁS') ||
+          rawName.includes('GAS') ||
+          rawName.includes('ENERGIA') ||
+          rawName.includes('LUZ') ||
+          rawName.includes('ÁGUA') ||
+          rawName.includes('AGUA') ||
+          rawName.includes('EMBALAGEM') ||
+          rawName.includes('PAPEL') ||
+          rawName.includes('SACO') ||
+          rawName.includes('SACOLA') ||
+          rawName.includes('CAIXA') ||
+          rawName.includes('COPO') ||
+          rawName.includes('CANUDO') ||
+          rawName.includes('ETIQUETA') ||
+          rawName.includes('LACRE') ||
+          rawName.includes('GUARDANAPO');
+
+        if (isNonFood) return;
+        if (rawName.includes('PÃO') || rawName.includes('PAO')) return;
+        if (rawName.startsWith('HAMBÚRGUER') || rawName.startsWith('HAMBURGUER') || rawName.startsWith('HAMB.')) {
+          if (!rawName.includes('QUEIJO')) return;
+        }
+
+        if (rawName.includes('CEBOLA')) {
+          removalChips.push('SEM CEBOLA');
+        } else if (rawName.includes('ALFACE')) {
+          hasSalad = true;
+          removalChips.push('SEM ALFACE');
+        } else if (rawName.includes('TOMATE')) {
+          hasSalad = true;
+          removalChips.push('SEM TOMATE');
+        } else if (rawName.includes('RÚCULA') || rawName.includes('RUCULA')) {
+          hasSalad = true;
+          removalChips.push('SEM RÚCULA');
+        } else if (rawName.includes('BACON')) {
+          removalChips.push('SEM BACON');
+        } else if (rawName.includes('CHEDDAR')) {
+          removalChips.push('SEM CHEDDAR');
+        } else if (rawName.includes('COALHO')) {
+          removalChips.push('SEM QUEIJO COALHO');
+        } else if (rawName.includes('MINAS')) {
+          removalChips.push('SEM QUEIJO MINAS');
+        } else if (rawName.includes('MOZARELA') || rawName.includes('MUSSARELA')) {
+          removalChips.push('SEM MOZARELA');
+        } else if (rawName.includes('SOUR CREAM')) {
+          removalChips.push('SEM SOUR CREAM');
+        } else if (rawName.includes('PIMENTA') || rawName.includes('JALAPEÑO') || rawName.includes('JALAPENO')) {
+          removalChips.push('SEM PIMENTA');
+        } else if (rawName.includes('MAIONESE') || rawName.includes('MOLHO') || rawName.includes('CHIMICHURRI') || rawName.includes('BARBECUE')) {
+          removalChips.push('SEM MOLHO');
+        } else if (rawName.includes('COGUMELO') || rawName.includes('PARIS')) {
+          removalChips.push('SEM COGUMELO');
+        } else if (rawName.includes('COLESLAW')) {
+          removalChips.push('SEM COLESLAW');
+        } else if (rawName.includes('NACHOS')) {
+          removalChips.push('SEM NACHOS');
+        } else if (rawName.includes('CARNE SECA')) {
+          removalChips.push('SEM CARNE SECA');
+        } else if (rawName.includes('MELAÇO') || rawName.includes('MELACO')) {
+          removalChips.push('SEM MELAÇO');
+        } else if (rawName.includes('PICLES')) {
+          removalChips.push('SEM PICLES');
+        } else {
+          const cleanName = rawName
+            .replace(/\s*\([^)]*\)/g, '')
+            .replace(/\b(FATIADO|FATIADA|FRESCO|FRESCA|EM BARRA|PRONTO|PRONTA|COZIDO|COZIDA)\b/g, '')
+            .trim();
+          if (cleanName.length > 2) {
+            removalChips.push(`SEM ${cleanName}`);
+          }
+        }
+      });
+    }
+
+    if (hasSalad) {
+      removalChips.unshift('SEM SALADA');
+    }
+
+    if (removalChips.length === 0) {
+      removalChips.push('SEM CEBOLA', 'SEM SALADA', 'SEM MOLHO');
+    }
+
+    const uniqueRemovals = Array.from(new Set(removalChips));
+    return [...meatPoints, ...uniqueRemovals, 'MOLHO À PARTE', 'CORTAR AO MEIO'];
+  }, [recipe, items]);
+
+  // Gestão de Subcategorias - Ações
+  const handleAddCustomSubcategory = (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', subName: string) => {
+    const trimmed = subName.trim();
+    if (!trimmed) {
+      notify({ title: 'Informe o nome da subcategoria.', tone: 'warning' });
+      return;
+    }
+    const updatedMap = addSubcategory(cat, trimmed);
+    setCustomSubcategoriesMap(updatedMap);
+    setNewSubcategoryInput('');
+    notify({ title: `Subcategoria "${trimmed}" adicionada!`, tone: 'success' });
+  };
+
+  const handleRenameCustomSubcategory = async (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', oldName: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) {
+      setEditingSubcat(null);
+      return;
+    }
+    const updatedMap = renameSubcategory(cat, oldName, trimmed);
+    setCustomSubcategoriesMap(updatedMap);
+
+    // Atualizar em lote todos os produtos da categoria que possuíam o nome antigo
+    const affectedProducts = products.filter(p => 
+      p.category === cat && (p.subcategory === oldName || inferDefaultSubcategory(p) === oldName)
+    );
+    for (const p of affectedProducts) {
+      try {
+        await updateProduct(p.id, { subcategory: trimmed });
+      } catch (e) {
+        console.error('Erro ao atualizar subcategoria do produto', p.id, e);
+      }
+    }
+
+    setEditingSubcat(null);
+    notify({ 
+      title: `Subcategoria renomeada para "${trimmed}"!`, 
+      description: affectedProducts.length > 0 ? `${affectedProducts.length} produto(s) atualizado(s).` : undefined,
+      tone: 'success' 
+    });
+  };
+
+  const handleDeleteCustomSubcategory = (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', subName: string) => {
+    const updatedMap = deleteSubcategory(cat, subName);
+    setCustomSubcategoriesMap(updatedMap);
+    setConfirmDeleteSubcat(null);
+    notify({ title: `Subcategoria "${subName}" excluída.`, tone: 'info' });
+  };
+
+  const handleMoveCustomSubcategory = (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', index: number, direction: 'up' | 'down') => {
+    const updatedMap = moveSubcategory(cat, index, direction);
+    setCustomSubcategoriesMap(updatedMap);
+  };
 
   const resetForm = () => {
     setName(''); 
@@ -206,6 +420,10 @@ export default function CardapioAdminPage() {
     setIsIngDropdownOpen(false); 
     setIsAdding(false); 
     setEditingId(null);
+    setAcceptsAddons(true);
+    setAddonMode('all');
+    setAllowedAddonIds([]);
+    setIsAddon(false);
   };
 
   const applyFiscalPreset = (presetKey: string) => {
@@ -287,7 +505,10 @@ export default function CardapioAdminPage() {
         ncm: ncm.trim() || undefined,
         cfop: cfop.trim() || undefined,
         csosn: csosn.trim() || undefined,
-        cest: cest.trim() || undefined
+        cest: cest.trim() || undefined,
+        acceptsAddons,
+        allowedAddonIds: addonMode === 'custom' ? allowedAddonIds : [],
+        isAddon,
       };
 
       if (editingId) {
@@ -297,6 +518,14 @@ export default function CardapioAdminPage() {
         await addProduct(productData);
         notify({ title: `Produto "${name}" criado com sucesso no cardápio!`, tone: 'success' });
       }
+
+      // Garantir visibilidade imediata do produto recém-salvo no cardápio
+      if (categoryFilter !== 'todos' && categoryFilter !== category) {
+        setCategoryFilter('todos');
+      }
+      setSubcategoryFilter('todas');
+      setSearchTerm('');
+      setCollapsedSubcategories(prev => ({ ...prev, [subcategoryFinal]: false }));
 
       resetForm();
     } catch (err: any) {
@@ -317,6 +546,15 @@ export default function CardapioAdminPage() {
     setCsosn(p.csosn || '');
     setCest(p.cest || '');
     setRecipe([...p.recipe]);
+    setAcceptsAddons(p.acceptsAddons !== false);
+    setIsAddon(Boolean(p.isAddon));
+    if (p.allowedAddonIds && p.allowedAddonIds.length > 0) {
+      setAddonMode('custom');
+      setAllowedAddonIds(p.allowedAddonIds);
+    } else {
+      setAddonMode('all');
+      setAllowedAddonIds([]);
+    }
     setEditingId(p.id);
     setIsAdding(true);
   };
@@ -332,6 +570,15 @@ export default function CardapioAdminPage() {
     setCsosn(p.csosn || '');
     setCest(p.cest || '');
     setRecipe(p.recipe.map(r => ({ ...r })));
+    setAcceptsAddons(p.acceptsAddons !== false);
+    setIsAddon(Boolean(p.isAddon));
+    if (p.allowedAddonIds && p.allowedAddonIds.length > 0) {
+      setAddonMode('custom');
+      setAllowedAddonIds([...p.allowedAddonIds]);
+    } else {
+      setAddonMode('all');
+      setAllowedAddonIds([]);
+    }
     setEditingId(null);
     setIsAdding(true);
     notify({ title: `Item clonado! Altere o nome e os ingredientes desejados.`, tone: 'info' });
@@ -556,6 +803,16 @@ export default function CardapioAdminPage() {
                   {subcat}
                 </span>
               )}
+              {p.isAddon && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                  Adicional PDV
+                </span>
+              )}
+              {p.acceptsAddons === false && (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-500/10 text-slate-400 border border-slate-500/20">
+                  Sem adicionais
+                </span>
+              )}
               {p.isActive === false ? (
                 <Badge variant="danger" dot>Desativado</Badge>
               ) : (
@@ -719,18 +976,27 @@ export default function CardapioAdminPage() {
 
       <div className="max-w-6xl mx-auto relative z-10 space-y-6">
         <PageHeader
-          title="Cardápio & Fichas Técnicas"
-          eyebrow="Engenharia de Cardápio e CMV"
-          description="Fichas técnicas com cálculo de CMV em tempo real, sub-receitas e parâmetros fiscais para emissão de NFC-e."
+          title="Cardápio"
+          eyebrow="Gestão de Produtos, Engenharia & CMV"
+          description="Gerencie os produtos do seu cardápio, subcategorias hierárquicas, composição de insumos e adicionais de venda para o Caixa."
           actions={
             <div className="flex flex-wrap items-center gap-2">
               {activeTab === 'produtos' ? (
-                <Button
-                  onClick={() => { resetForm(); setIsAdding(true); }}
-                  leadingIcon={<Plus size={18} aria-hidden="true" />}
-                >
-                  Novo Produto
-                </Button>
+                <>
+                  <Button
+                    onClick={() => { resetForm(); setIsAdding(true); }}
+                    leadingIcon={<Plus size={18} aria-hidden="true" />}
+                  >
+                    Novo Produto
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setIsSubcategoryModalOpen(true)}
+                    leadingIcon={<FolderKanban size={16} aria-hidden="true" />}
+                  >
+                    Subcategorias
+                  </Button>
+                </>
               ) : (
                 <Button
                   onClick={() => setShowNewSubModal(true)}
@@ -1247,12 +1513,12 @@ export default function CardapioAdminPage() {
           </div>
         )}
 
-        {/* DIALOG 1: CRIAÇÃO / EDIÇÃO DE PRODUTO E FICHA TÉCNICA */}
+        {/* DIALOG 1: CRIAÇÃO / EDIÇÃO DE PRODUTO DO CARDÁPIO */}
         <Dialog
           open={isAdding}
           onClose={resetForm}
-          title={editingId ? 'Editar Produto e Ficha Técnica' : 'Novo Produto no Cardápio'}
-          description="Composição de insumos, cálculo de CMV em tempo real e parâmetros fiscais para NFC-e."
+          title={editingId ? 'Editar Produto do Cardápio' : 'Novo Produto no Cardápio'}
+          description="Composição de insumos, cálculo de CMV em tempo real, regras de adicionais e parâmetros fiscais para NFC-e."
           size="lg"
           footer={
             <div className="flex justify-end gap-3 w-full">
@@ -1697,6 +1963,144 @@ export default function CardapioAdminPage() {
                 </div>
               </div>
             </div>
+
+            {/* Seção: Adicionais de Venda no PDV / Caixa */}
+            <div className="rounded-xl border border-border-default bg-surface-elevated/40 p-4 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-text-primary flex items-center gap-1.5">
+                    <Layers size={15} className="text-brand-primary" />
+                    🍟 Adicionais de Venda no PDV / Caixa
+                  </h3>
+                  <p className="text-[11px] text-text-muted mt-0.5">
+                    Configure se o operador de caixa pode selecionar adicionais para este produto na venda.
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer shrink-0">
+                  <input
+                    type="checkbox"
+                    checked={acceptsAddons}
+                    onChange={(e) => setAcceptsAddons(e.target.checked)}
+                    className="rounded border-border-default bg-surface-input text-brand-primary focus:ring-brand-primary h-4 w-4"
+                  />
+                  <span className="text-xs font-bold text-text-primary">Aceita adicionais no Caixa</span>
+                </label>
+              </div>
+
+              {acceptsAddons && (
+                <div className="space-y-3 pt-2 border-t border-border-default/60">
+                  <div className="flex flex-col sm:flex-row gap-4 text-xs">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="addonMode"
+                        checked={addonMode === 'all'}
+                        onChange={() => setAddonMode('all')}
+                        className="text-brand-primary focus:ring-brand-primary"
+                      />
+                      <span className="text-text-secondary font-medium">Permitir todos os adicionais do catálogo</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="addonMode"
+                        checked={addonMode === 'custom'}
+                        onChange={() => setAddonMode('custom')}
+                        className="text-brand-primary focus:ring-brand-primary"
+                      />
+                      <span className="text-text-secondary font-medium">Restringir a adicionais específicos ({allowedAddonIds.length} selecionado{allowedAddonIds.length === 1 ? '' : 's'})</span>
+                    </label>
+                  </div>
+
+                  {addonMode === 'custom' && (
+                    <div className="rounded-lg border border-border-default bg-surface-card p-3 max-h-44 overflow-y-auto space-y-2">
+                      <p className="text-[11px] text-text-muted font-bold uppercase tracking-wider mb-2">
+                        Selecione os adicionais permitidos para este item:
+                      </p>
+                      {availableSystemAddonProducts.length === 0 ? (
+                        <p className="text-xs text-text-muted italic">Nenhum produto marcado como adicional ou porção no cardápio.</p>
+                      ) : (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                          {availableSystemAddonProducts.map(add => {
+                            const isChecked = allowedAddonIds.includes(add.id);
+                            return (
+                              <label
+                                key={add.id}
+                                className={cn(
+                                  'flex items-center justify-between p-2 rounded-md border text-xs cursor-pointer transition-colors',
+                                  isChecked 
+                                    ? 'bg-brand-primary/10 border-brand-primary text-text-primary' 
+                                    : 'bg-surface-elevated/40 border-border-default text-text-secondary hover:border-border-hover'
+                                )}
+                              >
+                                <div className="flex items-center gap-2 min-w-0 pr-1">
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={(e) => {
+                                      if (e.target.checked) {
+                                        setAllowedAddonIds(prev => [...prev, add.id]);
+                                      } else {
+                                        setAllowedAddonIds(prev => prev.filter(id => id !== add.id));
+                                      }
+                                    }}
+                                    className="rounded border-border-default bg-surface-input text-brand-primary focus:ring-brand-primary"
+                                  />
+                                  <span className="truncate font-medium">{add.name}</span>
+                                </div>
+                                <span className="text-[10px] font-mono text-emerald-400 font-bold shrink-0">
+                                  R$ {add.priceBalcao.toFixed(2)}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="pt-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isAddon}
+                        onChange={(e) => setIsAddon(e.target.checked)}
+                        className="rounded border-border-default bg-surface-input text-emerald-400 focus:ring-emerald-400 h-4 w-4"
+                      />
+                      <span className="text-xs font-semibold text-text-primary">
+                        Marcar este produto também como Adicional de Venda (poderá ser incluído em outros itens no Caixa)
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Seção: Observações Rápidas para a Cozinha / Chapa */}
+            <div className="rounded-xl border border-border-default bg-surface-elevated/40 p-4 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-bold uppercase tracking-wider text-text-primary flex items-center gap-1.5">
+                  <ChefHat size={15} className="text-amber-400" />
+                  👨‍🍳 Observações Rápidas na Cozinha (PDV / Chapa)
+                </h3>
+                <span className="text-[10px] font-mono text-text-muted">
+                  {previewQuickNotes.length} opções automáticas
+                </span>
+              </div>
+              <p className="text-[11px] text-text-muted leading-relaxed">
+                O sistema analisa a receita deste produto e gera automaticamente as opções de seleção rápida no Caixa (como ponto da carne e exclusões tipo <strong>SEM CEBOLA</strong>, <strong>SEM BACON</strong>, <strong>SEM MOLHO</strong>), eliminando erros e acelerando a chapa:
+              </p>
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {previewQuickNotes.map(chip => (
+                  <span
+                    key={chip}
+                    className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-surface-card text-text-secondary border border-border-default"
+                  >
+                    {chip}
+                  </span>
+                ))}
+              </div>
+            </div>
           </div>
         </Dialog>
 
@@ -1836,6 +2240,223 @@ export default function CardapioAdminPage() {
             </div>
           </form>
         </Dialog>
+
+        {/* DIALOG 4: GESTÃO COMPLETA DE SUBCATEGORIAS DO CARDÁPIO */}
+        <Dialog
+          open={isSubcategoryModalOpen}
+          onClose={() => {
+            setIsSubcategoryModalOpen(false);
+            setEditingSubcat(null);
+            setNewSubcategoryInput('');
+          }}
+          title="Gestão de Subcategorias do Cardápio"
+          description="Organize a ordem de exibição (subir/descer), crie novas subcategorias ou renomeie/exclua as existentes para adaptar à sua operação."
+          size="lg"
+          footer={
+            <div className="flex justify-end w-full">
+              <Button onClick={() => setIsSubcategoryModalOpen(false)}>
+                Concluir
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-6">
+            {/* Seletor de Categoria Pai */}
+            <div className="flex border-b border-border-default pb-2 gap-2 overflow-x-auto">
+              {(['lanche', 'porcao', 'bebida', 'combo'] as const).map(cat => {
+                const label = cat === 'lanche' ? 'Hambúrgueres' : cat === 'porcao' ? 'Porções' : cat === 'bebida' ? 'Bebidas' : 'Combos';
+                const isSelected = selectedCatForSubMgmt === cat;
+                const count = (customSubcategoriesMap[cat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] || []).length;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => {
+                      setSelectedCatForSubMgmt(cat);
+                      setEditingSubcat(null);
+                      setNewSubcategoryInput('');
+                    }}
+                    className={cn(
+                      'px-3 py-1.5 rounded-control text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 whitespace-nowrap',
+                      isSelected 
+                        ? 'bg-brand-primary text-white shadow-sm' 
+                        : 'bg-surface-elevated text-text-secondary hover:text-text-primary hover:bg-surface-card border border-border-default'
+                    )}
+                  >
+                    <span>{label}</span>
+                    <span className={cn(
+                      'text-[10px] px-1.5 py-0.2 rounded-full font-mono',
+                      isSelected ? 'bg-white/20 text-white' : 'bg-surface-card text-text-muted'
+                    )}>
+                      {count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Adicionar Nova Subcategoria */}
+            <div className="bg-surface-elevated/40 p-3.5 rounded-xl border border-border-default space-y-2">
+              <label htmlFor="add-subcat-input" className="block text-xs font-bold text-text-secondary uppercase tracking-wider">
+                Adicionar Subcategoria em {selectedCatForSubMgmt === 'lanche' ? 'Hambúrgueres' : selectedCatForSubMgmt === 'porcao' ? 'Porções' : selectedCatForSubMgmt === 'bebida' ? 'Bebidas' : 'Combos'}:
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id="add-subcat-input"
+                  type="text"
+                  placeholder="Ex: Smash Burgers 100g, Clássicos, Especiais..."
+                  value={newSubcategoryInput}
+                  onChange={(e) => setNewSubcategoryInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleAddCustomSubcategory(selectedCatForSubMgmt, newSubcategoryInput);
+                    }
+                  }}
+                  className="flex-1 bg-surface-input border border-border-default rounded-control p-2 text-xs text-text-primary outline-none focus:border-brand-primary"
+                />
+                <Button
+                  size="sm"
+                  onClick={() => handleAddCustomSubcategory(selectedCatForSubMgmt, newSubcategoryInput)}
+                  disabled={!newSubcategoryInput.trim()}
+                  leadingIcon={<Plus size={14} />}
+                >
+                  Adicionar
+                </Button>
+              </div>
+            </div>
+
+            {/* Lista Ordenável de Subcategorias com Subir/Descer, Renomear e Excluir */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-text-muted font-bold uppercase tracking-wider px-1">
+                <span>Subcategorias e Ordem de Exibição</span>
+                <span>Ações</span>
+              </div>
+
+              <div className="max-h-72 overflow-y-auto pr-1 space-y-2">
+                {getSubcategoriesForCategory(selectedCatForSubMgmt, products).map((sub, idx, arr) => {
+                  const isEditing = editingSubcat?.oldName === sub;
+                  const prodsCount = products.filter(p => p.category === selectedCatForSubMgmt && (p.subcategory || inferDefaultSubcategory(p)) === sub).length;
+
+                  return (
+                    <div
+                      key={sub}
+                      className="p-3 bg-surface-card border border-border-default rounded-xl flex items-center justify-between gap-2 text-xs shadow-xs"
+                    >
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <span className="font-mono text-[11px] text-text-muted w-5 shrink-0 text-center">
+                          {idx + 1}.
+                        </span>
+
+                        {isEditing ? (
+                          <div className="flex items-center gap-1.5 flex-1">
+                            <input
+                              type="text"
+                              value={editingSubcat.newName}
+                              onChange={(e) => setEditingSubcat({ oldName: sub, newName: e.target.value })}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  e.preventDefault();
+                                  handleRenameCustomSubcategory(selectedCatForSubMgmt, sub, editingSubcat.newName);
+                                } else if (e.key === 'Escape') {
+                                  setEditingSubcat(null);
+                                }
+                              }}
+                              autoFocus
+                              className="flex-1 bg-surface-input border border-brand-primary rounded p-1 text-xs text-text-primary outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRenameCustomSubcategory(selectedCatForSubMgmt, sub, editingSubcat.newName)}
+                              className="p-1 rounded bg-brand-primary text-white hover:bg-brand-primary/80 transition-colors cursor-pointer"
+                              title="Salvar novo nome"
+                            >
+                              <Check size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingSubcat(null)}
+                              className="p-1 rounded bg-surface-elevated text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+                              title="Cancelar edição"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 truncate">
+                            <span className="font-bold text-text-primary truncate">{sub}</span>
+                            <span className="text-[10px] text-text-muted font-mono bg-surface-elevated px-2 py-0.5 rounded-full shrink-0">
+                              {prodsCount} {prodsCount === 1 ? 'item' : 'itens'}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        {/* Botões de Ordem (Subir / Descer) */}
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={() => handleMoveCustomSubcategory(selectedCatForSubMgmt, idx, 'up')}
+                          className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-text-primary disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                          title="Subir posição"
+                        >
+                          <ArrowUp size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === arr.length - 1}
+                          onClick={() => handleMoveCustomSubcategory(selectedCatForSubMgmt, idx, 'down')}
+                          className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-text-primary disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                          title="Descer posição"
+                        >
+                          <ArrowDown size={14} />
+                        </button>
+
+                        {/* Botão Renomear */}
+                        {!isEditing && (
+                          <button
+                            type="button"
+                            onClick={() => setEditingSubcat({ oldName: sub, newName: sub })}
+                            className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-brand-primary transition-colors cursor-pointer"
+                            title="Renomear subcategoria"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                        )}
+
+                        {/* Botão Excluir */}
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteSubcat(sub)}
+                          className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-status-danger transition-colors cursor-pointer"
+                          title="Excluir subcategoria"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        </Dialog>
+
+        {/* Confirmação de Exclusão de Subcategoria */}
+        <ConfirmDialog
+          open={Boolean(confirmDeleteSubcat)}
+          onClose={() => setConfirmDeleteSubcat(null)}
+          title={`Excluir subcategoria "${confirmDeleteSubcat}"?`}
+          description="A subcategoria será removida da lista da sua operação. Os produtos vinculados manterão sua receita e poderão ser reatribuídos."
+          confirmLabel="Excluir Subcategoria"
+          tone="danger"
+          onConfirm={() => {
+            if (confirmDeleteSubcat) {
+              handleDeleteCustomSubcategory(selectedCatForSubMgmt, confirmDeleteSubcat);
+            }
+          }}
+        />
 
         {/* CONFIRM DIALOGS: DESATIVAÇÕES E EXCLUSÕES */}
         <ConfirmDialog

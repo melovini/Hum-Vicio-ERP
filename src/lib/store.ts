@@ -105,6 +105,30 @@ export function saveProductSubcategoryItem(id: string, subcategory: string) {
   } catch {}
 }
 
+export interface ProductAddonsConfig {
+  acceptsAddons?: boolean;
+  allowedAddonIds?: string[];
+  isAddon?: boolean;
+}
+
+export function getSavedProductAddonsMap(): Record<string, ProductAddonsConfig> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem('hum_vicio_product_addons_map') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+export function saveProductAddonItem(id: string, config: ProductAddonsConfig) {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedProductAddonsMap();
+    map[id] = { ...map[id], ...config };
+    localStorage.setItem('hum_vicio_product_addons_map', JSON.stringify(map));
+  } catch {}
+}
+
 function getSavedCreditSalesMap(): Record<string, {
   collaboratorId?: string;
   collaboratorName?: string;
@@ -534,8 +558,10 @@ export async function executeParallelLoadData(
       if (prodData) {
         const recipesList = (recData as any[]) || [];
         const subcategoryMap = getSavedProductSubcategoriesMap();
+        const addonsMap = getSavedProductAddonsMap();
         mappedProducts = (prodData as any[]).map(p => {
           const rawSub = p.subcategory || subcategoryMap[p.id] || undefined;
+          const addonConf = addonsMap[p.id] || {};
           const prodObj: Product = {
             id: p.id,
             name: p.name,
@@ -543,6 +569,9 @@ export async function executeParallelLoadData(
             subcategory: rawSub,
             priceBalcao: Number(p.price_balcao) || 0, 
             priceIfood: Number(p.price_ifood) || 0,
+            acceptsAddons: p.accepts_addons ?? addonConf.acceptsAddons ?? (p.category === 'lanche'),
+            allowedAddonIds: p.allowed_addon_ids ?? addonConf.allowedAddonIds,
+            isAddon: p.is_addon ?? addonConf.isAddon ?? false,
             recipe: recipesList.filter(r => r.product_id === p.id).map(r => ({
               ingredientId: r.ingredient_id,
               quantity: Number(r.quantity) || 0
@@ -1708,35 +1737,71 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
         price_balcao: prod.priceBalcao,
         price_ifood: prod.priceIfood
       }).select().single();
-      pData = res.data;
+
+      if (res.error) {
+        // Fallback caso a coluna subcategory não exista no schema remoto do Supabase
+        const fallbackRes = await supabase.from('products').insert({
+          name: prod.name,
+          category: prod.category,
+          price_balcao: prod.priceBalcao,
+          price_ifood: prod.priceIfood
+        }).select().single();
+        pData = fallbackRes.data;
+      } else {
+        pData = res.data;
+      }
     } catch {
-      const fallbackRes = await supabase.from('products').insert({
-        name: prod.name,
-        category: prod.category,
-        price_balcao: prod.priceBalcao,
-        price_ifood: prod.priceIfood
-      }).select().single();
-      pData = fallbackRes.data;
+      try {
+        const fallbackRes = await supabase.from('products').insert({
+          name: prod.name,
+          category: prod.category,
+          price_balcao: prod.priceBalcao,
+          price_ifood: prod.priceIfood
+        }).select().single();
+        pData = fallbackRes.data;
+      } catch {}
     }
 
-    if (pData) {
-      if (prod.recipe && prod.recipe.length > 0) {
+    // Identificador único garantido (mesmo offline ou se Supabase falhar)
+    const finalId = pData?.id || `prod_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+    if (prod.recipe && prod.recipe.length > 0) {
+      try {
         const recipeInserts = prod.recipe.map(r => ({
-          product_id: pData.id, ingredient_id: r.ingredientId, quantity: r.quantity
+          product_id: finalId, ingredient_id: r.ingredientId, quantity: r.quantity
         }));
         await supabase.from('recipes').insert(recipeInserts);
-      }
-      if (subcategoryToSave) {
-        saveProductSubcategoryItem(pData.id, subcategoryToSave);
-      }
-      setProducts([...products, { ...prod, subcategory: subcategoryToSave, id: pData.id, isActive: true }]);
-
-      addAuditLog(
-        'CADASTRO_PRODUTO',
-        `Produto "${prod.name}" cadastrado na categoria "${prod.category}" (${subcategoryToSave}). Preço Balcão: R$ ${prod.priceBalcao.toFixed(2)}`,
-        'Admin'
-      );
+      } catch {}
     }
+
+    if (subcategoryToSave) {
+      saveProductSubcategoryItem(finalId, subcategoryToSave);
+    }
+
+    if (prod.acceptsAddons !== undefined || prod.allowedAddonIds || prod.isAddon) {
+      saveProductAddonItem(finalId, {
+        acceptsAddons: prod.acceptsAddons,
+        allowedAddonIds: prod.allowedAddonIds,
+        isAddon: prod.isAddon,
+      });
+    }
+
+    const createdProduct: Product = {
+      ...prod,
+      id: finalId,
+      subcategory: subcategoryToSave,
+      isActive: true,
+    };
+
+    setProducts(prev => [...prev, createdProduct]);
+
+    addAuditLog(
+      'CADASTRO_PRODUTO',
+      `Produto "${prod.name}" cadastrado na categoria "${prod.category}" (${subcategoryToSave}). Preço Balcão: R$ ${prod.priceBalcao.toFixed(2)}`,
+      'Admin'
+    );
+
+    return createdProduct;
   };
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
@@ -1753,24 +1818,40 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     }
 
     try {
-      await supabase.from('products').update(dbPayload).eq('id', id);
+      const res = await supabase.from('products').update(dbPayload).eq('id', id);
+      if (res.error) {
+        delete dbPayload.subcategory;
+        await supabase.from('products').update(dbPayload).eq('id', id);
+      }
     } catch {
       delete dbPayload.subcategory;
-      await supabase.from('products').update(dbPayload).eq('id', id);
+      try {
+        await supabase.from('products').update(dbPayload).eq('id', id);
+      } catch {}
     }
 
     if (updates.subcategory) {
       saveProductSubcategoryItem(id, updates.subcategory.trim());
     }
 
+    if (updates.acceptsAddons !== undefined || updates.allowedAddonIds !== undefined || updates.isAddon !== undefined) {
+      saveProductAddonItem(id, {
+        acceptsAddons: updates.acceptsAddons,
+        allowedAddonIds: updates.allowedAddonIds,
+        isAddon: updates.isAddon,
+      });
+    }
+
     if (updates.recipe) {
-      await supabase.from('recipes').delete().eq('product_id', id);
-      if (updates.recipe.length > 0) {
-        const recipeInserts = updates.recipe.map(r => ({
-          product_id: id, ingredient_id: r.ingredientId, quantity: r.quantity
-        }));
-        await supabase.from('recipes').insert(recipeInserts);
-      }
+      try {
+        await supabase.from('recipes').delete().eq('product_id', id);
+        if (updates.recipe.length > 0) {
+          const recipeInserts = updates.recipe.map(r => ({
+            product_id: id, ingredient_id: r.ingredientId, quantity: r.quantity
+          }));
+          await supabase.from('recipes').insert(recipeInserts);
+        }
+      } catch {}
     }
 
     if (existing && (updates.priceBalcao !== undefined || updates.priceIfood !== undefined)) {

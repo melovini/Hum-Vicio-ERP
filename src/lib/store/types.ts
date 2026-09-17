@@ -50,6 +50,9 @@ export interface Product {
   csosn?: string;
   origem?: number;
   unidadeComercial?: string;
+  acceptsAddons?: boolean;
+  allowedAddonIds?: string[];
+  isAddon?: boolean;
 }
 
 // === VENDAS ===

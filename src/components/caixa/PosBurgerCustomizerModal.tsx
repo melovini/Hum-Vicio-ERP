@@ -99,21 +99,41 @@ export default function PosBurgerCustomizerModal({
 
   // Lista dinâmica de adicionais vinculados à ficha técnica e ao catálogo
   const availableAdditionals = useMemo(() => {
+    // Se o produto foi configurado explicitamente para não aceitar adicionais, retorna lista vazia
+    if (product?.acceptsAddons === false) {
+      return [];
+    }
+
     const burgerRecipeIngredientIds = new Set((product?.recipe || []).map(r => r.ingredientId));
     const burgerRecipeIngredientNames = (product?.recipe || []).map(r => {
       const ing = items?.find(i => i.id === r.ingredientId);
       return ing?.name.toLowerCase().trim() || '';
     }).filter(Boolean);
 
-    const candidateProducts = products.filter(p => 
-      p.isActive !== false && (
+    // Conjunto de IDs permitidos caso o produto tenha seleção restrita de adicionais
+    const allowedIdsSet = (product?.allowedAddonIds && product.allowedAddonIds.length > 0)
+      ? new Set(product.allowedAddonIds)
+      : null;
+
+    const candidateProducts = products.filter(p => {
+      if (p.isActive === false) return false;
+      if (p.id === product?.id) return false; // Não permitir adicionar o próprio produto a si mesmo
+
+      // Se houver lista de adicionais permitidos, respeita estritamente
+      if (allowedIdsSet) {
+        return allowedIdsSet.has(p.id);
+      }
+
+      // Caso contrário, inclui porções, adicionais marcados explicitamente ou por nome
+      return (
+        p.isAddon === true ||
         p.category === 'porcao' ||
         p.name.startsWith('Adicional:') ||
         p.name.startsWith('Pote Maionese') ||
         p.name.toLowerCase().includes('adicional') ||
         p.name.toLowerCase().includes('extra')
-      )
-    );
+      );
+    });
 
     if (candidateProducts.length > 0) {
       const list = candidateProducts.map(p => {
@@ -139,6 +159,11 @@ export default function PosBurgerCustomizerModal({
         if (!a.isFromRecipe && b.isFromRecipe) return 1;
         return a.name.localeCompare(b.name, 'pt-BR');
       });
+    }
+
+    // Se houver restrição por allowedAddonIds e nenhum produto foi encontrado, não usa fallback
+    if (allowedIdsSet) {
+      return [];
     }
 
     return FALLBACK_ADDITIONALS.map(fb => {
@@ -396,7 +421,8 @@ export default function PosBurgerCustomizerModal({
         </div>
 
         {/* Seção 2: Adicionais e Ficha Técnica */}
-        <div>
+        {product?.acceptsAddons !== false && availableAdditionals.length > 0 && (
+          <div>
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
               🧀 Adicionais & Ficha Técnica:
@@ -463,6 +489,7 @@ export default function PosBurgerCustomizerModal({
             })}
           </div>
         </div>
+        )}
 
         {/* Seção 3: Ponto da Carne e Observações */}
         <div>

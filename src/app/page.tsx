@@ -202,9 +202,9 @@ export default async function Home() {
               <Link 
                 href="/admin/cardapio" 
                 className="bg-surface-ground hover:bg-surface-elevated text-slate-300 hover:text-white border border-surface-border rounded-lg p-2 truncate transition-colors"
-                title="Fichas Técnicas e Receitas"
+                title="Cardápio de Produtos, Subcategorias e Fichas Técnicas"
               >
-                📋 Ficha Técnica
+                🍔 Cardápio
               </Link>
 
               <Link 

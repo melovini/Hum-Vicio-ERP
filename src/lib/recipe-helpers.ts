@@ -1,4 +1,11 @@
 import type { Product, RecipeIngredient, InventoryItem } from './store';
+import { 
+  DEFAULT_SUBCATEGORIES_BY_CATEGORY, 
+  getCustomSubcategories,
+  getSubcategoriesForCategory 
+} from './subcategory-store';
+
+export { DEFAULT_SUBCATEGORIES_BY_CATEGORY, getCustomSubcategories, getSubcategoriesForCategory };
 
 export type CardapioCategoryFilter = 'todos' | 'lanche' | 'porcao' | 'bebida' | 'combo';
 
@@ -23,34 +30,6 @@ export function normalizeText(text: string): string {
     .replace(/[\u0300-\u036f]/g, '')
     .trim();
 }
-
-export const DEFAULT_SUBCATEGORIES_BY_CATEGORY: Record<string, string[]> = {
-  lanche: [
-    'Smash Burgers',
-    'Artesanais 180g',
-    'Hambúrgueres Especiais',
-    'Linha Duplos',
-    'Vegetarianos',
-    'Kids',
-    'Clássicos da Casa',
-  ],
-  porcao: [
-    'Batatas Fritas',
-    'Anéis de Cebola & Petiscos',
-    'Adicionais & Carnes Extras',
-    'Molhos & Maioneses da Casa',
-  ],
-  bebida: [
-    'Refrigerantes',
-    'Sucos & Chás',
-    'Águas',
-    'Cervejas',
-  ],
-  combo: [
-    'Combos com Batata',
-    'Combos Especiais',
-  ],
-};
 
 /**
  * Infere uma subcategoria inteligente para produtos sem subcategoria explícita
@@ -83,7 +62,7 @@ export function inferDefaultSubcategory(product: Product): string {
     if (nameNorm.includes('batata') || nameNorm.includes('frita')) return 'Batatas Fritas';
     if (nameNorm.includes('anel') || nameNorm.includes('aneis') || nameNorm.includes('cebola')) return 'Anéis de Cebola & Petiscos';
     if (nameNorm.includes('pote') || nameNorm.includes('maionese') || nameNorm.includes('molho')) return 'Molhos & Maioneses da Casa';
-    if (nameNorm.includes('adicional') || nameNorm.includes('extra')) return 'Adicionais & Carnes Extras';
+    if (nameNorm.includes('adicional') || nameNorm.includes('extra')) return 'Adicionais de Hambúrguer';
     return 'Porções da Casa';
   }
 
@@ -103,9 +82,12 @@ export function inferDefaultSubcategory(product: Product): string {
 }
 
 /**
- * Agrupa produtos por subcategoria para visualização hierárquica
+ * Agrupa produtos por subcategoria para visualização hierárquica ordenada
  */
-export function groupProductsBySubcategory(products: Product[]): { subcategory: string; products: Product[] }[] {
+export function groupProductsBySubcategory(
+  products: Product[],
+  customOrder?: string[]
+): { subcategory: string; products: Product[] }[] {
   const map = new Map<string, Product[]>();
 
   for (const product of products) {
@@ -115,10 +97,23 @@ export function groupProductsBySubcategory(products: Product[]): { subcategory: 
     map.set(sub, list);
   }
 
-  return Array.from(map.entries()).map(([subcategory, prods]) => ({
+  const groups = Array.from(map.entries()).map(([subcategory, prods]) => ({
     subcategory,
     products: prods,
   }));
+
+  if (customOrder && customOrder.length > 0) {
+    groups.sort((a, b) => {
+      const idxA = customOrder.indexOf(a.subcategory);
+      const idxB = customOrder.indexOf(b.subcategory);
+      if (idxA !== -1 && idxB !== -1) return idxA - idxB;
+      if (idxA !== -1) return -1;
+      if (idxB !== -1) return 1;
+      return a.subcategory.localeCompare(b.subcategory, 'pt-BR');
+    });
+  }
+
+  return groups;
 }
 
 /**

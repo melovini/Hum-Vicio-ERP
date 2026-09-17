@@ -8,7 +8,16 @@ const {
   findMatchingInventoryItem,
   inferDefaultSubcategory,
   groupProductsBySubcategory,
+  DEFAULT_SUBCATEGORIES_BY_CATEGORY,
 } = createLoader()('src/lib/recipe-helpers.ts');
+
+const {
+  getSubcategoriesForCategory,
+  addSubcategory,
+  renameSubcategory,
+  deleteSubcategory,
+  moveSubcategory,
+} = createLoader()('src/lib/subcategory-store.ts');
 
 const mockProducts = [
   {
@@ -172,3 +181,38 @@ test('findMatchingInventoryItem associa nomes com tolerância a prefixos e sufix
   assert.ok(match);
   assert.equal(match.id, 'inv-2');
 });
+
+test('getSubcategoriesForCategory retorna categorias padrão e respeita customizações', () => {
+  const lanches = getSubcategoriesForCategory('lanche');
+  assert.ok(lanches.length > 0);
+  assert.ok(lanches.includes('Smash Burgers'));
+
+  const comProduto = getSubcategoriesForCategory('lanche', [
+    { category: 'lanche', subcategory: 'Edição Especial de Verão' }
+  ]);
+  assert.ok(comProduto.includes('Edição Especial de Verão'));
+});
+
+test('addSubcategory, renameSubcategory, moveSubcategory e deleteSubcategory gerenciam o catálogo', () => {
+  // Adicionar
+  const added = addSubcategory('lanche', 'Linha Teste Exclusiva');
+  assert.ok(added.lanche.includes('Linha Teste Exclusiva'));
+
+  // Renomear
+  const renamed = renameSubcategory('lanche', 'Linha Teste Exclusiva', 'Linha Teste Renomeada');
+  assert.ok(!renamed.lanche.includes('Linha Teste Exclusiva'));
+  assert.ok(renamed.lanche.includes('Linha Teste Renomeada'));
+
+  // Mover
+  const idx = renamed.lanche.indexOf('Linha Teste Renomeada');
+  assert.ok(idx >= 0);
+  if (idx > 0) {
+    const moved = moveSubcategory('lanche', idx, 'up');
+    assert.equal(moved.lanche[idx - 1], 'Linha Teste Renomeada');
+  }
+
+  // Deletar
+  const deleted = deleteSubcategory('lanche', 'Linha Teste Renomeada');
+  assert.ok(!deleted.lanche.includes('Linha Teste Renomeada'));
+});
+
