@@ -128,8 +128,34 @@ export async function POST(request: Request) {
       }
     }
 
-    // 6. Execução atômica no banco via RPC com service_role
+    // 6. Validação no servidor contra produtos em rascunho ou inativos (V07)
     const db = createServerDatabase();
+    const productIds = sale.items
+      .map(i => i.productId)
+      .filter(id => id && UUID_REGEX.test(id));
+
+    if (productIds.length > 0) {
+      try {
+        const query = db.from('products').select('id, name, category, status, is_active');
+        if (typeof (query as any)?.in === 'function') {
+          const { data: dbProducts } = await (query as any).in('id', productIds);
+          if (dbProducts && Array.isArray(dbProducts)) {
+            for (const item of sale.items) {
+              const match = dbProducts.find((p: any) => p.id === item.productId);
+              if (match) {
+                if (match.status === 'rascunho' || match.is_active === false) {
+                  throw new AccessError(400, `O produto "${match.name}" está em rascunho ou inativo e não pode ser vendido.`);
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        if (err instanceof AccessError) throw err;
+      }
+    }
+
+    // 7. Execução atômica no banco via RPC com service_role
     const { data, error } = await db.rpc('process_sale_checkout', {
       p_idempotency_key: idempotencyKey.trim(),
       p_sale: sale,

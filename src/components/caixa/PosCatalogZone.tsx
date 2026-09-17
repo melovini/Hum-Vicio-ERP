@@ -35,7 +35,7 @@ export default function PosCatalogZone({
   onProductClick,
 }: PosCatalogZoneProps) {
   const activeProducts = useMemo(() => {
-    return products.filter(p => p.isActive !== false);
+    return products.filter(p => p.isActive !== false && p.status !== 'rascunho' && p.status !== 'inativo');
   }, [products]);
 
   // Top 9 mais vendidos globalmente

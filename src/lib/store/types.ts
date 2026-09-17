@@ -20,6 +20,8 @@ export interface InventoryItem {
   status: StockStatus;
   isActive?: boolean;
   station?: KitchenStation;
+  portionWeight?: number;
+  portionUnit?: string;
 }
 
 // === PRODUTOS (Lanches/Combos) ===

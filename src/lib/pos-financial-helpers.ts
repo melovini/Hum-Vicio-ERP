@@ -156,12 +156,9 @@ export function recalculateCartPrices(
         comboPrice = targetChannel === 'ifood' 
           ? (matchCombo.priceIfood ?? matchCombo.priceBalcao) 
           : matchCombo.priceBalcao;
-      } else if (cleanCombo) {
-        if (cleanCombo.includes('anéis') || cleanCombo.includes('aneis')) {
-          comboPrice = targetChannel === 'ifood' ? 18.00 : 16.00;
-        } else if (cleanCombo.includes('batata')) {
-          comboPrice = targetChannel === 'ifood' ? 16.00 : 14.00;
-        }
+      } else if (item.comboPrice && item.comboPrice > 0) {
+        // Preserva o preço do combo previamente estabelecido sem inventar valores fictícios (V09)
+        comboPrice = item.comboPrice;
       }
     }
 

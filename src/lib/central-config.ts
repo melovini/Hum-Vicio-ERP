@@ -166,8 +166,46 @@ export function publishCentralConfig(
 
       // Notifica abas e componentes locais
       window.dispatchEvent(new CustomEvent('hum_vicio_config_updated', { detail: nextConfig }));
+
+      // Sincroniza de forma assíncrona com o servidor central (V06)
+      fetch('/api/central-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextConfig),
+      }).catch(err => console.warn('[CentralConfig] Falha ao sincronizar publicação com servidor:', err));
     } catch {}
   }
 
   return nextConfig;
+}
+
+/**
+ * Sincroniza a configuração central com o servidor (V06).
+ * Busca a versão oficial do servidor e resolve com a local usando resolveEffectiveConfig.
+ */
+export async function syncCentralConfigWithServer(): Promise<CentralStoreConfig> {
+  const local = getActiveCentralConfig();
+  if (typeof window === 'undefined') return local;
+
+  try {
+    const res = await fetch('/api/central-config', {
+      method: 'GET',
+      headers: { 'Cache-Control': 'no-store' },
+    });
+    if (res.ok) {
+      const remote = (await res.json()) as CentralStoreConfig;
+      if (remote && typeof remote.version === 'number') {
+        const effective = resolveEffectiveConfig(local, remote);
+        if (effective.version !== local.version || effective.updatedAt !== local.updatedAt) {
+          localStorage.setItem(CENTRAL_CONFIG_STORAGE_KEY, JSON.stringify(effective));
+          window.dispatchEvent(new CustomEvent('hum_vicio_config_updated', { detail: effective }));
+        }
+        return effective;
+      }
+    }
+  } catch (err) {
+    console.warn('[CentralConfig] Falha ao sincronizar com o servidor:', err);
+  }
+
+  return local;
 }

@@ -93,8 +93,8 @@ export function validateProductIntegrity(
     if (category === 'lanche' || category === 'combo') {
       warnings.push({
         code: 'EMPTY_RECIPE_HOT',
-        message: 'Produto sem ficha técnica. Não haverá baixa de estoque nem detalhamento de insumos no KDS.',
-        severity: 'warning'
+        message: 'Produto sem ficha técnica. Lanches e combos exigem receita para serem válidos para venda e produção.',
+        severity: 'danger'
       });
     } else if (category === 'porcao') {
       warnings.push({
@@ -209,7 +209,8 @@ export function validateProductIntegrity(
     status = 'alerta';
   }
 
-  const isValid = !hasDanger;
+  const isLancheOrCombo = category === 'lanche' || category === 'combo';
+  const isValid = !hasDanger && !(isLancheOrCombo && recipe.length === 0);
 
   return {
     isValid,

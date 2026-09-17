@@ -184,41 +184,95 @@ export function inferStationForComponent(type: ComponentType, name: string = '')
 }
 
 /**
- * Extrai a quantidade numérica de porções a partir da quantidade da receita e unidade.
- * Converte kg para unidades de disco quando aplicável (ex: 0.180 kg = 1 disco de 180g; 0.360 kg = 2 discos).
+ * Infere o peso da porção (em gramas) a partir dos dados do insumo ou de seu nome
+ * Ex: "Hambúrguer 180g" -> 180; "Smash 90g" -> 90; "Batata 150g" -> 150
  */
-export function resolveRecipeUnitQuantity(qty: number, unit: string = 'un', componentType?: ComponentType): number {
+export function inferPortionWeightFromInventory(inv?: InventoryItem): { weight: number; unit: string } | null {
+  if (!inv) return null;
+  if (inv.portionWeight && inv.portionWeight > 0) {
+    return { weight: inv.portionWeight, unit: inv.portionUnit || 'g' };
+  }
+  const match = (inv.name || '').match(/(\d+(?:[.,]\d+)?)\s*(g|kg|gr|gramas)\b/i);
+  if (match) {
+    const rawVal = parseFloat(match[1].replace(',', '.'));
+    const rawUnit = match[2].toLowerCase();
+    if (!isNaN(rawVal) && rawVal > 0) {
+      if (rawUnit === 'kg') return { weight: rawVal * 1000, unit: 'g' };
+      return { weight: rawVal, unit: 'g' };
+    }
+  }
+  return null;
+}
+
+/**
+ * Extrai a quantidade numérica de porções a partir da quantidade da receita e unidade física.
+ * Normaliza deterministicamente g -> kg e aplica o peso da porção real (V01).
+ */
+export function resolveRecipeUnitQuantity(
+  qty: number, 
+  unit: string = 'un', 
+  componentType?: ComponentType,
+  portionWeight?: number,
+  portionUnit?: string
+): number {
   if (qty <= 0) return 0;
   const normUnit = normalizeProductionString(unit);
 
-  if (normUnit === 'un' || normUnit === 'und' || normUnit === 'unidade' || normUnit === 'unidades') {
+  // 1. Unidades contadas discretamente
+  if (normUnit === 'un' || normUnit === 'und' || normUnit === 'unidade' || normUnit === 'unidades' || normUnit === 'pc' || normUnit === 'peca') {
     return Math.round(qty);
   }
 
-  // Se a carne estiver cadastrada em kg (ex: 0.180 kg de blend, 0.150 kg de carne, etc.)
-  if (componentType === 'carne_bovina' && (normUnit === 'kg' || normUnit === 'kilo')) {
-    // Porção padrão para lanches artesanais varia entre 100g (smash) e 180g
-    if (qty >= 0.08 && qty <= 0.22) {
-      return 1;
-    }
-    if (qty > 0.22 && qty <= 0.40) {
-      return 2;
-    }
-    if (qty > 0.40) {
-      return Math.round(qty / 0.18);
-    }
-    return 1;
+  // 2. Normalização física para quilogramas (KG)
+  let qtyInKg: number | null = null;
+  if (normUnit === 'kg' || normUnit === 'kilo' || normUnit === 'quilo' || normUnit === 'kilos' || normUnit === 'quilos') {
+    qtyInKg = qty;
+  } else if (normUnit === 'g' || normUnit === 'gr' || normUnit === 'grama' || normUnit === 'gramas') {
+    qtyInKg = qty / 1000;
   }
 
-  // Porções de batata ou anéis de cebola cadastradas em kg na receita (ex: 0.15 kg = 1 porção)
-  if ((componentType === 'batata' || componentType === 'onion') && (normUnit === 'kg' || normUnit === 'kilo' || normUnit === 'g' || normUnit === 'gramas')) {
-    if (qty >= 0.08 && qty <= 0.35) {
-      return 1;
+  if (qtyInKg !== null) {
+    // Se foi fornecido portionWeight explícito (ou inferido do cadastro do insumo)
+    if (portionWeight && portionWeight > 0) {
+      let portionInKg = portionWeight;
+      const normPortionUnit = normalizeProductionString(portionUnit || 'g');
+      if (normPortionUnit === 'g' || normPortionUnit === 'gr' || normPortionUnit === 'gramas') {
+        portionInKg = portionWeight / 1000;
+      }
+      if (portionInKg > 0) {
+        const rawRatio = qtyInKg / portionInKg;
+        if (Math.abs(rawRatio - Math.round(rawRatio)) <= 0.05) {
+          return Math.round(rawRatio);
+        }
+        return Number(rawRatio.toFixed(2));
+      }
     }
-    if (qty > 0.35 && qty <= 0.70) {
-      return 2;
+
+    // Carne bovina em kg sem porção explícita
+    if (componentType === 'carne_bovina') {
+      if (qtyInKg >= 0.08 && qtyInKg <= 0.22) {
+        return 1;
+      }
+      if (qtyInKg > 0.22 && qtyInKg <= 0.40) {
+        return 2;
+      }
+      return Math.max(1, Math.round(qtyInKg / 0.18));
     }
-    return Math.max(1, Math.round(qty / 0.15));
+
+    // Batata ou anéis de cebola (V01)
+    if (componentType === 'batata' || componentType === 'onion') {
+      // Porção padrão de porção ou acompanhamento: 150g (0.150 kg)
+      const portionInKg = 0.150;
+      const ratio = qtyInKg / portionInKg;
+      if (Math.abs(ratio - Math.round(ratio)) <= 0.08) {
+        return Math.round(ratio);
+      }
+      return Number(ratio.toFixed(2));
+    }
+
+    if (componentType === 'ovo') {
+      return Math.max(1, Math.round(qtyInKg >= 0.04 ? qtyInKg / 0.05 : 1));
+    }
   }
 
   if (componentType === 'ovo') {
@@ -344,9 +398,25 @@ export function calculateItemProduction(
     for (const r of matchedProduct.recipe) {
       const inv = inventoryById.get(r.ingredientId);
       const ingName = inv?.name || '';
+      const normIng = normalizeProductionString(ingName);
+
+      // Verificação estruturada de retirada (V09): se o item.removals contiver o insumo, não entra
+      const isExplicitlyRemoved = Array.isArray(item.removals) && item.removals.some(rem => {
+        const normRem = normalizeProductionString(rem);
+        return normRem === normIng || normRem.includes(normIng) || normIng.includes(normRem);
+      });
+      if (isExplicitlyRemoved) continue;
+
       const ingCategory = inv?.category || '';
       const compType = inferComponentType(ingName, ingCategory);
-      const unitQty = resolveRecipeUnitQuantity(r.quantity, inv?.unit || 'un', compType);
+      const portionInfo = inferPortionWeightFromInventory(inv);
+      const unitQty = resolveRecipeUnitQuantity(
+        r.quantity, 
+        inv?.unit || 'un', 
+        compType, 
+        portionInfo?.weight, 
+        portionInfo?.unit
+      );
 
       if (compType === 'carne_bovina') {
         basePattiesPerBurger += unitQty;
@@ -401,50 +471,7 @@ export function calculateItemProduction(
     }
   }
 
-  // 2. Coleta e Deduplicação de Adicionais (Estruturados vs Legados no Título)
-  // Ex: se o pedido tiver item.additionals com "Ovo" e também "+ [Ovo]" no título, não soma 2x!
-  interface ParsedAdditional {
-    count: number;
-    name: string;
-    type: ComponentType;
-  }
-
-  const parsedAdditionals: ParsedAdditional[] = [];
-  const seenAdditionalsKey = new Set<string>();
-
-  // 2.1 Adicionais estruturados (preferência primária)
-  if (Array.isArray(item.additionals) && item.additionals.length > 0) {
-    for (const add of item.additionals) {
-      const parsed = parseAdditionalString(add.name);
-      const count = typeof add.quantity === 'number' && add.quantity > 0 ? add.quantity : parsed.count;
-      const cleanName = parsed.cleanName;
-      const normAdd = normalizeProductionString(cleanName);
-      seenAdditionalsKey.add(normAdd);
-
-      const matchedInv = (add.id ? inventoryById.get(add.id) : undefined) || inventoryByNormName.get(normAdd);
-      const type = inferComponentType(cleanName, matchedInv?.category);
-      parsedAdditionals.push({ count, name: cleanName, type });
-    }
-  }
-
-  // 2.2 Adicionais do título legado entre colchetes "+ [Nome]"
-  const addMatches = rawName.match(/\+\s*\[(.*?)\]/g);
-  if (addMatches) {
-    for (const m of addMatches) {
-      const { count, cleanName } = parseAdditionalString(m);
-      const normAdd = normalizeProductionString(cleanName);
-
-      // Se já foi registrado pelos adicionais estruturados, pula para não duplicar
-      if (seenAdditionalsKey.has(normAdd)) continue;
-      seenAdditionalsKey.add(normAdd);
-
-      const matchedInv = inventoryByNormName.get(normAdd);
-      const type = inferComponentType(cleanName, matchedInv?.category);
-      parsedAdditionals.push({ count, name: cleanName, type });
-    }
-  }
-
-  // 3. Aplicação dos Adicionais nas Estações Específicas
+  // 2. Coleta e Expansão de Adicionais (Estruturados vs Legados no Título) (V04)
   let additionalPattiesPerBurger = 0;
   let additionalEggsPerBurger = 0;
   let additionalChickenPerBurger = 0;
@@ -452,35 +479,108 @@ export function calculateItemProduction(
   let additionalBatatasAvulsa = 0;
   let additionalOnionsAvulsa = 0;
 
-  for (const add of parsedAdditionals) {
-    switch (add.type) {
+  const seenAdditionalsKey = new Set<string>();
+
+  const processAdditionalItem = (rawIdentifier: string | undefined, rawName: string, explicitQuantity?: number) => {
+    const parsed = parseAdditionalString(rawName);
+    const count = typeof explicitQuantity === 'number' && explicitQuantity > 0 ? explicitQuantity : parsed.count;
+    const cleanName = parsed.cleanName;
+    const normAdd = normalizeProductionString(cleanName);
+
+    // Evita duplicar se já foi processado
+    if (seenAdditionalsKey.has(normAdd)) return;
+    seenAdditionalsKey.add(normAdd);
+
+    // 1º Verificar se corresponde a um PRODUTO cadastrado (ex: "Reforço Especial", "Adicional: Carne 180g") (V04)
+    const matchedAddProduct = (rawIdentifier ? products.find(p => p.id === rawIdentifier) : undefined) ||
+      products.find(p => {
+        const normP = normalizeProductionString(p.name);
+        return normP === normAdd || 
+               normP === normalizeProductionString('Adicional: ' + cleanName) ||
+               normP === normalizeProductionString('Adicional ' + cleanName);
+      });
+
+    // Se for um produto com receita cadastrada, expande TODOS os componentes de sua receita (V04)
+    if (matchedAddProduct && Array.isArray(matchedAddProduct.recipe) && matchedAddProduct.recipe.length > 0) {
+      for (const r of matchedAddProduct.recipe) {
+        const inv = inventoryById.get(r.ingredientId);
+        const ingName = inv?.name || '';
+        const ingCategory = inv?.category || '';
+        const compType = inferComponentType(ingName, ingCategory);
+        const portionInfo = inferPortionWeightFromInventory(inv);
+        const unitQty = resolveRecipeUnitQuantity(
+          r.quantity, 
+          inv?.unit || 'un', 
+          compType, 
+          portionInfo?.weight, 
+          portionInfo?.unit
+        );
+        const totalCompQty = unitQty * count;
+
+        if (compType === 'carne_bovina') additionalPattiesPerBurger += totalCompQty;
+        else if (compType === 'ovo') additionalEggsPerBurger += totalCompQty;
+        else if (compType === 'bacon') baconChapaPerBurger += totalCompQty;
+        else if (compType === 'frango_empanado') additionalChickenPerBurger += totalCompQty;
+        else if (compType === 'queijo_empanado') additionalCheeseBreadedPerBurger += totalCompQty;
+        else if (compType === 'batata') additionalBatatasAvulsa += totalCompQty;
+        else if (compType === 'onion') additionalOnionsAvulsa += totalCompQty;
+      }
+      return;
+    }
+
+    // 2º Se não for um produto com receita, verificar se corresponde diretamente a um INSUMO de estoque
+    const matchedInv = (rawIdentifier ? inventoryById.get(rawIdentifier) : undefined) || inventoryByNormName.get(normAdd);
+    const type = inferComponentType(cleanName, matchedInv?.category);
+    const portionInfo = inferPortionWeightFromInventory(matchedInv);
+    const unitQty = matchedInv 
+      ? resolveRecipeUnitQuantity(1, matchedInv.unit || 'un', type, portionInfo?.weight, portionInfo?.unit)
+      : 1;
+    const totalCompQty = unitQty * count;
+
+    switch (type) {
       case 'carne_bovina':
-        additionalPattiesPerBurger += add.count;
+        additionalPattiesPerBurger += totalCompQty;
         break;
       case 'ovo':
-        additionalEggsPerBurger += add.count;
+        additionalEggsPerBurger += totalCompQty;
         break;
       case 'frango_empanado':
-        additionalChickenPerBurger += add.count;
+        additionalChickenPerBurger += totalCompQty;
         break;
       case 'queijo_empanado':
-        additionalCheeseBreadedPerBurger += add.count;
+        additionalCheeseBreadedPerBurger += totalCompQty;
         break;
       case 'batata':
-        additionalBatatasAvulsa += add.count;
+        additionalBatatasAvulsa += totalCompQty;
         break;
       case 'onion':
-        additionalOnionsAvulsa += add.count;
+        additionalOnionsAvulsa += totalCompQty;
         break;
-      default:
-        // Caso genérico: se for carne por nome
-        const n = normalizeProductionString(add.name);
+      default: {
+        const n = normalizeProductionString(cleanName);
         if (n.includes('hamb') || n.includes('carne') || n.includes('bovino') || n.includes('costela') || n.includes('smash')) {
-          additionalPattiesPerBurger += add.count;
+          additionalPattiesPerBurger += totalCompQty;
         } else if (n.includes('ovo')) {
-          additionalEggsPerBurger += add.count;
+          additionalEggsPerBurger += totalCompQty;
         }
         break;
+      }
+    }
+  };
+
+  // 2.1 Processar adicionais estruturados
+  if (Array.isArray(item.additionals) && item.additionals.length > 0) {
+    for (const add of item.additionals) {
+      const q = typeof add.quantity === 'number' && add.quantity > 0 ? add.quantity : undefined;
+      processAdditionalItem(add.id, add.name, q);
+    }
+  }
+
+  // 2.2 Processar adicionais legados no título
+  const addMatches = rawName.match(/\+\s*\[(.*?)\]/g);
+  if (addMatches) {
+    for (const m of addMatches) {
+      processAdditionalItem(undefined, m, undefined);
     }
   }
 
@@ -491,10 +591,10 @@ export function calculateItemProduction(
   let removedEggsPerBurger = 0;
 
   if (normNotes.includes('sem carne') || normNotes.includes('sem hamburguer') || normNotes.includes('sem burger')) {
-    removedPattiesPerBurger = Math.min(basePattiesPerBurger, 1);
+    removedPattiesPerBurger = basePattiesPerBurger;
   }
   if (normNotes.includes('sem ovo')) {
-    removedEggsPerBurger = Math.min(eggsPerBurger, 1);
+    removedEggsPerBurger = eggsPerBurger;
   }
 
   // 5. Consolidação Matemática dos Totais
@@ -516,13 +616,13 @@ export function calculateItemProduction(
   const normCombo = normalizeProductionString(combo);
   const normComboInName = normalizeProductionString(rawName);
 
-  const isComboBatata =
+  let isComboBatata =
     normCombo.includes('batata') ||
     normComboInName.includes('combo batata') ||
     normComboInName.includes('batata e bebida') ||
     normComboInName.includes('batata + bebida');
 
-  const isComboOnion =
+  let isComboOnion =
     normCombo.includes('onion') ||
     normCombo.includes('anel') ||
     normCombo.includes('cebola') ||
@@ -530,6 +630,18 @@ export function calculateItemProduction(
     normComboInName.includes('combo aneis') ||
     normComboInName.includes('combo anéis') ||
     normComboInName.includes('aneis de cebola + bebida');
+
+  if (item.comboId) {
+    const matchedComboProduct = products.find(p => p.id === item.comboId);
+    if (matchedComboProduct && Array.isArray(matchedComboProduct.recipe) && matchedComboProduct.recipe.length > 0) {
+      for (const r of matchedComboProduct.recipe) {
+        const inv = inventoryById.get(r.ingredientId);
+        const compType = inferComponentType(inv?.name || '', inv?.category);
+        if (compType === 'batata') isComboBatata = true;
+        if (compType === 'onion') isComboOnion = true;
+      }
+    }
+  }
 
   let fryerBatatasCombo = 0;
   let fryerBatatasAvulsa = 0;
