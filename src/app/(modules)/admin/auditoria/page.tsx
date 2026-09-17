@@ -1,18 +1,25 @@
 'use client';
+
 import { useState, useMemo, useEffect } from 'react';
+import Link from 'next/link';
 import { useInventory, AuditAction, SaleItem } from '@/lib/store';
 import { 
-  ArrowLeft, ShieldCheck, ShieldAlert, DollarSign, 
-  Lock, Unlock, AlertTriangle, Search, Filter, 
-  Download, Printer, RefreshCw, FileText, User, 
-  Tag, Clock, History, Flame, Package, Gift, Heart, Calendar, HelpCircle,
-  BellRing, Check, Send, ExternalLink, Layers
+  ShieldCheck, ShieldAlert, DollarSign, 
+  Lock, Unlock, AlertTriangle, 
+  Download, FileText, 
+  Tag, History, Flame, Package, Gift, Calendar,
+  BellRing, Send, Layers
 } from 'lucide-react';
-import Link from 'next/link';
+import { 
+  PageHeader, FilterBar, Button, Badge, 
+  EmptyState, Skeleton, useToast 
+} from '@/components/ui';
 import { getOwnerWebhookUrl, saveOwnerWebhookUrl, testOwnerWebhook } from '@/lib/notifications';
+import { filterAuditLogs, computeAuditStats } from '@/lib/fiscal-helpers';
 
 export default function AuditoriaPage() {
-  const { auditLogs, sales, getProductCmv, isLoaded } = useInventory();
+  const { auditLogs, sales, isLoaded } = useInventory();
+  const { notify } = useToast();
   
   // Abas Principais
   const [activeView, setActiveView] = useState<'logs' | 'brindes' | 'webhook'>('logs');
@@ -27,21 +34,24 @@ export default function AuditoriaPage() {
 
   const handleTestWebhook = async () => {
     if (!webhookUrl.trim()) {
-      setWebhookStatus({ type: 'error', message: 'Informe uma URL de Webhook válida.' });
+      notify({ title: 'URL inválida', description: 'Informe uma URL de Webhook válida.', tone: 'warning' });
       return;
     }
     setWebhookStatus({ type: 'testing', message: 'Enviando notificação de teste...' });
     const res = await testOwnerWebhook(webhookUrl.trim());
     if (res.success) {
       setWebhookStatus({ type: 'success', message: res.message });
+      notify({ title: 'Webhook enviado', description: res.message, tone: 'success' });
     } else {
       setWebhookStatus({ type: 'error', message: res.message });
+      notify({ title: 'Falha no Webhook', description: res.message, tone: 'danger' });
     }
   };
 
   const handleSaveWebhook = () => {
     saveOwnerWebhookUrl(webhookUrl.trim());
     setWebhookStatus({ type: 'success', message: 'URL do Webhook salva com sucesso!' });
+    notify({ title: 'Webhook configurado', description: 'URL salva com sucesso.', tone: 'success' });
     setTimeout(() => setWebhookStatus({ type: 'idle', message: '' }), 3000);
   };
 
@@ -53,39 +63,17 @@ export default function AuditoriaPage() {
   const currentMonthStr = new Date().toISOString().slice(0, 7);
   const [selectedMonth, setSelectedMonth] = useState<string>(currentMonthStr);
 
-  // Filtragem dos logs
+  // Filtragem dos logs via helper desacoplado
   const filteredLogs = useMemo(() => {
-    return auditLogs.filter(log => {
-      // Filtro de Categoria
-      if (selectedFilter === 'cancelamento' && log.action !== 'CANCELAMENTO_VENDA') return false;
-      if (selectedFilter === 'caixa' && !['FECHAMENTO_CAIXA', 'ABERTURA_CAIXA', 'SANGRIA', 'SUPRIMENTO'].includes(log.action)) return false;
-      if (selectedFilter === 'preco' && log.action !== 'ALTERACAO_PRECO') return false;
-      if (selectedFilter === 'estoque' && !['AJUSTE_ESTOQUE', 'EXCLUSAO_ITEM', 'CADASTRO_PRODUTO', 'DESATIVACAO_PRODUTO'].includes(log.action)) return false;
-      if (selectedFilter === 'brindes' && log.action !== 'ITEM_BRINDE') return false;
-      if (selectedFilter === 'descontos' && !['DESCONTO_CONCEDIDO', 'CUPOM_HITS_IFOOD'].includes(log.action)) return false;
-
-      // Filtro de Texto
-      if (searchTerm.trim()) {
-        const term = searchTerm.toLowerCase();
-        const matchDetails = log.details.toLowerCase().includes(term);
-        const matchOperator = log.operator.toLowerCase().includes(term);
-        const matchAction = log.action.toLowerCase().includes(term);
-        return matchDetails || matchOperator || matchAction;
-      }
-
-      return true;
+    return filterAuditLogs(auditLogs, {
+      category: selectedFilter,
+      searchTerm: searchTerm
     });
   }, [auditLogs, selectedFilter, searchTerm]);
 
-  // Estatísticas Rápidas dos Logs
+  // Estatísticas Rápidas dos Logs via helper desacoplado
   const stats = useMemo(() => {
-    const cancelamentos = auditLogs.filter(l => l.action === 'CANCELAMENTO_VENDA').length;
-    const fechamentos = auditLogs.filter(l => l.action === 'FECHAMENTO_CAIXA').length;
-    const sangrias = auditLogs.filter(l => l.action === 'SANGRIA').length;
-    const alteracoesPreco = auditLogs.filter(l => l.action === 'ALTERACAO_PRECO').length;
-    const brindes = auditLogs.filter(l => l.action === 'ITEM_BRINDE').length;
-
-    return { cancelamentos, fechamentos, sangrias, alteracoesPreco, brindes, total: auditLogs.length };
+    return computeAuditStats(auditLogs);
   }, [auditLogs]);
 
   // === ANÁLISE DETALHADA DE BRINDES & CORTESIAS ===
@@ -120,8 +108,7 @@ export default function AuditoriaPage() {
       sale.items?.forEach(it => {
         if (it.isGift) {
           const originalVal = (it.originalPrice || it.unitPrice || 0) * it.quantity;
-          // Estima CMV proporcional
-          const cmvCost = 5.50 * it.quantity; // Estimativa média de custo do brinde caso sem ficha
+          const cmvCost = 5.50 * it.quantity;
           occurrences.push({
             saleId: sale.id,
             date: sale.date,
@@ -137,7 +124,7 @@ export default function AuditoriaPage() {
 
     // Agrupamento por motivo
     const reasonGroups: Record<string, { count: number; totalValue: number; label: string; icon: string }> = {
-      falta_pedido_anterior: { count: 0, totalValue: 0, label: 'Falta / Esquecimento no pedido anterior (ex: batata)', icon: '🍟' },
+      falta_pedido_anterior: { count: 0, totalValue: 0, label: 'Falta / Esquecimento no pedido anterior', icon: '🍟' },
       fidelidade_cliente: { count: 0, totalValue: 0, label: 'Fidelidade / Excelente cliente', icon: '⭐' },
       atraso_preparo: { count: 0, totalValue: 0, label: 'Compensação por atraso na cozinha / entrega', icon: '⏱️' },
       cortesia_casa: { count: 0, totalValue: 0, label: 'Cortesia da casa / Degustação / Parceria', icon: '🎁' },
@@ -190,6 +177,7 @@ export default function AuditoriaPage() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    notify({ title: 'Logs exportados em CSV', tone: 'success' });
   };
 
   // Exportar Relatório de Brindes para CSV
@@ -216,566 +204,439 @@ export default function AuditoriaPage() {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
+    notify({ title: 'Relatório de brindes exportado em CSV', tone: 'success' });
   };
 
   const getActionBadge = (action: AuditAction) => {
     switch (action) {
       case 'CANCELAMENTO_VENDA':
-        return { label: 'Estorno de Venda', bg: 'bg-red-500/20 text-red-400 border-red-500/30', icon: ShieldAlert };
+        return { label: 'Estorno de Venda', variant: 'danger' as const, icon: ShieldAlert };
       case 'FECHAMENTO_CAIXA':
-        return { label: 'Fechamento Caixa', bg: 'bg-purple-500/20 text-purple-400 border-purple-500/30', icon: Lock };
+        return { label: 'Fechamento Caixa', variant: 'neutral' as const, icon: Lock };
       case 'ABERTURA_CAIXA':
-        return { label: 'Abertura Caixa', bg: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30', icon: Unlock };
+        return { label: 'Abertura Caixa', variant: 'success' as const, icon: Unlock };
       case 'SANGRIA':
-        return { label: 'Sangria de Gaveta', bg: 'bg-orange-500/20 text-orange-400 border-orange-500/30', icon: DollarSign };
+        return { label: 'Sangria de Gaveta', variant: 'warning' as const, icon: DollarSign };
       case 'SUPRIMENTO':
-        return { label: 'Suprimento', bg: 'bg-blue-500/20 text-blue-400 border-blue-500/30', icon: DollarSign };
+        return { label: 'Suprimento', variant: 'info' as const, icon: DollarSign };
       case 'ALTERACAO_PRECO':
-        return { label: 'Alteração de Preço', bg: 'bg-amber-500/20 text-amber-400 border-amber-500/30', icon: Tag };
+        return { label: 'Alteração de Preço', variant: 'warning' as const, icon: Tag };
       case 'AJUSTE_ESTOQUE':
-        return { label: 'Ajuste de Estoque', bg: 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30', icon: Package };
+        return { label: 'Ajuste de Estoque', variant: 'info' as const, icon: Package };
       case 'EXCLUSAO_ITEM':
       case 'DESATIVACAO_PRODUTO':
-        return { label: 'Item Desativado', bg: 'bg-rose-500/20 text-rose-400 border-rose-500/30', icon: AlertTriangle };
+        return { label: 'Item Desativado', variant: 'danger' as const, icon: AlertTriangle };
       case 'CADASTRO_PRODUTO':
-        return { label: 'Novo Produto', bg: 'bg-teal-500/20 text-teal-400 border-teal-500/30', icon: Package };
+        return { label: 'Novo Produto', variant: 'success' as const, icon: Package };
       case 'ITEM_BRINDE':
-        return { label: 'Brinde Concedido', bg: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', icon: Gift };
+        return { label: 'Brinde Concedido', variant: 'success' as const, icon: Gift };
       case 'DESCONTO_CONCEDIDO':
-        return { label: 'Desconto no Pedido', bg: 'bg-amber-500/20 text-amber-300 border-amber-500/30', icon: Tag };
+        return { label: 'Desconto no Pedido', variant: 'warning' as const, icon: Tag };
       case 'CUPOM_HITS_IFOOD':
-        return { label: 'Cupom Loja (Hits)', bg: 'bg-red-500/20 text-red-300 border-red-500/30', icon: Flame };
+        return { label: 'Cupom Loja (Hits)', variant: 'danger' as const, icon: Flame };
       case 'VINCULO_LOTE_RECEITAS':
-        return { label: 'Vínculo em Lote Ficha Técnica', bg: 'bg-indigo-500/20 text-indigo-300 border-indigo-500/30', icon: Layers };
+        return { label: 'Vínculo Ficha Técnica', variant: 'info' as const, icon: Layers };
       default:
-        return { label: action, bg: 'bg-slate-700 text-slate-300 border-slate-600', icon: FileText };
+        return { label: action, variant: 'neutral' as const, icon: FileText };
     }
   };
 
   if (!isLoaded) {
     return (
-      <div className="flex h-64 items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-amber-500 border-t-transparent"></div>
+      <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6" data-testid="auditoria-skeleton">
+        <Skeleton className="h-14 w-1/3" />
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <Skeleton className="h-24 rounded-dialog" />
+          <Skeleton className="h-24 rounded-dialog" />
+          <Skeleton className="h-24 rounded-dialog" />
+          <Skeleton className="h-24 rounded-dialog" />
+          <Skeleton className="h-24 rounded-dialog" />
+        </div>
+        <Skeleton className="h-12 w-full" />
+        <Skeleton className="h-64 w-full rounded-dialog" />
       </div>
     );
   }
 
   return (
-    <main className="min-h-screen p-6 max-w-7xl mx-auto space-y-8 animate-fade-in pb-20">
-      
-      {/* Topo / Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-slate-800">
-        <div className="flex items-center gap-4">
-          <Link 
-            href="/"
-            className="p-3 bg-slate-900 border border-slate-800 text-slate-400 hover:text-white rounded-2xl transition-all cursor-pointer shadow-sm hover:border-slate-700"
-          >
-            <ArrowLeft size={20} />
-          </Link>
-          <div>
-            <div className="inline-flex items-center gap-2 text-emerald-400 font-extrabold text-xs uppercase tracking-wider mb-1">
-              <ShieldCheck size={16} /> Segurança & Auditoria do Administrador
-            </div>
-            <h1 className="text-3xl font-black text-white tracking-tight">Central de Auditoria & Conformidade</h1>
-            <p className="text-xs text-slate-400 mt-0.5">
-              Rastreamento de cancelamentos, sangrias, fechamentos, alterações de preços e brindes/cortesias.
-            </p>
-          </div>
-        </div>
+    <div className="min-h-screen relative p-4 md:p-8 overflow-hidden pb-20">
+      <div className="absolute top-[-10%] right-[-10%] w-[40%] h-[40%] bg-emerald-500/10 blur-[150px] pointer-events-none" />
 
-        {/* Alternador de Abas */}
-        <div className="flex items-center gap-2 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
-          <button
-            type="button"
-            onClick={() => setActiveView('logs')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
-              activeView === 'logs'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <History size={15} /> Linha do Tempo
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveView('brindes')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
-              activeView === 'brindes'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <Gift size={15} /> Relatório de Brindes & Cortesias
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveView('webhook')}
-            className={`px-4 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-2 ${
-              activeView === 'webhook'
-                ? 'bg-emerald-600 text-white shadow-md'
-                : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            <BellRing size={15} /> Webhook do Dono (WhatsApp/Telegram)
-          </button>
-        </div>
-      </div>
-
-      {/* VISTA 1: LINHA DO TEMPO GERAL DE AUDITORIA */}
-      {activeView === 'logs' && (
-        <div className="space-y-6">
-          
-          {/* Métricas Gerais */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-            <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase">Estornos de Vendas</span>
-              <p className="text-2xl font-mono font-black text-red-400">{stats.cancelamentos}</p>
-              <span className="text-[10px] text-slate-500">Exigem senha supervisor</span>
-            </div>
-
-            <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase">Fechamentos Caixa</span>
-              <p className="text-2xl font-mono font-black text-purple-400">{stats.fechamentos}</p>
-              <span className="text-[10px] text-slate-500">Contagem cega registrada</span>
-            </div>
-
-            <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase">Sangrias de Gaveta</span>
-              <p className="text-2xl font-mono font-black text-orange-400">{stats.sangrias}</p>
-              <span className="text-[10px] text-slate-500">Retiradas manuais</span>
-            </div>
-
-            <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase">Ajustes de Preço</span>
-              <p className="text-2xl font-mono font-black text-amber-400">{stats.alteracoesPreco}</p>
-              <span className="text-[10px] text-slate-500">Cardápio & iFood</span>
-            </div>
-
-            <div className="glass-card p-4 rounded-3xl border border-slate-800 space-y-1">
-              <span className="text-[11px] font-bold text-slate-400 uppercase">Brindes Concedidos</span>
-              <p className="text-2xl font-mono font-black text-emerald-400">{stats.brindes}</p>
-              <span className="text-[10px] text-slate-500">Motivo auditado</span>
-            </div>
-          </div>
-
-          {/* Filtros e Busca */}
-          <div className="glass-card p-4 rounded-3xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex flex-wrap gap-1.5 bg-slate-950 p-1.5 rounded-2xl border border-slate-800">
-              {[
-                { id: 'todos', label: 'Todos os Logs' },
-                { id: 'cancelamento', label: '🚫 Cancelamentos' },
-                { id: 'caixa', label: '🔒 Caixa & Sangrias' },
-                { id: 'preco', label: '🏷️ Preços' },
-                { id: 'estoque', label: '📦 Estoque' },
-                { id: 'brindes', label: '🎁 Brindes' },
-                { id: 'descontos', label: '💰 Descontos' }
-              ].map(f => (
-                <button
-                  key={f.id}
-                  type="button"
-                  onClick={() => setSelectedFilter(f.id as any)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                    selectedFilter === f.id
-                      ? 'bg-emerald-500 text-slate-950 font-black shadow-md'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  {f.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-3">
-              <div className="relative w-full md:w-64">
-                <Search size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-500" />
-                <input
-                  type="text"
-                  value={searchTerm}
-                  onChange={e => setSearchTerm(e.target.value)}
-                  placeholder="Buscar ação, operador ou comanda..."
-                  className="w-full pl-9 pr-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white placeholder:text-slate-500 outline-none focus:border-emerald-500"
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={handleExportCsv}
-                className="py-2 px-3.5 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer transition-all shadow-sm"
-              >
-                <Download size={14} /> Exportar CSV
-              </button>
-            </div>
-          </div>
-
-          {/* Timeline de Eventos */}
-          <div className="glass-card rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
-            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/40">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Eventos Auditados ({filteredLogs.length})
-              </span>
-              <span className="text-[11px] text-slate-500 font-mono">
-                Registros protegidos contra exclusão
-              </span>
-            </div>
-
-            <div className="divide-y divide-slate-800/60 text-xs">
-              {filteredLogs.length === 0 ? (
-                <div className="py-16 text-center text-slate-500">
-                  <ShieldCheck size={40} className="mx-auto mb-2 opacity-30" />
-                  <p>Nenhum registro de auditoria encontrado para os filtros selecionados.</p>
-                </div>
-              ) : (
-                filteredLogs.map(log => {
-                  const badge = getActionBadge(log.action);
-                  const Icon = badge.icon;
-                  const dateStr = new Date(log.timestamp).toLocaleString('pt-BR', {
-                    day: '2-digit', month: '2-digit', year: '2-digit',
-                    hour: '2-digit', minute: '2-digit'
-                  });
-
-                  return (
-                    <div key={log.id} className="p-4 hover:bg-slate-900/40 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-3">
-                      <div className="flex items-start gap-3">
-                        <div className={`p-2.5 rounded-xl border mt-0.5 ${badge.bg}`}>
-                          <Icon size={16} />
-                        </div>
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${badge.bg}`}>
-                              {badge.label}
-                            </span>
-                            <span className="font-bold text-white text-xs">{log.operator}</span>
-                            <span className="text-[10px] text-slate-500 font-mono">• {dateStr}</span>
-                          </div>
-                          <p className="text-slate-300 leading-relaxed text-xs">{log.details}</p>
-                        </div>
-                      </div>
-
-                      {(log.oldValue || log.newValue) && (
-                        <div className="bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-[11px] font-mono space-y-0.5 min-w-[200px] text-right">
-                          {log.oldValue && (
-                            <div className="text-slate-500">
-                              Anterior: <span className="text-slate-400">{log.oldValue}</span>
-                            </div>
-                          )}
-                          {log.newValue && (
-                            <div className="text-emerald-400 font-bold">
-                              Novo: {log.newValue}
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
+      <div className="max-w-7xl mx-auto relative z-10 space-y-6">
+        {/* Cabeçalho */}
+        <PageHeader
+          title="Central de Auditoria & Conformidade"
+          eyebrow="Segurança & Auditoria do Administrador"
+          description="Rastreamento de cancelamentos, sangrias, fechamentos, alterações de preços e brindes/cortesias."
+          actions={
+            <div className="flex flex-wrap items-center gap-2">
+              <Link href="/admin/fiscal">
+                <Button variant="secondary" leadingIcon={<FileText size={15} aria-hidden="true" />}>
+                  Conformidade Fiscal
+                </Button>
+              </Link>
+              <Link href="/admin/dashboard">
+                <Button variant="secondary" leadingIcon={<ShieldCheck size={15} aria-hidden="true" />}>
+                  DRE & Gestão
+                </Button>
+              </Link>
+              {activeView === 'logs' && filteredLogs.length > 0 && (
+                <Button variant="secondary" onClick={handleExportCsv} leadingIcon={<Download size={14} aria-hidden="true" />}>
+                  Exportar CSV
+                </Button>
+              )}
+              {activeView === 'brindes' && giftsAnalysis.occurrences.length > 0 && (
+                <Button variant="secondary" onClick={handleExportGiftsCsv} leadingIcon={<Download size={14} aria-hidden="true" />}>
+                  Exportar CSV
+                </Button>
               )}
             </div>
-          </div>
-        </div>
-      )}
+          }
+        />
 
-      {/* VISTA 2: RELATÓRIO MENSAL DE BRINDES & CORTESIAS */}
-      {activeView === 'brindes' && (
-        <div className="space-y-6 animate-fade-in">
-          
-          {/* Barra de Controle de Período */}
-          <div className="glass-card p-5 rounded-3xl border border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-950/40">
-            <div>
-              <div className="inline-flex items-center gap-2 text-emerald-400 font-extrabold text-xs uppercase tracking-wider mb-1">
-                <Gift size={16} /> Gestão de Cortesias & Prevenção de Falhas
+        {/* Sub-Abas de Navegação */}
+        <div className="flex items-center gap-2 border-b border-border-default pb-2 overflow-x-auto">
+          <Button
+            variant={activeView === 'logs' ? 'primary' : 'secondary'}
+            onClick={() => setActiveView('logs')}
+            leadingIcon={<History size={15} aria-hidden="true" />}
+          >
+            Linha do Tempo
+          </Button>
+          <Button
+            variant={activeView === 'brindes' ? 'primary' : 'secondary'}
+            onClick={() => setActiveView('brindes')}
+            leadingIcon={<Gift size={15} aria-hidden="true" />}
+          >
+            Relatório de Brindes & Cortesias
+          </Button>
+          <Button
+            variant={activeView === 'webhook' ? 'primary' : 'secondary'}
+            onClick={() => setActiveView('webhook')}
+            leadingIcon={<BellRing size={15} aria-hidden="true" />}
+          >
+            Webhook do Dono (WhatsApp/Telegram)
+          </Button>
+        </div>
+
+        {/* VISTA 1: LINHA DO TEMPO GERAL DE AUDITORIA */}
+        {activeView === 'logs' && (
+          <div className="space-y-6">
+            {/* Métricas Gerais */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+              <div className="bg-surface-card p-4 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-xs font-semibold text-text-muted uppercase">Estornos de Vendas</span>
+                <p className="text-2xl font-mono font-black text-status-danger tabular-nums">{stats.cancelamentos}</p>
+                <span className="text-[10px] text-text-muted">Exigem senha supervisor</span>
               </div>
-              <h2 className="text-2xl font-black text-white">Relatório Mensal de Brindes e Cortesias</h2>
-              <p className="text-xs text-slate-400">
-                Audite quantos itens foram doados, o valor total que saiu da loja e os principais motivos apontados pela equipe.
+
+              <div className="bg-surface-card p-4 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-xs font-semibold text-text-muted uppercase">Fechamentos Caixa</span>
+                <p className="text-2xl font-mono font-black text-purple-400 tabular-nums">{stats.fechamentos}</p>
+                <span className="text-[10px] text-text-muted">Contagem cega registrada</span>
+              </div>
+
+              <div className="bg-surface-card p-4 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-xs font-semibold text-text-muted uppercase">Sangrias de Gaveta</span>
+                <p className="text-2xl font-mono font-black text-status-warning tabular-nums">{stats.sangrias}</p>
+                <span className="text-[10px] text-text-muted">Retiradas manuais</span>
+              </div>
+
+              <div className="bg-surface-card p-4 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-xs font-semibold text-text-muted uppercase">Ajustes de Preço</span>
+                <p className="text-2xl font-mono font-black text-amber-400 tabular-nums">{stats.alteracoesPreco}</p>
+                <span className="text-[10px] text-text-muted">Cardápio & iFood</span>
+              </div>
+
+              <div className="bg-surface-card p-4 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-xs font-semibold text-text-muted uppercase">Brindes Concedidos</span>
+                <p className="text-2xl font-mono font-black text-emerald-400 tabular-nums">{stats.brindes}</p>
+                <span className="text-[10px] text-text-muted">Motivo auditado</span>
+              </div>
+            </div>
+
+            {/* FilterBar Padronizada */}
+            <FilterBar
+              search={searchTerm}
+              onSearchChange={setSearchTerm}
+              searchLabel="Buscar auditoria"
+              placeholder="Buscar ação, operador ou detalhes..."
+              resultCount={filteredLogs.length}
+              totalCount={auditLogs.length}
+              active={Boolean(searchTerm || selectedFilter !== 'todos')}
+              onClear={() => {
+                setSearchTerm('');
+                setSelectedFilter('todos');
+              }}
+            >
+              <div className="space-y-1.5 sm:w-56">
+                <label htmlFor="audit-filter-select" className="block text-sm font-medium text-text-secondary">
+                  Filtrar por Categoria
+                </label>
+                <select
+                  id="audit-filter-select"
+                  value={selectedFilter}
+                  onChange={(e) => setSelectedFilter(e.target.value as any)}
+                  className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-text-primary text-sm font-medium focus:outline-none focus:border-brand-primary cursor-pointer"
+                >
+                  <option value="todos">Todos os logs</option>
+                  <option value="cancelamento">Cancelamentos</option>
+                  <option value="caixa">Caixa & Sangrias</option>
+                  <option value="preco">Alterações de Preço</option>
+                  <option value="estoque">Ajustes de Estoque</option>
+                  <option value="brindes">Brindes Concedidos</option>
+                  <option value="descontos">Descontos & Cupons</option>
+                </select>
+              </div>
+            </FilterBar>
+
+            {/* Timeline de Eventos */}
+            {filteredLogs.length === 0 ? (
+              <EmptyState
+                title={auditLogs.length ? 'Nenhum registro encontrado' : 'Nenhum registro de auditoria'}
+                description={auditLogs.length ? 'Tente pesquisar com outro termo ou alterar o filtro.' : 'As ações sensíveis da equipe aparecerão aqui.'}
+                icon={<ShieldCheck aria-hidden="true" />}
+                action={
+                  auditLogs.length ? (
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        setSearchTerm('');
+                        setSelectedFilter('todos');
+                      }}
+                    >
+                      Limpar filtros
+                    </Button>
+                  ) : undefined
+                }
+              />
+            ) : (
+              <div className="rounded-dialog border border-border-default bg-surface-card overflow-hidden shadow-elevated">
+                <div className="p-4 border-b border-border-default flex justify-between items-center bg-surface-elevated/40">
+                  <span className="text-xs font-bold text-text-muted uppercase tracking-wider">
+                    Eventos Auditados ({filteredLogs.length})
+                  </span>
+                  <span className="text-[11px] text-text-muted font-mono">
+                    Registros protegidos contra exclusão
+                  </span>
+                </div>
+
+                <div className="divide-y divide-border-default/50 text-xs">
+                  {filteredLogs.map(log => {
+                    const badge = getActionBadge(log.action);
+                    const Icon = badge.icon;
+                    const dateStr = new Date(log.timestamp).toLocaleString('pt-BR', {
+                      day: '2-digit', month: '2-digit', year: '2-digit',
+                      hour: '2-digit', minute: '2-digit'
+                    });
+
+                    return (
+                      <div key={log.id} className="p-4 hover:bg-surface-elevated/40 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <div className="p-2.5 rounded-control bg-surface-elevated border border-border-default mt-0.5 shrink-0">
+                            <Icon size={16} className="text-brand-primary" aria-hidden="true" />
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <Badge variant={badge.variant} className="text-[10px]">
+                                {badge.label}
+                              </Badge>
+                              <span className="font-bold text-text-primary text-xs">{log.operator}</span>
+                              <span className="text-[10px] text-text-muted font-mono tabular-nums">• {dateStr}</span>
+                            </div>
+                            <p className="text-text-secondary leading-relaxed text-xs">{log.details}</p>
+                          </div>
+                        </div>
+
+                        {(log.oldValue || log.newValue) && (
+                          <div className="bg-surface-input p-2.5 rounded-control border border-border-default text-[11px] font-mono tabular-nums space-y-0.5 min-w-[200px] text-right">
+                            {log.oldValue && (
+                              <div className="text-text-muted">
+                                Anterior: <span className="text-text-secondary">{log.oldValue}</span>
+                              </div>
+                            )}
+                            {log.newValue && (
+                              <div className="text-emerald-400 font-bold">
+                                Novo: {log.newValue}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* VISTA 2: RELATÓRIO MENSAL DE BRINDES & CORTESIAS */}
+        {activeView === 'brindes' && (
+          <div className="space-y-6">
+            {/* Barra de Controle de Período */}
+            <div className="bg-surface-card p-5 rounded-dialog border border-border-default flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-card">
+              <div>
+                <h2 className="text-xl font-bold text-text-primary flex items-center gap-2">
+                  <Gift className="text-emerald-400" size={20} aria-hidden="true" />
+                  Relatório Mensal de Brindes e Cortesias
+                </h2>
+                <p className="text-xs text-text-muted">
+                  Audite quantos itens foram doados, o valor total que saiu da loja e os principais motivos apontados pela equipe.
+                </p>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2 bg-surface-input border border-border-default rounded-control px-3 py-1.5 text-xs">
+                  <Calendar size={15} className="text-emerald-400" aria-hidden="true" />
+                  <label htmlFor="ref-month" className="text-text-muted font-bold">Mês:</label>
+                  <input
+                    id="ref-month"
+                    type="month"
+                    value={selectedMonth}
+                    onChange={e => setSelectedMonth(e.target.value)}
+                    className="bg-transparent text-text-primary outline-none font-bold font-mono tabular-nums cursor-pointer"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* KPIs de Brindes */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-surface-card p-4 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-xs font-semibold text-text-muted uppercase">Itens Doados</span>
+                <p className="text-2xl font-mono font-black text-emerald-400 tabular-nums">{giftsAnalysis.totalGiftsCount} un</p>
+                <span className="text-[10px] text-text-muted">No período selecionado</span>
+              </div>
+
+              <div className="bg-surface-card p-4 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-xs font-semibold text-text-muted uppercase">Preço Cardápio Doado</span>
+                <p className="text-2xl font-mono font-black text-text-primary tabular-nums">R$ {giftsAnalysis.totalOriginalValue.toFixed(2)}</p>
+                <span className="text-[10px] text-text-muted">Valor bruto de venda</span>
+              </div>
+
+              <div className="bg-surface-card p-4 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-xs font-semibold text-text-muted uppercase">Descontos no Caixa</span>
+                <p className="text-2xl font-mono font-black text-amber-400 tabular-nums">R$ {giftsAnalysis.totalDiscountInMonth.toFixed(2)}</p>
+                <span className="text-[10px] text-text-muted">Abatimentos manuais</span>
+              </div>
+
+              <div className="bg-surface-card p-4 rounded-dialog border border-border-default space-y-1 shadow-card">
+                <span className="text-xs font-semibold text-text-muted uppercase">Cupons Próprios (iFood)</span>
+                <p className="text-2xl font-mono font-black text-status-danger tabular-nums">R$ {giftsAnalysis.totalStoreCouponInMonth.toFixed(2)}</p>
+                <span className="text-[10px] text-text-muted">Hits & Campanhas</span>
+              </div>
+            </div>
+
+            {/* Tabela de Ocorrências de Brindes */}
+            {giftsAnalysis.occurrences.length === 0 ? (
+              <EmptyState
+                title="Nenhum brinde registrado neste mês"
+                description="Quando o operador marcar um item como brinde ou cortesia na venda, o registro detalhado aparecerá aqui."
+                icon={<Gift aria-hidden="true" />}
+              />
+            ) : (
+              <div className="rounded-dialog border border-border-default bg-surface-card overflow-hidden shadow-elevated">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="border-b border-border-default bg-surface-elevated/60 text-xs font-semibold text-text-muted uppercase tracking-wider">
+                      <th className="p-4">Data / Pedido</th>
+                      <th className="p-4">Cliente / Canal</th>
+                      <th className="p-4">Item Concedido</th>
+                      <th className="p-4">Motivo / Justificativa</th>
+                      <th className="p-4 text-right">Valor Cardápio</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border-default/50">
+                    {giftsAnalysis.occurrences.map((occ, idx) => (
+                      <tr key={idx} className="hover:bg-surface-elevated/40 transition-colors">
+                        <td className="p-4 font-mono tabular-nums text-text-primary">
+                          {new Date(occ.date).toLocaleDateString('pt-BR')} #{occ.saleId.slice(0, 6)}
+                        </td>
+                        <td className="p-4 text-text-secondary">
+                          <span className="font-bold text-text-primary block">{occ.customerName}</span>
+                          <span className="text-[10px] text-text-muted uppercase">{occ.channel}</span>
+                        </td>
+                        <td className="p-4 font-bold text-emerald-400">
+                          {occ.item.quantity}x {occ.item.productName}
+                        </td>
+                        <td className="p-4 text-text-secondary">
+                          <Badge variant="neutral" className="text-[10px] mb-1 block w-fit">
+                            {occ.item.giftReason || 'cortesia'}
+                          </Badge>
+                          {occ.item.giftNotes && (
+                            <p className="text-[11px] text-text-muted italic">{occ.item.giftNotes}</p>
+                          )}
+                        </td>
+                        <td className="p-4 text-right font-mono font-bold text-text-primary tabular-nums">
+                          R$ {occ.originalValue.toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* VISTA 3: WEBHOOK DO DONO */}
+        {activeView === 'webhook' && (
+          <div className="bg-surface-card border border-border-default rounded-dialog p-6 shadow-elevated space-y-6 max-w-2xl">
+            <div>
+              <h2 className="text-xl font-bold text-text-primary flex items-center gap-2">
+                <BellRing className="text-brand-primary" size={20} aria-hidden="true" />
+                Alertas em Tempo Real via Webhook
+              </h2>
+              <p className="text-xs text-text-muted mt-1">
+                Receba notificações automáticas no WhatsApp ou Telegram sempre que uma sangria, cancelamento ou fechamento for efetuado.
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs">
-                <Calendar size={15} className="text-emerald-400" />
-                <span className="text-slate-400 font-bold">Mês de Referência:</span>
-                <input
-                  type="month"
-                  value={selectedMonth}
-                  onChange={e => setSelectedMonth(e.target.value)}
-                  className="bg-transparent text-white font-mono font-bold outline-none cursor-pointer"
-                />
-              </div>
-
-              <button
-                type="button"
-                onClick={handleExportGiftsCsv}
-                className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-600/30 transition-all"
-              >
-                <Download size={15} /> Exportar Relatório (.CSV)
-              </button>
-            </div>
-          </div>
-
-          {/* Cards de Métricas do Mês */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div className="glass-card p-5 rounded-3xl border border-slate-800 space-y-1">
-              <span className="text-xs font-bold text-slate-400 uppercase">Itens Doados no Mês</span>
-              <h3 className="text-3xl font-mono font-black text-emerald-400">
-                {giftsAnalysis.totalGiftsCount} itens
-              </h3>
-              <span className="text-[10px] text-slate-500">Marcados como brinde no caixa</span>
-            </div>
-
-            <div className="glass-card p-5 rounded-3xl border border-slate-800 space-y-1">
-              <span className="text-xs font-bold text-slate-400 uppercase">Valor Doado (Preço Venda)</span>
-              <h3 className="text-3xl font-mono font-black text-white">
-                R$ {giftsAnalysis.totalOriginalValue.toFixed(2)}
-              </h3>
-              <span className="text-[10px] text-slate-500">Receita bruta estornada</span>
-            </div>
-
-            <div className="glass-card p-5 rounded-3xl border border-slate-800 space-y-1">
-              <span className="text-xs font-bold text-slate-400 uppercase">Descontos no Mês</span>
-              <h3 className="text-3xl font-mono font-black text-amber-400">
-                R$ {giftsAnalysis.totalDiscountInMonth.toFixed(2)}
-              </h3>
-              <span className="text-[10px] text-slate-500">Descontos avulsos concedidos</span>
-            </div>
-
-            <div className="glass-card p-5 rounded-3xl border border-slate-800 space-y-1">
-              <span className="text-xs font-bold text-slate-400 uppercase">Cupons iFood da Loja (Hits)</span>
-              <h3 className="text-3xl font-mono font-black text-red-400">
-                R$ {giftsAnalysis.totalStoreCouponInMonth.toFixed(2)}
-              </h3>
-              <span className="text-[10px] text-slate-500">Subsídios bancados pela loja</span>
-            </div>
-          </div>
-
-          {/* Diagnóstico dos Principais Motivos */}
-          <div className="glass-card rounded-3xl p-6 md:p-8 border border-slate-800 space-y-4">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-800">
-              <h3 className="text-lg font-black text-white flex items-center gap-2">
-                Ranking de Motivos dos Brindes Concedidos
-              </h3>
-              <span className="text-xs text-slate-500 font-mono">
-                Total de {giftsAnalysis.totalGiftsCount} itens distribuídos
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Object.entries(giftsAnalysis.reasonGroups).map(([key, info]) => {
-                const pct = giftsAnalysis.totalGiftsCount > 0 
-                  ? (info.count / giftsAnalysis.totalGiftsCount) * 100 
-                  : 0;
-
-                const isFalta = key === 'falta_pedido_anterior';
-
-                return (
-                  <div 
-                    key={key} 
-                    className={`p-4 rounded-2xl border space-y-2 transition-all ${
-                      isFalta && info.count > 0 
-                        ? 'bg-amber-950/20 border-amber-500/30' 
-                        : 'bg-slate-950 border-slate-800'
-                    }`}
-                  >
-                    <div className="flex justify-between items-start">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xl">{info.icon}</span>
-                        <span className="text-xs font-bold text-slate-200">{info.label}</span>
-                      </div>
-                      <span className="px-2 py-0.5 rounded-lg text-xs font-mono font-black bg-slate-900 text-white">
-                        {info.count} un
-                      </span>
-                    </div>
-
-                    <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full ${isFalta ? 'bg-amber-400' : 'bg-emerald-400'}`}
-                        style={{ width: `${pct}%` }}
-                      />
-                    </div>
-
-                    <div className="flex justify-between text-[11px] font-mono text-slate-400 pt-1">
-                      <span>{pct.toFixed(0)}% do total</span>
-                      <strong className="text-white">R$ {info.totalValue.toFixed(2)}</strong>
-                    </div>
-
-                    {isFalta && info.count > 0 && (
-                      <p className="text-[10px] text-amber-300 leading-tight pt-1">
-                        ⚠️ Atenção da Gerência: Verifique a montagem das embalagens na cozinha para diminuir esquecimentos.
-                      </p>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Tabela de Ocorrências Detalhadas */}
-          <div className="glass-card rounded-3xl border border-slate-800 overflow-hidden shadow-2xl">
-            <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-slate-900/40">
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">
-                Lista Analítica de Brindes Entregues ({giftsAnalysis.occurrences.length})
-              </span>
-              <span className="text-[11px] text-slate-500 font-mono">
-                Registrado diretamente no PDV
-              </span>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse">
-                <thead>
-                  <tr className="bg-slate-950/80 border-b border-slate-800 text-[11px] font-black uppercase text-slate-400 tracking-wider">
-                    <th className="p-4">Data / Hora</th>
-                    <th className="p-4">Cliente & Canal</th>
-                    <th className="p-4">Item Concedido</th>
-                    <th className="p-4">Motivo Apontado</th>
-                    <th className="p-4 text-right">Valor Estornado</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/60 text-xs">
-                  {giftsAnalysis.occurrences.length === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="py-12 text-center text-slate-500">
-                        Nenhum brinde concedido neste mês de referência.
-                      </td>
-                    </tr>
-                  ) : (
-                    giftsAnalysis.occurrences.map((occ, idx) => {
-                      const dateStr = new Date(occ.date).toLocaleString('pt-BR', {
-                        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
-                      });
-
-                      const reasonText = 
-                        occ.item.giftReason === 'falta_pedido_anterior' ? '🍟 Falta no pedido anterior' :
-                        occ.item.giftReason === 'fidelidade_cliente' ? '⭐ Excelente cliente / Fidelidade' :
-                        occ.item.giftReason === 'atraso_preparo' ? '⏱️ Atraso no preparo' :
-                        occ.item.giftReason === 'cortesia_casa' ? '🎁 Cortesia da casa' : '📝 Outro motivo';
-
-                      return (
-                        <tr key={idx} className="hover:bg-slate-900/30 transition-colors">
-                          <td className="p-4 font-mono text-slate-400">
-                            {dateStr}
-                          </td>
-                          <td className="p-4">
-                            <span className="font-bold text-white block">{occ.customerName}</span>
-                            <span className="text-[10px] text-slate-500 uppercase">{occ.channel}</span>
-                          </td>
-                          <td className="p-4">
-                            <span className="font-extrabold text-emerald-400">
-                              {occ.item.quantity}x {occ.item.productName}
-                            </span>
-                          </td>
-                          <td className="p-4">
-                            <span className="font-semibold text-slate-300 block">{reasonText}</span>
-                            {occ.item.giftNotes && (
-                              <span className="text-[10px] text-slate-500 italic block mt-0.5">
-                                &quot;{occ.item.giftNotes}&quot;
-                              </span>
-                            )}
-                          </td>
-                          <td className="p-4 text-right font-mono font-black text-white text-sm">
-                            R$ {occ.originalValue.toFixed(2)}
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-        </div>
-      )}
-
-      {/* VISTA 3: CONFIGURAÇÃO DE WEBHOOK DO DONO */}
-      {activeView === 'webhook' && (
-        <div className="space-y-6 max-w-4xl">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 sm:p-8 space-y-6">
-            <div className="flex items-start justify-between gap-4">
+            <div className="space-y-4 text-xs">
               <div>
-                <div className="inline-flex items-center gap-2 text-emerald-400 text-xs font-bold uppercase tracking-wider mb-1">
-                  <BellRing size={16} /> Disparo Instantâneo de Notificações
-                </div>
-                <h2 className="text-2xl font-black text-white tracking-tight">
-                  Webhook de Alertas Antifraude para o Proprietário
-                </h2>
-                <p className="text-xs text-slate-400 mt-1 max-w-2xl leading-relaxed">
-                  Cadastre uma URL de Webhook para receber avisos imediatos diretamente no seu <strong>WhatsApp</strong> (via Z-API/Evolution), <strong>Telegram</strong> (via bot/bridge), <strong>Discord</strong> ou automações no <strong>n8n/Zapier</strong> sempre que ocorrerem operações sensíveis no caixa ou na produção.
-                </p>
-              </div>
-            </div>
-
-            {/* Eventos Notificados */}
-            <div className="p-5 bg-slate-950/80 rounded-2xl border border-slate-800 space-y-3">
-              <h3 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
-                Eventos Críticos Monitorados pelo Sistema:
-              </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div className="flex items-center gap-2.5 text-slate-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-red-500 shrink-0" />
-                  <span><strong>Cancelamento/Estorno de Venda:</strong> Alerta com valor, operador e motivo.</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-slate-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-400 shrink-0" />
-                  <span><strong>Sangria de Gaveta:</strong> Retirada de dinheiro físico com justificativa.</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-slate-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0" />
-                  <span><strong>Itens Brindes & Cortesias:</strong> Doações no pedido com motivo.</span>
-                </div>
-                <div className="flex items-center gap-2.5 text-slate-300">
-                  <span className="w-2.5 h-2.5 rounded-full bg-blue-400 shrink-0" />
-                  <span><strong>Teto de Gaveta Excedido:</strong> Dinheiro acumulado acima do limite seguro.</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Input da URL do Webhook */}
-            <div className="space-y-3">
-              <label className="block text-xs font-bold text-slate-200 uppercase tracking-wider">
-                URL do Webhook (Endpoint HTTP POST):
-              </label>
-              <div className="flex flex-col sm:flex-row gap-2">
+                <label htmlFor="webhook-input" className="block text-text-secondary font-bold mb-1">
+                  URL do Webhook (n8n, Make, Z-API ou Evolution API):
+                </label>
                 <input
+                  id="webhook-input"
                   type="url"
-                  placeholder="https://discord.com/api/webhooks/... ou https://seu-n8n.com/webhook/..."
+                  placeholder="https://seu-servidor.com/webhook/alerta-dono"
                   value={webhookUrl}
                   onChange={e => setWebhookUrl(e.target.value)}
-                  className="flex-1 bg-slate-950 border border-slate-800 rounded-xl font-mono text-xs text-white p-3 focus:outline-hidden focus:border-emerald-500"
+                  className="w-full h-10 px-3 rounded-control bg-surface-input border border-border-default text-text-primary font-mono text-xs focus:outline-none focus:border-brand-primary"
                 />
-                <button
-                  type="button"
-                  onClick={handleSaveWebhook}
-                  className="py-2.5 px-4 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-sm"
-                >
-                  <Check size={14} /> Salvar
-                </button>
-                <button
-                  type="button"
+              </div>
+
+              <div className="flex gap-2">
+                <Button onClick={handleSaveWebhook}>
+                  Salvar URL
+                </Button>
+                <Button
+                  variant="secondary"
                   onClick={handleTestWebhook}
-                  disabled={webhookStatus.type === 'testing'}
-                  className="py-2.5 px-5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer transition-all shadow-md disabled:opacity-50"
+                  loading={webhookStatus.type === 'testing'}
+                  leadingIcon={<Send size={13} aria-hidden="true" />}
                 >
-                  <Send size={14} /> {webhookStatus.type === 'testing' ? 'Enviando...' : 'Testar Disparo'}
-                </button>
+                  Enviar Mensagem de Teste
+                </Button>
               </div>
 
               {webhookStatus.message && (
-                <div className={`p-3.5 rounded-2xl border text-xs font-semibold flex items-center gap-2 ${
-                  webhookStatus.type === 'success'
-                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                <div className={`p-3 rounded-control border text-xs ${
+                  webhookStatus.type === 'success' 
+                    ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' 
                     : webhookStatus.type === 'error'
-                      ? 'bg-red-500/10 border-red-500/30 text-red-400'
-                      : 'bg-blue-500/10 border-blue-500/30 text-blue-400'
+                      ? 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                      : 'bg-surface-elevated border-border-default text-text-secondary'
                 }`}>
-                  {webhookStatus.type === 'success' ? <Check size={16} /> : <AlertTriangle size={16} />}
-                  <span>{webhookStatus.message}</span>
+                  {webhookStatus.message}
                 </div>
               )}
             </div>
           </div>
-        </div>
-      )}
-
-    </main>
+        )}
+      </div>
+    </div>
   );
 }
