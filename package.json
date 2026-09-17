@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-test-isolation=none tests/security.test.mjs tests/parked-orders-and-architecture.test.mjs tests/supplier-filters.test.mjs",
+    "test": "node --test --experimental-test-isolation=none tests/security.test.mjs tests/parked-orders-and-architecture.test.mjs tests/supplier-filters.test.mjs tests/ui-primitives.test.mjs",
     "test:e2e": "playwright test",
     "test:e2e:update": "playwright test --update-snapshots",
     "test:all": "npm run typecheck && npm test && npm run build && npm run test:e2e",

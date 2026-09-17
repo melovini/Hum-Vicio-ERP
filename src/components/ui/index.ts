@@ -17,3 +17,5 @@ export * from './Textarea';
 export * from './Toolbar';
 export * from './FilterBar';
 export * from './Toast';
+export { default as SlidingSheet } from './SlidingSheet';
+export type { SlidingSheetProps } from './SlidingSheet';

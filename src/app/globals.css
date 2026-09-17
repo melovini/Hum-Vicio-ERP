@@ -35,6 +35,12 @@
   --color-status-danger: #EF4444;
   --color-status-neutral: #64748B;
 
+  /* Estados de dados e sincronização */
+  --color-status-updated: #10B981;
+  --color-status-outdated: #F59E0B;
+  --color-status-offline: #64748B;
+  --color-status-pending: #F97316;
+
   /* Estados operacionais legados */
   --color-status-free: #10B981;
   --color-status-occupied: #F59E0B;
@@ -47,6 +53,9 @@
   --radius-dialog: 1rem;
   --shadow-elevated: 0 16px 48px rgb(0 0 0 / 0.32);
   --ease-interface: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 150ms;
+  --duration-normal: 250ms;
+  --duration-slow: 350ms;
 
   /* Compatibilidade Legada Suave */
   --color-background: #090A0F;

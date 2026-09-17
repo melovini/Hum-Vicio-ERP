@@ -19,16 +19,26 @@ export function createLoader(overrides = {}) {
       if (name === 'server-only') return {};
       if (name.startsWith('.') || name.startsWith('@/')) {
         let target = name.startsWith('@/') ? resolve(root, 'src', name.slice(2)) : resolve(dirname(absolute), name);
-        if (!existsSync(target)) target += '.ts';
-        if (target.endsWith('.ts')) return load(target);
+        if (!existsSync(target)) {
+          if (existsSync(target + '.ts')) target += '.ts';
+          else if (existsSync(target + '.tsx')) target += '.tsx';
+          else if (existsSync(resolve(target, 'index.ts'))) target = resolve(target, 'index.ts');
+          else if (existsSync(resolve(target, 'index.tsx'))) target = resolve(target, 'index.tsx');
+        }
+        if (target.endsWith('.ts') || target.endsWith('.tsx')) return load(target);
         return realRequire(target);
       }
       return realRequire(name);
     };
     const compiled = ts.transpileModule(readFileSync(absolute, 'utf8'), {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true },
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2022,
+        esModuleInterop: true,
+        jsx: ts.JsxEmit.React,
+      },
     });
-    new Function('require', 'module', 'exports', compiled.outputText)(require, module, module.exports);
+    new Function('require', 'module', 'exports', 'React', compiled.outputText)(require, module, module.exports, overrides['react'] || {});
     return module.exports;
   }
   return load;

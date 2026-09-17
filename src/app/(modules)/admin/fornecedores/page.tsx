@@ -2,9 +2,8 @@
 import { useDeferredValue, useState } from 'react';
 import { useInventory, type Supplier } from '@/lib/store';
 import { 
-  ArrowLeft, Truck, Plus, MessageSquare, Trash2, History
+  Truck, Plus, MessageSquare, Trash2, History
 } from 'lucide-react';
-import Link from 'next/link';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Button } from '@/components/ui/Button';
 import { FilterBar } from '@/components/ui/FilterBar';
@@ -90,15 +89,12 @@ export default function FornecedoresPage() {
       <div className="absolute top-0 right-0 w-[50%] h-[50%] bg-blue-500/10 blur-[150px] pointer-events-none" />
       
       <div className="max-w-6xl mx-auto relative z-10">
-        <Link href="/" className="mb-5 inline-flex min-h-10 items-center gap-2 text-sm text-text-secondary hover:text-text-primary">
-          <ArrowLeft size={18} aria-hidden="true" /> Voltar à central
-        </Link>
         <PageHeader title="Fornecedores" eyebrow="Gestão"
           description="Encontre parceiros e consulte o histórico de compras."
           className="mb-6"
           actions={<Button onClick={() => setShowAddModal(true)} leadingIcon={<Plus size={18} aria-hidden="true" />}>Cadastrar fornecedor</Button>} />
 
-        <Dialog open={showAddModal} onClose={() => { if (!isSaving) setShowAddModal(false); }} title="Novo fornecedor"
+        <Dialog open={showAddModal} onClose={() => setShowAddModal(false)} preventClose={isSaving} title="Novo fornecedor"
           description="Cadastre o parceiro para vincular às compras e cotações."
           footer={<><Button variant="ghost" onClick={() => setShowAddModal(false)} disabled={isSaving}>Cancelar</Button><Button type="submit" form="supplier-form" loading={isSaving}>Salvar fornecedor</Button></>}>
           <form id="supplier-form" onSubmit={handleSubmit} className="space-y-4">
