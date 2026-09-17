@@ -142,10 +142,25 @@ export function recalculateCartPrices(
     // 2. Preço de combos no canal de destino
     let comboPrice = 0;
     if (item.combo) {
-      if (item.combo.toLowerCase().includes('batata')) {
-        comboPrice = targetChannel === 'ifood' ? 18.00 : 15.00;
-      } else if (item.combo.toLowerCase().includes('anéis') || item.combo.toLowerCase().includes('aneis')) {
-        comboPrice = targetChannel === 'ifood' ? 22.00 : 18.00;
+      const cleanCombo = item.combo.toLowerCase().replace(/^combo:\s*/i, '').trim();
+      const matchCombo = productsList.find(p => 
+        p.category === 'combo' && (
+          p.name.toLowerCase().trim() === item.combo!.toLowerCase().trim() ||
+          p.name.toLowerCase().includes(cleanCombo) ||
+          cleanCombo.includes(p.name.toLowerCase().replace(/^combo:\s*/i, '').trim())
+        )
+      );
+
+      if (matchCombo) {
+        comboPrice = targetChannel === 'ifood' 
+          ? (matchCombo.priceIfood ?? matchCombo.priceBalcao) 
+          : matchCombo.priceBalcao;
+      } else {
+        if (cleanCombo.includes('anéis') || cleanCombo.includes('aneis')) {
+          comboPrice = targetChannel === 'ifood' ? 18.00 : 16.00;
+        } else if (cleanCombo.includes('batata')) {
+          comboPrice = targetChannel === 'ifood' ? 16.00 : 14.00;
+        }
       }
     }
 

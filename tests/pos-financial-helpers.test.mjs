@@ -150,6 +150,13 @@ test('recalculateCartPrices atualiza preços de produtos, combos e adicionais en
       priceBalcao: 5.00,
       priceIfood: 7.00,
     },
+    {
+      id: 'combo-1',
+      name: 'Combo: Batata + Bebida',
+      category: 'combo',
+      priceBalcao: 14.00,
+      priceIfood: 16.00,
+    },
   ];
 
   const cart = [
@@ -158,9 +165,9 @@ test('recalculateCartPrices atualiza preços de produtos, combos e adicionais en
       productId: 'prod-1',
       productName: 'Smash Clássico',
       quantity: 1,
-      unitPrice: 45.00, // 25 base + 15 combo batata + 5 bacon
-      combo: 'Batata + Refri',
-      comboPrice: 15.00,
+      unitPrice: 44.00, // 25 base + 14 combo batata + 5 bacon
+      combo: 'Batata + Bebida',
+      comboPrice: 14.00,
       additionals: [{ name: '1x Bacon Crispy', price: 5.00 }],
     },
     {
@@ -176,9 +183,9 @@ test('recalculateCartPrices atualiza preços de produtos, combos e adicionais en
 
   // Alternar para iFood
   const ifoodCart = recalculateCartPrices(cart, 'ifood', products);
-  // Item 1: 32 base + 18 combo + 7 bacon = 57.00
-  assert.equal(ifoodCart[0].unitPrice, 57.00);
-  assert.equal(ifoodCart[0].comboPrice, 18.00);
+  // Item 1: 32 base + 16 combo + 7 bacon = 55.00
+  assert.equal(ifoodCart[0].unitPrice, 55.00);
+  assert.equal(ifoodCart[0].comboPrice, 16.00);
   assert.equal(ifoodCart[0].additionals[0].price, 7.00);
 
   // Item 2 (brinde): deve permanecer 0
@@ -186,8 +193,8 @@ test('recalculateCartPrices atualiza preços de produtos, combos e adicionais en
 
   // Alternar de volta para Balcão
   const balcaoCart = recalculateCartPrices(ifoodCart, 'balcao', products);
-  assert.equal(balcaoCart[0].unitPrice, 45.00);
-  assert.equal(balcaoCart[0].comboPrice, 15.00);
+  assert.equal(balcaoCart[0].unitPrice, 44.00);
+  assert.equal(balcaoCart[0].comboPrice, 14.00);
   assert.equal(balcaoCart[0].additionals[0].price, 5.00);
   assert.equal(balcaoCart[1].unitPrice, 0);
 });

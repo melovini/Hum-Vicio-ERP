@@ -43,14 +43,55 @@ export default function PosBurgerCustomizerModal({
   onClose,
   onConfirm,
 }: PosBurgerCustomizerModalProps) {
-  const [selectedCombo, setSelectedCombo] = useState<'none' | 'batata_bebida' | 'aneis_bebida'>('none');
+  const [selectedComboId, setSelectedComboId] = useState<string>('none');
   const [selectedAdditionals, setSelectedAdditionals] = useState<Record<string, number>>({});
   const [notes, setNotes] = useState('');
+
+  // Combos promocionais dinâmicos a partir do catálogo e precificação
+  const availableCombos = useMemo(() => {
+    const dbCombos = products.filter(p => p.isActive !== false && p.category === 'combo');
+    if (dbCombos.length > 0) {
+      return dbCombos.map(c => {
+        const price = saleChannel === 'ifood' ? (c.priceIfood ?? c.priceBalcao) : c.priceBalcao;
+        const isBatata = c.name.toLowerCase().includes('batata');
+        const isAneis = c.name.toLowerCase().includes('anéis') || c.name.toLowerCase().includes('aneis');
+        const icon = isBatata ? '🍟' : isAneis ? '🧅' : '🥤';
+        const cleanName = c.name.replace(/^Combo:\s*/i, '').trim();
+        return {
+          id: c.id,
+          rawName: c.name,
+          displayName: `${icon} ${cleanName}`,
+          price,
+        };
+      });
+    }
+
+    // Fallback com preços oficiais da precificação
+    return [
+      {
+        id: 'fb_combo_batata',
+        rawName: 'Combo: Batata + Bebida',
+        displayName: '🍟 Batata + Bebida',
+        price: saleChannel === 'ifood' ? 16.00 : 14.00,
+      },
+      {
+        id: 'fb_combo_aneis',
+        rawName: 'Combo: Anéis de Cebola + Bebida',
+        displayName: '🧅 Anéis de Cebola + Bebida',
+        price: saleChannel === 'ifood' ? 18.00 : 16.00,
+      },
+    ];
+  }, [products, saleChannel]);
+
+  const selectedComboObj = useMemo(() => {
+    if (selectedComboId === 'none') return null;
+    return availableCombos.find(c => c.id === selectedComboId) || null;
+  }, [selectedComboId, availableCombos]);
 
   // Resetar estado quando abrir novo produto
   useEffect(() => {
     if (product) {
-      setSelectedCombo('none');
+      setSelectedComboId('none');
       setSelectedAdditionals({});
       setNotes('');
     }
@@ -118,28 +159,114 @@ export default function PosBurgerCustomizerModal({
     });
   }, [product, products, items, saleChannel]);
 
-  // Chips dinâmicos de observações gerados a partir da ficha técnica
+  // Chips dinâmicos de observações gerados a partir da ficha técnica (SEM GÁS eliminado)
   const quickNotes = useMemo(() => {
     const meatPoints = ['AO PONTO', 'BEM PASSADO', 'AO PONTO P/ BEM'];
     const removalChips: string[] = [];
+    let hasSalad = false;
 
     if (product?.recipe && product.recipe.length > 0 && items && items.length > 0) {
       product.recipe.forEach(r => {
         const ing = items.find(i => i.id === r.ingredientId);
-        if (ing) {
-          const upper = ing.name.toUpperCase().trim();
-          if (!upper.includes('PÃO') && !upper.includes('EMBALAGEM') && !upper.includes('SACO')) {
-            removalChips.push(`SEM ${upper}`);
+        if (!ing) return;
+
+        const rawName = ing.name.toUpperCase().trim();
+        const cat = (ing.category || '').toUpperCase().trim();
+
+        // 1. Filtrar utilidades, embalagens e operacionais não-alimentares (Elimina Gás, Energia, etc.)
+        const isNonFood = 
+          cat === 'EMBALAGENS' ||
+          cat === 'DIVERSOS' ||
+          cat === 'OPERACIONAL' ||
+          cat === 'UTILIDADES' ||
+          cat === 'LIMPEZA' ||
+          rawName.includes('GÁS') ||
+          rawName.includes('GAS') ||
+          rawName.includes('ENERGIA') ||
+          rawName.includes('LUZ') ||
+          rawName.includes('ÁGUA') ||
+          rawName.includes('AGUA') ||
+          rawName.includes('EMBALAGEM') ||
+          rawName.includes('PAPEL') ||
+          rawName.includes('SACO') ||
+          rawName.includes('SACOLA') ||
+          rawName.includes('CAIXA') ||
+          rawName.includes('COPO') ||
+          rawName.includes('CANUDO') ||
+          rawName.includes('ETIQUETA') ||
+          rawName.includes('LACRE') ||
+          rawName.includes('GUARDANAPO');
+
+        if (isNonFood) return;
+
+        // 2. Filtrar base do lanche (pães e carnes base, cujo preparo já é coberto pelo ponto da carne)
+        if (rawName.includes('PÃO') || rawName.includes('PAO')) return;
+        if (rawName.startsWith('HAMBÚRGUER') || rawName.startsWith('HAMBURGUER') || rawName.startsWith('HAMB.')) {
+          if (!rawName.includes('QUEIJO')) return;
+        }
+
+        // 3. Normalização limpa e padronizada para a cozinha
+        if (rawName.includes('CEBOLA')) {
+          removalChips.push('SEM CEBOLA');
+        } else if (rawName.includes('ALFACE')) {
+          hasSalad = true;
+          removalChips.push('SEM ALFACE');
+        } else if (rawName.includes('TOMATE')) {
+          hasSalad = true;
+          removalChips.push('SEM TOMATE');
+        } else if (rawName.includes('RÚCULA') || rawName.includes('RUCULA')) {
+          hasSalad = true;
+          removalChips.push('SEM RÚCULA');
+        } else if (rawName.includes('BACON')) {
+          removalChips.push('SEM BACON');
+        } else if (rawName.includes('CHEDDAR')) {
+          removalChips.push('SEM CHEDDAR');
+        } else if (rawName.includes('COALHO')) {
+          removalChips.push('SEM QUEIJO COALHO');
+        } else if (rawName.includes('MINAS')) {
+          removalChips.push('SEM QUEIJO MINAS');
+        } else if (rawName.includes('MOZARELA') || rawName.includes('MUSSARELA')) {
+          removalChips.push('SEM MOZARELA');
+        } else if (rawName.includes('SOUR CREAM')) {
+          removalChips.push('SEM SOUR CREAM');
+        } else if (rawName.includes('PIMENTA') || rawName.includes('JALAPEÑO') || rawName.includes('JALAPENO')) {
+          removalChips.push('SEM PIMENTA');
+        } else if (rawName.includes('MAIONESE') || rawName.includes('MOLHO') || rawName.includes('CHIMICHURRI') || rawName.includes('BARBECUE')) {
+          removalChips.push('SEM MOLHO');
+        } else if (rawName.includes('COGUMELO') || rawName.includes('PARIS')) {
+          removalChips.push('SEM COGUMELO');
+        } else if (rawName.includes('COLESLAW')) {
+          removalChips.push('SEM COLESLAW');
+        } else if (rawName.includes('NACHOS')) {
+          removalChips.push('SEM NACHOS');
+        } else if (rawName.includes('CARNE SECA')) {
+          removalChips.push('SEM CARNE SECA');
+        } else if (rawName.includes('MELAÇO') || rawName.includes('MELACO')) {
+          removalChips.push('SEM MELAÇO');
+        } else if (rawName.includes('PICLES')) {
+          removalChips.push('SEM PICLES');
+        } else {
+          const cleanName = rawName
+            .replace(/\s*\([^)]*\)/g, '')
+            .replace(/\b(FATIADO|FATIADA|FRESCO|FRESCA|EM BARRA|PRONTO|PRONTA|COZIDO|COZIDA)\b/g, '')
+            .trim();
+          if (cleanName.length > 2) {
+            removalChips.push(`SEM ${cleanName}`);
           }
         }
       });
+    }
+
+    if (hasSalad) {
+      removalChips.unshift('SEM SALADA');
     }
 
     if (removalChips.length === 0) {
       removalChips.push('SEM CEBOLA', 'SEM SALADA', 'SEM MOLHO');
     }
 
-    return [...meatPoints, ...removalChips, 'MOLHO À PARTE'];
+    const uniqueRemovals = Array.from(new Set(removalChips));
+    return [...meatPoints, ...uniqueRemovals, 'MOLHO À PARTE', 'CORTAR AO MEIO'];
   }, [product, items]);
 
   const basePrice = useMemo(() => {
@@ -148,10 +275,8 @@ export default function PosBurgerCustomizerModal({
   }, [product, saleChannel]);
 
   const comboPrice = useMemo(() => {
-    if (selectedCombo === 'batata_bebida') return saleChannel === 'ifood' ? 18.00 : 15.00;
-    if (selectedCombo === 'aneis_bebida') return saleChannel === 'ifood' ? 22.00 : 18.00;
-    return 0;
-  }, [selectedCombo, saleChannel]);
+    return selectedComboObj?.price || 0;
+  }, [selectedComboObj]);
 
   const additionalsPrice = useMemo(() => {
     return Object.entries(selectedAdditionals).reduce((acc, [name, qty]) => {
@@ -168,11 +293,27 @@ export default function PosBurgerCustomizerModal({
   if (!product) return null;
 
   const handleToggleNote = (chip: string) => {
-    const upper = notes.toUpperCase();
-    if (upper.includes(chip)) {
-      setNotes(upper.replace(chip, '').replace(/\s{2,}/g, ' ').trim());
+    const meatPoints = ['AO PONTO', 'BEM PASSADO', 'AO PONTO P/ BEM'];
+    let currentNotes = notes.toUpperCase();
+
+    // Se for ponto da carne, substitui o ponto anterior
+    if (meatPoints.includes(chip)) {
+      meatPoints.forEach(mp => {
+        const reg = new RegExp(`(^|,\\s*)${mp}(,\\s*|$)`, 'i');
+        currentNotes = currentNotes.replace(reg, (_, p1, p2) => (p1 && p2 ? ', ' : '')).trim();
+      });
+      currentNotes = currentNotes.replace(/^,\s*|,\s*$/g, '');
+      setNotes(currentNotes ? `${currentNotes}, ${chip}` : chip);
+      return;
+    }
+
+    // Toggle para demais observações
+    if (currentNotes.includes(chip)) {
+      const reg = new RegExp(`(^|,\\s*)${chip}(,\\s*|$)`, 'i');
+      const updated = currentNotes.replace(reg, (_, p1, p2) => (p1 && p2 ? ', ' : '')).trim();
+      setNotes(updated.replace(/^,\s*|,\s*$/g, ''));
     } else {
-      setNotes(upper ? `${upper}, ${chip}` : chip);
+      setNotes(currentNotes ? `${currentNotes}, ${chip}` : chip);
     }
   };
 
@@ -189,11 +330,7 @@ export default function PosBurgerCustomizerModal({
       }
     });
 
-    const comboName = selectedCombo === 'batata_bebida'
-      ? 'Combo Batata e Bebida'
-      : selectedCombo === 'aneis_bebida'
-        ? 'Combo Anéis de Cebola e Bebida'
-        : undefined;
+    const comboName = selectedComboObj ? selectedComboObj.rawName : undefined;
 
     const newItem: SaleItem = {
       id: Math.random().toString(36).substring(2, 9),
@@ -227,9 +364,9 @@ export default function PosBurgerCustomizerModal({
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
             <button
               type="button"
-              onClick={() => setSelectedCombo('none')}
+              onClick={() => setSelectedComboId('none')}
               className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
-                selectedCombo === 'none'
+                selectedComboId === 'none'
                   ? 'bg-amber-500/20 border-amber-500 text-white font-bold'
                   : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800'
               }`}
@@ -238,35 +375,23 @@ export default function PosBurgerCustomizerModal({
               <span className="text-[11px] text-slate-500 font-mono">+ R$ 0,00</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setSelectedCombo('batata_bebida')}
-              className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
-                selectedCombo === 'batata_bebida'
-                  ? 'bg-amber-500/20 border-amber-500 text-white font-bold'
-                  : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800'
-              }`}
-            >
-              <span className="block text-xs font-bold">🍟 Batata + Bebida</span>
-              <span className="text-[11px] text-amber-400 font-mono font-bold">
-                + R$ {(saleChannel === 'ifood' ? 18 : 15).toFixed(2)}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setSelectedCombo('aneis_bebida')}
-              className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
-                selectedCombo === 'aneis_bebida'
-                  ? 'bg-amber-500/20 border-amber-500 text-white font-bold'
-                  : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800'
-              }`}
-            >
-              <span className="block text-xs font-bold">🧅 Anéis + Bebida</span>
-              <span className="text-[11px] text-amber-400 font-mono font-bold">
-                + R$ {(saleChannel === 'ifood' ? 22 : 18).toFixed(2)}
-              </span>
-            </button>
+            {availableCombos.map(c => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => setSelectedComboId(c.id)}
+                className={`p-3 rounded-2xl border text-left transition-all cursor-pointer ${
+                  selectedComboId === c.id
+                    ? 'bg-amber-500/20 border-amber-500 text-white font-bold'
+                    : 'bg-slate-950/60 border-slate-800 text-slate-400 hover:bg-slate-800'
+                }`}
+              >
+                <span className="block text-xs font-bold">{c.displayName}</span>
+                <span className="text-[11px] text-amber-400 font-mono font-bold">
+                  + R$ {c.price.toFixed(2)}
+                </span>
+              </button>
+            ))}
           </div>
         </div>
 
