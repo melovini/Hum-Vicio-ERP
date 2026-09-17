@@ -1,9 +1,11 @@
-﻿import { KitchenStation, ProductionStatus } from './types';
+import { KitchenStation, ProductionStatus } from './types';
 
 export const DEFAULT_INGREDIENT_STATIONS: Record<string, KitchenStation> = {
   // Carnes para Chapa
   'hambúrguer bovino 180g': 'chapa',
   'hamburguer bovino 180g': 'chapa',
+  'hambúrguer bovino 150g': 'chapa',
+  'hamburguer bovino 150g': 'chapa',
   'carne bovina (blend)': 'chapa',
   'carne bovina': 'chapa',
   'hambúrguer recheado costela 180g': 'chapa',
@@ -13,6 +15,12 @@ export const DEFAULT_INGREDIENT_STATIONS: Record<string, KitchenStation> = {
   'hamburguer de linguica 150g': 'chapa',
   'hamb. bovino recheado mozarela 180g': 'chapa',
   'hamb bovino recheado mozarela 180g': 'chapa',
+  'ovo frito na manteiga': 'chapa',
+  'ovo frito': 'chapa',
+  'ovo': 'chapa',
+  'bacon em tiras': 'chapa',
+  'bacon fatiado crocante': 'chapa',
+  'bacon': 'chapa',
 
   // Fritadeira - Frango Empanado
   'hamb. frango empanado c/ cream cheese 150g': 'fritadeira_frango',
@@ -74,3 +82,6 @@ export function isValidProductionTransition(
   // em_producao -> concluido, em_espera
   return true;
 }
+
+// Re-exportações do motor determinístico de cálculo de produção
+export * from '../production-calculator';
