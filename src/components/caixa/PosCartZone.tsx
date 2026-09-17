@@ -2,6 +2,8 @@
 import React from 'react';
 import { SaleItem, Sale } from '@/lib/store';
 import { SalaoMesaInstancia } from '@/lib/mesas';
+import { CustomerProfile } from '@/lib/crm-clientes';
+import PosCustomerAutocomplete from './PosCustomerAutocomplete';
 import { 
   ShoppingCart as CartIcon, Plus, Minus, Trash2, 
   Gift, GitCompare, User, MessageSquare, Utensils
@@ -11,6 +13,7 @@ interface PosCartZoneProps {
   cart: SaleItem[];
   customerName: string;
   onCustomerNameChange: (val: string) => void;
+  customerProfiles?: CustomerProfile[];
   saleChannel: 'balcao' | 'ifood';
   onSwitchChannel: (channel: 'balcao' | 'ifood') => void;
   orderType: 'retirada' | 'delivery' | 'mesa';
@@ -33,6 +36,7 @@ export default function PosCartZone({
   cart,
   customerName,
   onCustomerNameChange,
+  customerProfiles,
   saleChannel,
   onSwitchChannel,
   orderType,
@@ -176,17 +180,12 @@ export default function PosCartZone({
             </div>
           )}
 
-          <div className="relative flex-1 flex items-center">
-            <User size={14} className="absolute left-3 text-slate-500 pointer-events-none" />
-            <input
-              type="text"
-              value={customerName}
-              onChange={e => onCustomerNameChange(e.target.value)}
-              placeholder={orderType === 'mesa' ? 'Nome do cliente na mesa (opcional)' : 'Identificação / Nome do Cliente'}
-              className="w-full pl-8 pr-3 py-2 bg-slate-950 border border-slate-700/80 focus:border-amber-500 rounded-xl text-xs text-white placeholder-slate-500 outline-none transition-all shadow-inner"
-              aria-label="Nome do cliente"
-            />
-          </div>
+          <PosCustomerAutocomplete
+            value={customerName}
+            onChange={onCustomerNameChange}
+            customerProfiles={customerProfiles}
+            orderType={orderType}
+          />
         </div>
       </div>
 

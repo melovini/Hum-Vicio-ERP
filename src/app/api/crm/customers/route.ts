@@ -2,10 +2,48 @@ import { createServerDatabase } from '@/lib/supabase-server';
 import { requireSession, requireSameOrigin, readJsonBody, apiError, AccessError } from '@/lib/security/server-session';
 import { validateCustomers } from '@/lib/security/customer-validation.mjs';
 
-export async function GET() {
+export async function GET(request?: Request) {
   try {
     await requireSession(['admin', 'gerente', 'caixa']);
     const db = createServerDatabase();
+
+    let search = '';
+    let limit = 8;
+    if (request && request.url) {
+      try {
+        const url = new URL(request.url);
+        search = (url.searchParams.get('search') || url.searchParams.get('q') || '').trim();
+        const limitParam = parseInt(url.searchParams.get('limit') || '8', 10);
+        if (!isNaN(limitParam) && limitParam > 0) {
+          limit = Math.min(limitParam, 50);
+        }
+      } catch {}
+    }
+
+    if (search) {
+      const cleanSearch = search.replace(/[%_,()]/g, ' ').trim();
+      if (!cleanSearch) {
+        return Response.json({ success: true, customers: [], count: 0, source: 'supabase_search' }, { headers: { 'Cache-Control': 'no-store' } });
+      }
+
+      const { data, error } = await db
+        .from('imported_customers')
+        .select('*')
+        .or(`name.ilike.%${cleanSearch}%,phone.ilike.%${cleanSearch}%,full_address.ilike.%${cleanSearch}%`)
+        .order('total_orders', { ascending: false })
+        .limit(limit);
+
+      if (error) throw error;
+
+      const customers = (data || []).map(c => ({
+        id: c.id, name: c.name, phone: c.phone, address: c.address, number: c.number, neighborhood: c.neighborhood,
+        city: c.city, complement: c.complement, fullAddress: c.full_address, totalOrders: c.total_orders,
+        lastOrderDate: c.last_order_date, source: c.source, importedAt: c.imported_at,
+      }));
+
+      return Response.json({ success: true, customers, count: customers.length, source: 'supabase_search' }, { headers: { 'Cache-Control': 'no-store' } });
+    }
+
     const customers = [];
     for (let offset = 0; ; offset += 1000) {
       const { data, error } = await db.from('imported_customers').select('*').order('id').range(offset, offset + 999);

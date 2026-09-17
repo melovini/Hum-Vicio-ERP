@@ -41,6 +41,9 @@ import {
 import { 
   PosTab, PosCategory, DeliveryRouteBlock, CashConferenceValues 
 } from '@/lib/caixa-types';
+import { 
+  CustomerProfile, extractCustomerProfiles, syncImportedCustomers 
+} from '@/lib/crm-clientes';
 
 // Design System e Primitives
 import { ConfirmDialog, useToast, Badge } from '@/components/ui';
@@ -230,7 +233,15 @@ export default function CaixaPage() {
         });
       }
     }).catch(() => {});
+
+    // Sincronização em background de clientes sem travar ou bloquear a interface
+    syncImportedCustomers().catch(() => {});
   }, []);
+
+  // Perfis consolidados de clientes recorrentes do ERP para autocomplete instantâneo
+  const customerProfiles = useMemo(() => {
+    return extractCustomerProfiles(sales);
+  }, [sales]);
 
   // Salvar rotas em localStorage
   const handleSaveDeliveryRoutes = (routes: DeliveryRouteBlock[]) => {
@@ -1001,6 +1012,7 @@ export default function CaixaPage() {
                   cart={cart}
                   customerName={customerName}
                   onCustomerNameChange={setCustomerName}
+                  customerProfiles={customerProfiles}
                   saleChannel={saleChannel}
                   onSwitchChannel={handleSwitchChannel}
                   orderType={orderType}

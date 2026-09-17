@@ -391,11 +391,46 @@ export function extractCustomerProfiles(sales: Sale[]): CustomerProfile[] {
   return result;
 }
 
+interface NormalizedCustomerIndexEntry {
+  customer: ImportedCustomer;
+  key: string;
+  normName: string;
+  nameWords: string[];
+  phoneDigits: string;
+  normAddress: string;
+}
+
+let cachedNormalizedIndex: NormalizedCustomerIndexEntry[] | null = null;
+let lastIndexedCustomersRef: ImportedCustomer[] | null = null;
+
+export function getNormalizedCustomerIndex(customers: ImportedCustomer[]): NormalizedCustomerIndexEntry[] {
+  if (cachedNormalizedIndex && lastIndexedCustomersRef === customers) {
+    return cachedNormalizedIndex;
+  }
+  const index: NormalizedCustomerIndexEntry[] = new Array(customers.length);
+  for (let i = 0; i < customers.length; i++) {
+    const c = customers[i];
+    const normName = normalizeSearchString(c.name || '');
+    index[i] = {
+      customer: c,
+      key: normName,
+      normName,
+      nameWords: normName.split(/\s+/),
+      phoneDigits: (c.phone || '').replace(/\D/g, ''),
+      normAddress: normalizeSearchString(c.fullAddress || c.address || ''),
+    };
+  }
+  cachedNormalizedIndex = index;
+  lastIndexedCustomersRef = customers;
+  return index;
+}
+
 // Filtra clientes pelo termo digitado (Unifica ERP com base importada do Cardápio Web com relevância e ranking)
 export function searchRecurringCustomers(
   query: string,
   erpProfiles: CustomerProfile[],
-  importedCustomers: ImportedCustomer[] = []
+  importedCustomers: ImportedCustomer[] = [],
+  limit: number = 8
 ): CustomerSearchResult[] {
   const normQuery = normalizeSearchString(query);
   if (!normQuery || normQuery.length < 2) return [];
@@ -413,12 +448,12 @@ export function searchRecurringCustomers(
   const scoredResults: ScoredResult[] = [];
   const seenKeys = new Set<string>();
 
-  const calculateScore = (
-    name: string,
-    phone?: string,
-    address?: string
+  const calculateScoreFromParts = (
+    normName: string,
+    words: string[],
+    phoneDigits?: string,
+    normAddr?: string
   ): number => {
-    const normName = normalizeSearchString(name);
     let score = 0;
 
     // 1. Match exato de nome
@@ -431,7 +466,6 @@ export function searchRecurringCustomers(
     }
     // 3. Qualquer palavra do nome começa com o termo (ex: "fat" -> "vitor fatureto")
     else {
-      const words = normName.split(/\s+/);
       if (words.some(w => w.startsWith(normQuery))) {
         score = Math.max(score, 500);
       } else if (normName.includes(normQuery)) {
@@ -440,20 +474,16 @@ export function searchRecurringCustomers(
     }
 
     // 4. Busca por telefone (CRÍTICO: nunca comparar string vazia!)
-    if (hasValidPhoneQuery && phone) {
-      const phoneDigits = phone.replace(/\D/g, '');
-      if (phoneDigits && queryDigits) {
-        if (phoneDigits.startsWith(queryDigits)) {
-          score = Math.max(score, 450);
-        } else if (phoneDigits.includes(queryDigits)) {
-          score = Math.max(score, 350);
-        }
+    if (hasValidPhoneQuery && phoneDigits && queryDigits) {
+      if (phoneDigits.startsWith(queryDigits)) {
+        score = Math.max(score, 450);
+      } else if (phoneDigits.includes(queryDigits)) {
+        score = Math.max(score, 350);
       }
     }
 
     // 5. Busca por endereço
-    if (address && !isNumericQuery) {
-      const normAddr = normalizeSearchString(address);
+    if (normAddr && !isNumericQuery) {
       if (normAddr.startsWith(normQuery)) {
         score = Math.max(score, 250);
       } else if (normAddr.includes(normQuery)) {
@@ -465,11 +495,17 @@ export function searchRecurringCustomers(
   };
 
   // 1. Clientes recorrentes do ERP (prioridade de catálogo e reordenação)
-  erpProfiles.forEach(p => {
-    const score = calculateScore(p.name, undefined, p.rawFullName);
+  for (let i = 0; i < erpProfiles.length; i++) {
+    const p = erpProfiles[i];
+    const normName = normalizeSearchString(p.name);
+    const score = calculateScoreFromParts(
+      normName,
+      normName.split(/\s+/),
+      undefined,
+      normalizeSearchString(p.rawFullName || '')
+    );
     if (score > 0) {
-      const key = normalizeSearchString(p.name);
-      seenKeys.add(key);
+      seenKeys.add(normName);
       scoredResults.push({
         score: score + Math.min(p.totalOrders * 2, 20) + 15, // Bônus ERP
         result: {
@@ -484,16 +520,23 @@ export function searchRecurringCustomers(
         }
       });
     }
-  });
+  }
 
-  // 2. Clientes importados do Cardápio Web
-  importedCustomers.forEach(imp => {
-    const key = normalizeSearchString(imp.name);
-    if (seenKeys.has(key)) return;
+  // 2. Clientes importados (busca ultraleve usando índice pré-normalizado)
+  const indexed = getNormalizedCustomerIndex(importedCustomers);
+  for (let i = 0; i < indexed.length; i++) {
+    const entry = indexed[i];
+    if (seenKeys.has(entry.key)) continue;
 
-    const score = calculateScore(imp.name, imp.phone, imp.fullAddress);
+    const score = calculateScoreFromParts(
+      entry.normName,
+      entry.nameWords,
+      entry.phoneDigits,
+      entry.normAddress
+    );
     if (score > 0) {
-      seenKeys.add(key);
+      seenKeys.add(entry.key);
+      const imp = entry.customer;
       scoredResults.push({
         score: score + Math.min((imp.totalOrders || 1) * 2, 20),
         result: {
@@ -509,12 +552,60 @@ export function searchRecurringCustomers(
         }
       });
     }
-  });
+  }
 
   // Ordena por maior pontuação de relevância
   scoredResults.sort((a, b) => b.score - a.score);
 
-  return scoredResults.slice(0, 6).map(s => s.result);
+  return scoredResults.slice(0, limit).map(s => s.result);
+}
+
+// Busca rápida e híbrida: memória instantânea (0ms) + consulta leve em nuvem com debounce
+let searchAbortController: AbortController | null = null;
+
+export async function searchCustomersFast(
+  query: string,
+  erpProfiles: CustomerProfile[],
+  options?: { limit?: number; fetchCloud?: boolean }
+): Promise<CustomerSearchResult[]> {
+  const limit = options?.limit || 8;
+  const local = searchRecurringCustomers(query, erpProfiles, getStoredImportedCustomers(), limit);
+
+  if (!options?.fetchCloud || typeof window === 'undefined' || !query || query.trim().length < 2) {
+    return local;
+  }
+
+  try {
+    if (searchAbortController) {
+      searchAbortController.abort();
+    }
+    searchAbortController = new AbortController();
+
+    const res = await fetch(`/api/crm/customers?search=${encodeURIComponent(query.trim())}&limit=${limit}`, {
+      signal: searchAbortController.signal,
+      cache: 'no-store'
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data?.customers) && data.customers.length > 0) {
+        const currentStored = getStoredImportedCustomers();
+        const existingIds = new Set(currentStored.map(c => c.id));
+        const newFromCloud = (data.customers as ImportedCustomer[]).filter(c => !existingIds.has(c.id));
+        if (newFromCloud.length > 0) {
+          const updatedList = [...newFromCloud, ...currentStored];
+          setStoredImportedCustomers(updatedList);
+          return searchRecurringCustomers(query, erpProfiles, updatedList, limit);
+        }
+      }
+    }
+  } catch (err: any) {
+    if (err?.name !== 'AbortError') {
+      // Ignora erro de rede em background
+    }
+  }
+
+  return local;
 }
 
 // Parser Inteligente para Planilhas XLSX / XLS / CSV do Cardápio Web
