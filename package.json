@@ -8,6 +8,9 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-test-isolation=none tests/security.test.mjs tests/parked-orders-and-architecture.test.mjs tests/supplier-filters.test.mjs",
+    "test:e2e": "playwright test",
+    "test:e2e:update": "playwright test --update-snapshots",
+    "test:all": "npm run typecheck && npm test && npm run build && npm run test:e2e",
     "test:security": "node --test --experimental-test-isolation=none tests/security.test.mjs",
     "security:setup": "node --env-file=.env.local scripts/security-setup.mjs",
     "backup": "node --env-file=.env.local scripts/backup.mjs",
@@ -24,6 +27,8 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

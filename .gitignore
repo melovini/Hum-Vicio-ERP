@@ -35,6 +35,8 @@ yarn-error.log*
 
 # vercel
 .vercel
+playwright-report/
+test-results/
 
 # typescript
 *.tsbuildinfo
@@ -47,4 +49,3 @@ next-env.d.ts
 # private operational manuals and sensitive audit docs
 /docs
 *MANUAL*
-

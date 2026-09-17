@@ -28,6 +28,8 @@ O próximo objetivo não deve ser criar mais primitives sem uso real. Deve ser *
 
 ### Bloco 1 — validação visual e testes de interface
 
+**Situação:** infraestrutura implementada no bloco seguinte ao commit `7cb623c`, com Playwright, axe, sessão isolada, viewports desktop/mobile, cenários de Fornecedores e workflow de qualidade. A ampliação para tablet e mais telas continua incremental.
+
 **Motivo:** typecheck, testes de negócio e build não confirmam foco, contraste, corte de conteúdo, comportamento mobile ou aparência.
 
 Implementar:
