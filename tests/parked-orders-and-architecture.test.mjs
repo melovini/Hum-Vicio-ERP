@@ -158,3 +158,36 @@ test('Hydration do Caixa Ativo: inicialização instantânea (0ms) a partir do l
   assert.equal(closedInitial.activeCashSession, null);
 });
 
+test('Fluxo de Conclusão de Venda: último atendimento concluído reseta para Atendimento #1 limpo (evita pular para #2)', () => {
+  localStorage.clear();
+
+  // 1. Inicia um atendimento com itens
+  const order1 = createDefaultDraft('balcao', 1);
+  order1.cart = [{ productId: 'burg_1', productName: 'Smash Salada', quantity: 1, unitPrice: 28.0 }];
+  order1.customerName = 'Primeiro Cliente';
+  saveParkedDraft(order1);
+  setActiveDraftId(order1.id);
+
+  assert.equal(getParkedDrafts().length, 1);
+  assert.equal(getActiveDraftId(), order1.id);
+
+  // 2. Conclui a venda (deleta o rascunho)
+  const nextId = deleteParkedDraft(order1.id);
+  assert.ok(nextId, 'Deve retornar o ID do próximo rascunho limpo');
+
+  // Deve haver exatamente 1 rascunho limpo e ativo
+  const draftsAfterCheckout = getParkedDrafts();
+  assert.equal(draftsAfterCheckout.length, 1);
+  assert.equal(draftsAfterCheckout[0].id, nextId);
+  assert.equal(draftsAfterCheckout[0].cart.length, 0);
+  assert.equal(draftsAfterCheckout[0].customerName, '');
+  assert.match(draftsAfterCheckout[0].label, /Atendimento #1/);
+
+  // 3. Ao solicitar novo pedido via createNewParkedDraft em comanda vazia, deve reaproveitar o #1
+  const freshDraft = createNewParkedDraft('balcao');
+  assert.equal(freshDraft.id, nextId, 'Reaproveita o rascunho vazio #1');
+  assert.match(freshDraft.label, /Atendimento #1/, 'Continua como Atendimento #1');
+  assert.equal(getParkedDrafts().length, 1, 'Não cria draft fantasma #2');
+});
+
+

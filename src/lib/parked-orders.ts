@@ -178,6 +178,22 @@ export function saveParkedDraft(draft: ParkedDraft): void {
  */
 export function createNewParkedDraft(channel: 'balcao' | 'ifood' = 'balcao', customerName = ''): ParkedDraft {
   const drafts = getParkedDrafts();
+
+  // Se já existir apenas um rascunho e ele estiver totalmente vazio, reaproveita-o como Atendimento #1
+  if (drafts.length === 1 && drafts[0].cart.length === 0 && (!drafts[0].customerName || !drafts[0].customerName.trim())) {
+    const existing = drafts[0];
+    const updated: ParkedDraft = {
+      ...existing,
+      saleChannel: channel,
+      customerName: customerName.trim(),
+      label: computeDraftLabel({ ...existing, customerName: customerName.trim(), saleChannel: channel }, 1),
+      updatedAt: Date.now(),
+    };
+    saveParkedDraft(updated);
+    setActiveDraftId(updated.id);
+    return updated;
+  }
+
   const nextIndex = drafts.length + 1;
   const newDraft = createDefaultDraft(channel, nextIndex);
   if (customerName) {
@@ -192,7 +208,7 @@ export function createNewParkedDraft(channel: 'balcao' | 'ifood' = 'balcao', cus
 
 /**
  * Remove um rascunho (após conclusão da venda ou descarte explícito).
- * Retorna o ID do próximo rascunho que deve ser ativado, ou null se não houver mais nenhum.
+ * Retorna o ID do próximo rascunho que deve ser ativado.
  */
 export function deleteParkedDraft(draftId: string): string | null {
   if (typeof window === 'undefined') return null;
@@ -200,18 +216,25 @@ export function deleteParkedDraft(draftId: string): string | null {
   try {
     const drafts = getParkedDrafts();
     const remaining = drafts.filter(d => d.id !== draftId);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(remaining));
 
     const currentActiveId = getActiveDraftId();
     let nextActiveId: string | null = null;
 
+    if (remaining.length === 0) {
+      // Quando o último atendimento for concluído ou removido, inicializa imediatamente
+      // um atendimento limpo #1 para o operador não começar no #2
+      const freshDraft = createDefaultDraft('balcao', 1);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify([freshDraft]));
+      localStorage.setItem(ACTIVE_ID_KEY, freshDraft.id);
+      notifyDraftsChanged();
+      return freshDraft.id;
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(remaining));
+
     if (currentActiveId === draftId) {
-      if (remaining.length > 0) {
-        nextActiveId = remaining[remaining.length - 1].id;
-        localStorage.setItem(ACTIVE_ID_KEY, nextActiveId);
-      } else {
-        localStorage.removeItem(ACTIVE_ID_KEY);
-      }
+      nextActiveId = remaining[remaining.length - 1].id;
+      localStorage.setItem(ACTIVE_ID_KEY, nextActiveId);
     } else {
       nextActiveId = currentActiveId;
     }

@@ -379,9 +379,12 @@ export default function CardapioAdminPage() {
       return;
     }
 
-    const activeTargets = Object.entries(quickLinkTargets)
-      .filter(([_, t]) => t.checked && t.quantity > 0)
-      .map(([productId, t]) => ({ productId, quantity: t.quantity }));
+    const activeTargets = Object.entries(quickLinkTargets).map(([productId, t]) => ({
+      productId,
+      quantity: t.checked && t.quantity > 0 ? t.quantity : 0,
+    }));
+
+    const linkedCount = activeTargets.filter(t => t.quantity > 0).length;
 
     setIsSavingQuickLink(true);
     try {
@@ -389,7 +392,7 @@ export default function CardapioAdminPage() {
       if (res.success) {
         const ing = items.find(i => i.id === quickLinkIngredientId);
         notify({ 
-          title: `Ingrediente "${ing?.name || 'insumo'}" atualizado na ficha técnica de ${activeTargets.length} produto(s).`, 
+          title: `Ingrediente "${ing?.name || 'insumo'}" atualizado na ficha técnica: ${linkedCount} lanche(s) com o item.`, 
           tone: 'success' 
         });
         setQuickLinkProduct(null);

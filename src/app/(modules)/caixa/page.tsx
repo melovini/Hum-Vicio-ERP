@@ -77,7 +77,7 @@ export default function CaixaPage() {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const { 
-    products, isOpen, activeCashSession, allCashSessions,
+    items, products, isOpen, activeCashSession, allCashSessions,
     openCaixa, closeCaixa, deleteCashSession,
     sales, addSale, cancelSale, 
     reopenOrderForEdit, updateReopenedOrder,
@@ -606,9 +606,10 @@ export default function CaixaPage() {
         setTrocoDetails(null);
       }
 
-      // Limpar campos
-      setCart([]);
-      setCustomerName('');
+      // Bloquear temporariamente o timer de auto-salvamento de rascunhos para evitar recriação fantasma
+      isSwitchingDraftRef.current = true;
+
+      // Limpar campos auxiliares
       setDiscountInput('');
       setDeliveryFeeInput('');
       setCashReceivedInput('');
@@ -616,12 +617,34 @@ export default function CaixaPage() {
       setSelectedTable(null);
       setCreditCustomerInput('');
 
-      // Remover atendimento concluído da barra
+      // Remover atendimento concluído da barra e carregar o próximo (ou o novo Atendimento #1 limpo)
       if (activeDraftId) {
         const nextId = deleteParkedDraft(activeDraftId);
-        setParkedDrafts(getParkedDrafts());
-        if (nextId) handleSelectDraft(nextId);
+        const updatedList = getParkedDrafts();
+        setParkedDrafts(updatedList);
+        if (nextId) {
+          const nextDraft = updatedList.find(d => d.id === nextId);
+          if (nextDraft) {
+            setActiveDraftId(nextDraft.id);
+            setActiveDraftIdState(nextDraft.id);
+            setCart(nextDraft.cart || []);
+            setCustomerName(nextDraft.customerName || '');
+            setSaleChannel(nextDraft.saleChannel || 'balcao');
+            setOrderType(nextDraft.orderType || 'retirada');
+            setPickupPaymentTiming(nextDraft.pickupPaymentTiming || 'imediato');
+            setDeliveryFeeInput(nextDraft.deliveryFeeInput || '');
+            setDiscountInput(nextDraft.discountInput || '');
+            setSaleMethod(nextDraft.saleMethod || 'dinheiro');
+          }
+        }
+      } else {
+        setCart([]);
+        setCustomerName('');
       }
+
+      setTimeout(() => {
+        isSwitchingDraftRef.current = false;
+      }, 150);
 
       setLastCompletedSale(createdSale);
       setShowSuccessModal(true);
@@ -1043,6 +1066,8 @@ export default function CaixaPage() {
       {/* Modal de Customização de Hambúrguer */}
       <PosBurgerCustomizerModal
         product={selectedBurgerForConfig}
+        products={products}
+        items={items}
         saleChannel={saleChannel}
         onClose={() => setSelectedBurgerForConfig(null)}
         onConfirm={newItem => {
@@ -1257,7 +1282,9 @@ export default function CaixaPage() {
           }}
           onNewOrder={() => {
             setShowSuccessModal(false);
-            handleCreateNewDraft();
+            if (cart.length > 0 || customerName.trim().length > 0) {
+              handleCreateNewDraft();
+            }
           }}
         />
       )}
