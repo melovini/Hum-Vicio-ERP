@@ -26,6 +26,7 @@ import {
   computeCashClosingVariances 
 } from './store/cash-operations';
 import { inferDefaultSubcategory } from './recipe-helpers';
+import { calculateItemProduction } from './production-calculator';
 
 // === DOMÍNIO MODULARIZADO (Frente 5.1 - Separação de Responsabilidades) ===
 export * from './store/types';
@@ -678,9 +679,19 @@ export async function executeParallelLoadData(
               productName: i.product_name, 
               quantity: Number(i.quantity) || 0, 
               unitPrice: Number(i.unit_price) || 0, 
+              originalPrice: i.original_price ? Number(i.original_price) : undefined,
+              isGift: Boolean(i.is_gift),
+              giftReason: i.gift_reason || undefined,
+              giftNotes: i.gift_notes || undefined,
+              comboId: i.combo_id || undefined,
               combo: i.combo || undefined, 
+              comboPrice: i.combo_price ? Number(i.combo_price) : undefined,
+              meatPoint: i.meat_point || undefined,
+              removals: Array.isArray(i.removals) ? i.removals : undefined,
+              additionals: Array.isArray(i.additionals) ? i.additionals : undefined,
               notes: i.notes ? i.notes.trim().toUpperCase() : undefined, 
-              additionals: Array.isArray(i.additionals) ? i.additionals : undefined 
+              recipeVersion: i.recipe_version ? Number(i.recipe_version) : undefined,
+              productionSnapshot: i.production_snapshot || undefined
             }))
           };
         });
@@ -2556,11 +2567,15 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   };
 
   const addSale = async (rawSale: Omit<Sale, 'id' | 'date' | 'status'>) => {
-    // Normalizar observações para caixa alta em todos os itens para alerta e visualização da cozinha
-    const normalizedItems = (rawSale.items || []).map(i => ({
-      ...i,
-      notes: i.notes?.trim() ? i.notes.trim().toUpperCase() : undefined
-    }));
+    // Normalizar observações e gerar snapshot determinístico de produção (Etapa 4 - Composição Confirmada)
+    const normalizedItems = (rawSale.items || []).map(i => {
+      const snapshot = i.productionSnapshot || calculateItemProduction(i, products, items);
+      return {
+        ...i,
+        productionSnapshot: snapshot,
+        notes: i.notes?.trim() ? i.notes.trim().toUpperCase() : undefined
+      };
+    });
     const sale = { ...rawSale, items: normalizedItems };
 
     // Por padrão operacional da hamburgueria, pedidos entram em espera para montagem de rotas de entrega

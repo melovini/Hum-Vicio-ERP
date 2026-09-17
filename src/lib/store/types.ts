@@ -72,6 +72,37 @@ export interface SaleItemAdditional {
   price: number;
 }
 
+export interface ProductionBreakdown {
+  basePattiesPerBurger: number;
+  additionalPattiesPerBurger: number;
+  totalPattiesPerBurger: number;
+  totalPattiesAllBurgers: number;
+  eggsPerBurger: number;
+  totalEggsAllBurgers: number;
+  chickenPerBurger: number;
+  totalChickenAllBurgers: number;
+  cheeseBreadedPerBurger: number;
+  totalCheeseBreadedAllBurgers: number;
+  resolvedFromRecipe: boolean;
+  notesSummary: string;
+}
+
+export interface ItemProductionDetails {
+  chapaPatties: number;
+  isDouble: boolean;
+  meatPoint?: string;
+  eggsCount: number;
+  baconChapaCount: number;
+  fryerChicken: number;
+  fryerCheese: number;
+  fryerBatatasCombo: number;
+  fryerBatatasAvulsa: number;
+  fryerBatataName?: string;
+  fryerOnionsCombo: number;
+  fryerOnionsAvulsa: number;
+  breakdown: ProductionBreakdown;
+}
+
 export interface SaleItem {
   id?: string;
   productId: string;
@@ -89,6 +120,8 @@ export interface SaleItem {
   removals?: string[];
   additionals?: SaleItemAdditional[];
   notes?: string;
+  recipeVersion?: number;
+  productionSnapshot?: ItemProductionDetails;
 }
 
 export type ProductionStatus = 'em_producao' | 'em_espera' | 'agendado' | 'concluido';

@@ -10,9 +10,23 @@ interface SaleItemInput {
   isGift?: boolean;
   giftReason?: string;
   giftNotes?: string;
+  comboId?: string;
   combo?: string;
-  additionals?: { name: string; price: number; productId?: string; ingredientId?: string }[];
+  comboPrice?: number;
+  meatPoint?: string;
+  removals?: string[];
+  additionals?: {
+    id?: string;
+    name: string;
+    quantity?: number;
+    unitPrice?: number;
+    price: number;
+    productId?: string;
+    ingredientId?: string;
+  }[];
   notes?: string;
+  recipeVersion?: number;
+  productionSnapshot?: any;
 }
 
 interface SaleInput {

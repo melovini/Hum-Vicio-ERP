@@ -1,4 +1,6 @@
-import { KitchenStation, InventoryItem, Product, SaleItem } from './store/types';
+import { KitchenStation, InventoryItem, Product, SaleItem, ProductionBreakdown, ItemProductionDetails } from './store/types';
+
+export type { ProductionBreakdown, ItemProductionDetails };
 
 export type ComponentType =
   | 'carne_bovina'      // Discos de hambúrguer bovino, costela, linguiça, smash
@@ -14,37 +16,6 @@ export type ComponentType =
   | 'hortifruti'        // Alface, tomate, cebola
   | 'nao_alimentar'     // Gás, embalagens, energia
   | 'outro';
-
-export interface ProductionBreakdown {
-  basePattiesPerBurger: number;
-  additionalPattiesPerBurger: number;
-  totalPattiesPerBurger: number;
-  totalPattiesAllBurgers: number;
-  eggsPerBurger: number;
-  totalEggsAllBurgers: number;
-  chickenPerBurger: number;
-  totalChickenAllBurgers: number;
-  cheeseBreadedPerBurger: number;
-  totalCheeseBreadedAllBurgers: number;
-  resolvedFromRecipe: boolean;
-  notesSummary: string;
-}
-
-export interface ItemProductionDetails {
-  chapaPatties: number;
-  isDouble: boolean;
-  meatPoint?: string;
-  eggsCount: number;
-  baconChapaCount: number;
-  fryerChicken: number;
-  fryerCheese: number;
-  fryerBatatasCombo: number;
-  fryerBatatasAvulsa: number;
-  fryerBatataName?: string;
-  fryerOnionsCombo: number;
-  fryerOnionsAvulsa: number;
-  breakdown: ProductionBreakdown;
-}
 
 /**
  * Normaliza strings para comparações insensíveis a acentos, caixa e espaços
@@ -310,11 +281,25 @@ export function extractMeatPoint(text: string): string | undefined {
  *
  * Desacopla estação chapa de tipo carne, não duplica adicionais e nunca adivinha carnes por nome.
  */
+export function createItemProductionSnapshot(
+  item: SaleItem,
+  products: Product[] = [],
+  inventoryItems: InventoryItem[] = []
+): ItemProductionDetails {
+  const itemWithoutSnapshot = { ...item, productionSnapshot: undefined };
+  return calculateItemProduction(itemWithoutSnapshot, products, inventoryItems);
+}
+
 export function calculateItemProduction(
   item: SaleItem,
   products: Product[] = [],
   inventoryItems: InventoryItem[] = []
 ): ItemProductionDetails {
+  // Se o item já possui composição confirmada salva (Etapa 4), respeita o snapshot original imutável
+  if (item.productionSnapshot) {
+    return item.productionSnapshot;
+  }
+
   const rawName = (item.productName || '').trim();
   const notes = (item.notes || '').trim();
   const comboProduct = item.comboId ? products.find(p => p.id === item.comboId) : undefined;
