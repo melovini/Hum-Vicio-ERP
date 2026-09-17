@@ -8,7 +8,8 @@ import {
   Wallet, AlertCircle, CheckCircle2, User, Printer,
   Sparkles, Coffee, Flame, Check, UtensilsCrossed,
   Receipt, Truck, LayoutGrid, HelpCircle, GraduationCap, 
-  RotateCcw, ShieldAlert, Key, Keyboard
+  RotateCcw, ShieldAlert, Key, Keyboard, ArrowLeft,
+  Home, ShieldCheck, UserCheck
 } from 'lucide-react';
 
 import { useInventory, Product, SaleItem, Sale, ProductionStatus, GiftReason } from '@/lib/store';
@@ -28,6 +29,8 @@ import {
 import { sendOwnerSecurityAlert } from '@/lib/notifications';
 import type { Collaborator } from '@/lib/collaborators';
 import { getOperatorDirectoryAction } from '@/app/(modules)/admin/colaboradores/actions';
+import { getCurrentSessionAction } from '@/app/login/actions';
+import type { UserRole } from '@/lib/session';
 
 // Helpers puros e tipos
 import { 
@@ -61,6 +64,7 @@ import PosCancelSaleModal from '@/components/caixa/PosCancelSaleModal';
 import PosSettlementModal from '@/components/caixa/PosSettlementModal';
 import PosDeleteTestModal from '@/components/caixa/PosDeleteTestModal';
 import PosKeyboardShortcutsDialog from '@/components/caixa/PosKeyboardShortcutsDialog';
+import PosNavigationModal from '@/components/caixa/PosNavigationModal';
 
 // Abas especializadas
 import PosMesasTab from '@/components/caixa/tabs/PosMesasTab';
@@ -122,6 +126,12 @@ export default function CaixaPage() {
   const [showHelpModal, setShowHelpModal] = useState(false);
   const [showExercisesModal, setShowExercisesModal] = useState(false);
   const [showShortcutsDialog, setShowShortcutsDialog] = useState(false);
+  const [showNavigationModal, setShowNavigationModal] = useState(false);
+  const [currentUserSession, setCurrentUserSession] = useState<{
+    role: UserRole | null;
+    userName?: string;
+    collaboratorId?: string;
+  }>({ role: null, userName: '' });
   const [selectedBurgerForConfig, setSelectedBurgerForConfig] = useState<Product | null>(null);
   const [giftModalItemIndex, setGiftModalItemIndex] = useState<number | null>(null);
   const [cashShiftMode, setCashShiftMode] = useState<'open' | 'close' | 'quick_check' | null>(null);
@@ -208,6 +218,16 @@ export default function CaixaPage() {
     getOperatorDirectoryAction().then(res => {
       if (Array.isArray(res)) {
         setCollaborators(res);
+      }
+    }).catch(() => {});
+
+    getCurrentSessionAction().then(res => {
+      if (res && res.role) {
+        setCurrentUserSession({
+          role: res.role,
+          userName: res.userName,
+          collaboratorId: res.collaboratorId,
+        });
       }
     }).catch(() => {});
   }, []);
@@ -384,6 +404,30 @@ export default function CaixaPage() {
     notify({ title: 'Novo Atendimento Iniciado', description: 'Comanda pronta para novos itens.', tone: 'info' });
   };
 
+  const handleSaveDraftBeforeLeave = () => {
+    if (activeDraftId && cart.length > 0) {
+      const draftToSave: ParkedDraft = {
+        id: activeDraftId,
+        label: customerName.trim() || 'Atendimento',
+        customerName,
+        saleChannel,
+        orderType,
+        pickupPaymentTiming,
+        cart,
+        deliveryFeeInput,
+        discountInput,
+        saleMethod,
+        hasStoreCoupon,
+        storeCouponInput,
+        cartStep: 'produtos',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      saveParkedDraft(draftToSave);
+      setParkedDrafts(getParkedDrafts());
+    }
+  };
+
   const handleDeleteDraft = (draftId: string) => {
     const nextId = deleteParkedDraft(draftId);
     const remaining = getParkedDrafts();
@@ -450,11 +494,18 @@ export default function CaixaPage() {
         if (cart.length > 0) setIsConfirmClearCartOpen(true);
         return;
       }
+      // Alt + H: Janela de Módulos e Retorno à Raiz
+      if (e.altKey && (e.key === 'h' || e.key === 'H')) {
+        e.preventDefault();
+        setShowNavigationModal(prev => !prev);
+        return;
+      }
       // Escape: fechar modais
       if (e.key === 'Escape') {
         setShowShortcutsDialog(false);
         setShowHelpModal(false);
         setShowExercisesModal(false);
+        setShowNavigationModal(false);
         setSelectedBurgerForConfig(null);
         setGiftModalItemIndex(null);
         setCashShiftMode(null);
@@ -702,7 +753,38 @@ export default function CaixaPage() {
       <div className="max-w-[1720px] w-full mx-auto p-4 sm:p-6 space-y-4">
         {/* Cabeçalho Superior do Caixa */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900/80 p-4 rounded-3xl border border-slate-800 backdrop-blur-md shadow-md">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap sm:flex-nowrap">
+            {/* Acesso à Raiz & Janela de Módulos */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <Link
+                href="/"
+                aria-label="Voltar à Central"
+                onClick={(e) => {
+                  if (currentUserSession.role === 'caixa') {
+                    e.preventDefault();
+                    setShowNavigationModal(true);
+                  } else {
+                    handleSaveDraftBeforeLeave();
+                  }
+                }}
+                className="px-3 py-2 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 hover:border-amber-500/50 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer shadow-xs group"
+                title="Voltar para a Central do Sistema (Raiz) [Alt + H]"
+              >
+                <ArrowLeft size={16} className="text-amber-400 group-hover:-translate-x-0.5 transition-transform" />
+                <span className="hidden sm:inline">Voltar à Central</span>
+              </Link>
+
+              <button
+                type="button"
+                aria-label="Janela de Módulos do Sistema"
+                onClick={() => setShowNavigationModal(true)}
+                className="p-2 bg-slate-950 hover:bg-slate-800 text-slate-300 hover:text-amber-400 border border-slate-700 rounded-2xl transition-all cursor-pointer shadow-xs"
+                title="Janela de Módulos do Sistema [Alt + H]"
+              >
+                <LayoutGrid size={16} />
+              </button>
+            </div>
+
             <div className={`p-2.5 rounded-2xl ${isOpen ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' : 'bg-rose-500/20 text-rose-400 border border-rose-500/30'}`}>
               <MonitorDot size={22} />
             </div>
@@ -725,6 +807,26 @@ export default function CaixaPage() {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
+            {currentUserSession.role && (
+              <button
+                type="button"
+                onClick={() => setShowNavigationModal(true)}
+                className="px-2.5 py-2 bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors cursor-pointer"
+                title={`Perfil ativo: ${currentUserSession.role}. Clique para abrir a Central de Módulos.`}
+              >
+                {currentUserSession.role === 'admin' ? (
+                  <ShieldCheck size={15} className="text-amber-400" />
+                ) : currentUserSession.role === 'gerente' ? (
+                  <UserCheck size={15} className="text-blue-400" />
+                ) : (
+                  <MonitorDot size={15} className="text-slate-400" />
+                )}
+                <span className="hidden lg:inline">
+                  {currentUserSession.role === 'admin' ? 'Admin' : currentUserSession.role === 'gerente' ? 'Gerente' : 'Caixa'}
+                </span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={() => setShowShortcutsDialog(true)}
@@ -1269,6 +1371,17 @@ export default function CaixaPage() {
       <PosKeyboardShortcutsDialog
         isOpen={showShortcutsDialog}
         onClose={() => setShowShortcutsDialog(false)}
+      />
+
+      {/* Janela de Navegação entre Módulos e Retorno à Raiz */}
+      <PosNavigationModal
+        isOpen={showNavigationModal}
+        onClose={() => setShowNavigationModal(false)}
+        userRole={currentUserSession.role}
+        userName={currentUserSession.userName || activeCashSession?.openedBy || 'Operador'}
+        hasActiveCart={cart.length > 0}
+        onSaveDraftBeforeLeave={handleSaveDraftBeforeLeave}
+        isOpenCaixa={isOpen}
       />
 
       {/* Confirmação de Limpeza de Carrinho */}

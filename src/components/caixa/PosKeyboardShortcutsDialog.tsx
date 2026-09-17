@@ -18,6 +18,7 @@ const SHORTCUTS = [
   { key: 'F11', desc: 'Selecionar Cartão de Crédito' },
   { key: 'Alt + N', desc: 'Abrir novo atendimento paralelo no balcão' },
   { key: 'Alt + L', desc: 'Limpar todos os itens da comanda atual' },
+  { key: 'Alt + H', desc: 'Abrir janela de módulos e retorno à raiz do sistema' },
   { key: 'Esc', desc: 'Fechar modais, cancelar busca ou retornar o foco' },
 ];
 

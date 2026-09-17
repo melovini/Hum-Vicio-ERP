@@ -205,4 +205,29 @@ test.describe('Caixa / PDV — ergonomia, 3 zonas e acessibilidade', () => {
     // Resumo financeiro reflete a linha informativa do subsídio da loja
     await expect(page.getByText(/Subsídio Cupom Loja/i)).toBeVisible();
   });
+
+  test('exibe botão de retorno à raiz do sistema e abre janela modal de navegação entre módulos', async ({ page }) => {
+    await mockCaixaApi(page);
+    await page.goto('/caixa');
+
+    await expect(page.getByRole('heading', { name: 'Catálogo de Produtos' })).toBeVisible({ timeout: 10000 });
+
+    // Botão Voltar à Central visível no cabeçalho
+    const returnButton = page.getByRole('link', { name: /Voltar à Central/i });
+    await expect(returnButton).toBeVisible();
+
+    // Botão da Janela de Módulos (LayoutGrid)
+    const modulesButton = page.getByTitle(/Janela de Módulos do Sistema/i);
+    await expect(modulesButton).toBeVisible();
+
+    // Clica para abrir a janela modal de módulos
+    await modulesButton.click();
+
+    // Modal aberto e acessível
+    await expect(page.getByRole('dialog', { name: /Navegação do Sistema & Central de Módulos/i })).toBeVisible();
+
+    // Tecla Escape fecha a janela modal
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: /Navegação do Sistema & Central de Módulos/i })).toBeHidden();
+  });
 });
