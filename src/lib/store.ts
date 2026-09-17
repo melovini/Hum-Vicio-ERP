@@ -3145,25 +3145,81 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       const resData = await res.json();
       const confirmedCancelledBy = resData.cancelledBy || authorizedBy || 'Supervisor / Admin';
 
-      // Estornar estoque localmente na interface
+      // Tratamento distinto de cancelamento antes do preparo vs perda após preparo (Seção 8 e 10)
       const saleToCancel = existingSale;
+      const isAlreadyPrepared = saleToCancel && (
+        saleToCancel.productionStatus === 'concluido' ||
+        saleToCancel.productionStatus === 'em_producao'
+      );
+
       if (saleToCancel && saleToCancel.items) {
-        const restoredItems = [...items];
-        saleToCancel.items.forEach(si => {
-          const prod = products.find(p => p.id === si.productId);
-          if (prod) {
-            prod.recipe.forEach(r => {
-              const invIdx = restoredItems.findIndex(inv => inv.id === r.ingredientId);
-              if (invIdx > -1) {
-                restoredItems[invIdx] = { 
-                  ...restoredItems[invIdx], 
-                  currentStock: restoredItems[invIdx].currentStock + (r.quantity * si.quantity) 
-                };
+        if (!isAlreadyPrepared) {
+          // Cancelamento antes do preparo: devolve os insumos ao estoque utilizável
+          const restoredItems = [...items];
+          saleToCancel.items.forEach(si => {
+            const prod = products.find(p => p.id === si.productId);
+            if (prod) {
+              prod.recipe.forEach(r => {
+                const invIdx = restoredItems.findIndex(inv => inv.id === r.ingredientId);
+                if (invIdx > -1) {
+                  restoredItems[invIdx] = { 
+                    ...restoredItems[invIdx], 
+                    currentStock: restoredItems[invIdx].currentStock + (r.quantity * si.quantity) 
+                  };
+                }
+              });
+            }
+          });
+          setItems(restoredItems);
+        } else {
+          // Cancelamento após preparo: comida produzida NÃO volta ao estoque utilizável; registra perda formal
+          const reasonText = `Cancelamento pós-preparo #${id.slice(0, 6).toUpperCase()}: ${cancellationReason}`;
+          const newWasteRecords: WasteRecord[] = [];
+          for (const si of saleToCancel.items) {
+            const prod = products.find(p => p.id === si.productId);
+            if (prod) {
+              for (const r of prod.recipe) {
+                const ing = items.find(i => i.id === r.ingredientId);
+                if (ing) {
+                  const qtyLost = r.quantity * si.quantity;
+                  const totalLoss = ing.costPerUnit * qtyLost;
+                  newWasteRecords.push({
+                    id: Math.random().toString(36).substring(2, 9),
+                    ingredientId: ing.id,
+                    ingredientName: ing.name,
+                    quantity: qtyLost,
+                    unit: ing.unit,
+                    costAtTime: ing.costPerUnit,
+                    totalLoss,
+                    reason: reasonText,
+                    responsibleName: confirmedCancelledBy,
+                    createdAt: now
+                  });
+                }
               }
-            });
+            }
           }
-        });
-        setItems(restoredItems);
+          if (newWasteRecords.length > 0) {
+            setWasteRecords(prev => [...newWasteRecords, ...prev]);
+            try {
+              await supabase.from('waste_records').insert(
+                newWasteRecords.map(w => ({
+                  ingredient_id: w.ingredientId,
+                  ingredient_name: w.ingredientName,
+                  quantity: w.quantity,
+                  unit: w.unit,
+                  cost_at_time: w.costAtTime,
+                  total_loss: w.totalLoss,
+                  reason: w.reason,
+                  responsible_name: w.responsibleName,
+                  created_at: w.createdAt
+                }))
+              );
+            } catch (err) {
+              console.error('Erro ao persistir perda de cancelamento:', err);
+            }
+          }
+        }
       }
 
       setSales(prev => {
