@@ -402,6 +402,7 @@ export default function CozinhaKDSPage() {
   const [kitchenAlert, setKitchenAlert] = useState<{ type: 'new_order' | 'cancelled'; message: string } | null>(null);
   const prevProductionIdsRef = useRef<Set<string>>(new Set());
   const prevModifiedOrdersRef = useRef<Set<string>>(new Set());
+  const completedOrderIdsRef = useRef<Set<string>>(new Set());
   const isInitialMount = useRef(true);
 
   // Modal de Justificativa de Atraso
@@ -482,6 +483,13 @@ export default function CozinhaKDSPage() {
         .map(s => s.id)
     );
 
+    // Registrar pedidos que já foram concluídos para blindar contra alertas falsos de remessa
+    sales.forEach(s => {
+      if (s.productionStatus === 'concluido') {
+        completedOrderIdsRef.current.add(s.id);
+      }
+    });
+
     if (isInitialMount.current) {
       isInitialMount.current = false;
       prevProductionIdsRef.current = currentProductionIds;
@@ -492,7 +500,7 @@ export default function CozinhaKDSPage() {
     // 1. Verificar se novos pedidos entraram na chapa (nova remessa ou remessa em lote)
     const newlyAddedOrders: Sale[] = [];
     currentProductionIds.forEach(id => {
-      if (!prevProductionIdsRef.current.has(id)) {
+      if (!prevProductionIdsRef.current.has(id) && !completedOrderIdsRef.current.has(id)) {
         const found = sales.find(s => s.id === id);
         if (found) newlyAddedOrders.push(found);
       }
@@ -716,6 +724,7 @@ export default function CozinhaKDSPage() {
 
   // 4. Concluir pedido com verificação de atraso
   const handleConcludeClick = (sale: Sale, isDelayed: boolean) => {
+    completedOrderIdsRef.current.add(sale.id);
     if (isDelayed) {
       setSelectedDelayedSale(sale);
       setSelectedReason('erro_producao');
@@ -727,6 +736,7 @@ export default function CozinhaKDSPage() {
 
   const handleConfirmDelayAndComplete = async () => {
     if (!selectedDelayedSale) return;
+    completedOrderIdsRef.current.add(selectedDelayedSale.id);
     setIsSubmittingDelay(true);
     await completeOrderProduction(selectedDelayedSale.id, selectedReason, delayNotes.trim() ? delayNotes.trim().toUpperCase() : undefined);
     setIsSubmittingDelay(false);

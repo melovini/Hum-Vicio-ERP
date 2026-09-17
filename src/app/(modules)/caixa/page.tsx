@@ -9,10 +9,11 @@ import {
   Sparkles, Coffee, Flame, Check, UtensilsCrossed,
   Receipt, Truck, LayoutGrid, HelpCircle, GraduationCap, 
   RotateCcw, ShieldAlert, Key, Keyboard, ArrowLeft,
-  Home, ShieldCheck, UserCheck
+  Home, ShieldCheck, UserCheck, BellRing
 } from 'lucide-react';
 
 import { useInventory, Product, SaleItem, Sale, ProductionStatus, GiftReason } from '@/lib/store';
+import { playOrderReadyChime } from '@/lib/audio';
 import { 
   ParkedDraft, getParkedDrafts, saveParkedDraft, createNewParkedDraft, 
   deleteParkedDraft, getActiveDraftId, setActiveDraftId, createDefaultDraft 
@@ -287,6 +288,74 @@ export default function CaixaPage() {
       return true;
     });
   }, [sales, sessionStartTime]);
+
+  // Pedidos concluídos pela cozinha no turno ativo prontos para retirada ou despacho
+  const readyOrders = useMemo(() => {
+    return sales.filter(s => {
+      if (s.status === 'cancelled') return false;
+      if (s.productionStatus !== 'concluido') return false;
+      if (sessionStartTime > 0 && new Date(s.date).getTime() < sessionStartTime) return false;
+      return true;
+    });
+  }, [sales, sessionStartTime]);
+
+  // Monitorar em tempo real quando a cozinha concluir pedidos para notificar o operador do PDV
+  const isInitialReadyMount = useRef(true);
+  const prevCompletedOrderIdsRef = useRef<Set<string>>(new Set());
+  const [latestReadyOrderAlert, setLatestReadyOrderAlert] = useState<Sale | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || sessionStartTime === 0) {
+      prevCompletedOrderIdsRef.current = new Set();
+      return;
+    }
+
+    const currentCompletedIds = new Set(
+      sales
+        .filter(s => s.status !== 'cancelled' && s.productionStatus === 'concluido' && (sessionStartTime === 0 || new Date(s.date).getTime() >= sessionStartTime))
+        .map(s => s.id)
+    );
+
+    if (isInitialReadyMount.current) {
+      isInitialReadyMount.current = false;
+      prevCompletedOrderIdsRef.current = currentCompletedIds;
+      return;
+    }
+
+    // Identificar novos pedidos que acabaram de transitar para 'concluido'
+    const newlyReadyOrders: Sale[] = [];
+    currentCompletedIds.forEach(id => {
+      if (!prevCompletedOrderIdsRef.current.has(id)) {
+        const found = sales.find(s => s.id === id);
+        if (found) newlyReadyOrders.push(found);
+      }
+    });
+
+    if (newlyReadyOrders.length > 0) {
+      // 1. Tocar campainha sonora de expedição no PDV
+      playOrderReadyChime();
+
+      // 2. Disparar notificações tipo Toast para cada comanda pronta
+      newlyReadyOrders.forEach(order => {
+        const orderTypeLabel = 
+          order.orderType === 'retirada' ? '🥡 BALCÃO / RETIRADA' :
+          order.orderType === 'delivery' ? '🛵 EXPEDIÇÃO / DELIVERY' :
+          '🍽️ SALÃO / MESA';
+
+        notify({
+          title: `🛎️ PEDIDO PRONTO! #${order.id.slice(0, 6).toUpperCase()} (${order.customerName || 'Cliente'})`,
+          description: `${orderTypeLabel} • Concluído pela cozinha, pronto para entrega/retirada!`,
+          tone: 'success',
+          duration: 12000
+        });
+      });
+
+      // 3. Exibir banner de expedição com o pedido mais recente
+      setLatestReadyOrderAlert(newlyReadyOrders[newlyReadyOrders.length - 1]);
+    }
+
+    prevCompletedOrderIdsRef.current = currentCompletedIds;
+  }, [sales, isOpen, sessionStartTime]);
 
   // Cálculos financeiros puros do pedido
   const cartSubtotal = useMemo(() => calculateCartSubtotal(cart), [cart]);
@@ -922,6 +991,11 @@ export default function CaixaPage() {
             }`}
           >
             <Flame size={16} /> 3. Produção & Chapa ({waitingOrders.length})
+            {readyOrders.length > 0 && (
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-emerald-500 text-slate-950 animate-pulse flex items-center gap-1 shadow-sm">
+                🛎️ {readyOrders.length} pronto{readyOrders.length > 1 ? 's' : ''}
+              </span>
+            )}
           </button>
 
           <button
@@ -972,6 +1046,49 @@ export default function CaixaPage() {
             <Receipt size={16} /> 7. Contas a Receber (Fiado)
           </button>
         </div>
+
+        {/* BANNER EM DESTAQUE DE PEDIDO PRONTO PARA EXPEDIÇÃO / RETIRADA */}
+        {latestReadyOrderAlert && (
+          <div className="p-4 rounded-2xl bg-emerald-950/90 border-2 border-emerald-500 text-emerald-100 flex items-center justify-between gap-4 shadow-xl shadow-emerald-500/20 animate-pulse">
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="p-2.5 bg-emerald-500 text-slate-950 rounded-xl font-black shrink-0 shadow-md text-base">
+                🛎️
+              </div>
+              <div className="min-w-0">
+                <p className="font-black text-sm uppercase tracking-wide flex items-center gap-2">
+                  <span>PEDIDO PRONTO PARA EXPEDIÇÃO!</span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-black bg-emerald-500 text-slate-950 uppercase">
+                    {latestReadyOrderAlert.orderType === 'retirada' ? '🥡 RETIRADA BALCÃO' : latestReadyOrderAlert.orderType === 'delivery' ? '🛵 DELIVERY' : '🍽️ MESA'}
+                  </span>
+                </p>
+                <p className="text-xs text-emerald-200 mt-0.5 font-mono truncate">
+                  Comanda #{latestReadyOrderAlert.id.slice(0, 6).toUpperCase()} • <strong>{latestReadyOrderAlert.customerName || 'Cliente'}</strong> • Concluído pela cozinha
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('producao');
+                  setProductionFilter('concluido');
+                  setLatestReadyOrderAlert(null);
+                }}
+                className="px-3 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-black uppercase cursor-pointer transition-all shadow-md active:scale-95"
+              >
+                Ver na Expedição
+              </button>
+              <button
+                type="button"
+                onClick={() => setLatestReadyOrderAlert(null)}
+                className="p-2 text-emerald-300 hover:text-white rounded-xl hover:bg-emerald-900/50 cursor-pointer transition-colors"
+                title="Fechar alerta"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* CONTEÚDO PRINCIPAL DAS ABAS */}
 

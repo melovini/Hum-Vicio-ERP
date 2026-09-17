@@ -647,13 +647,19 @@ export async function executeParallelLoadData(
           const override = overrides[s.id];
           const creditInfo = creditMap[s.id] || {};
           const pickupInfo = pickupMap[s.id] || {};
-          const prodStatus = (s.production_status || override?.status || 'em_producao') as ProductionStatus;
-          const prodStarted = s.production_started_at || override?.startedAt || s.created_at;
-
-          if (override && s.production_status) {
-            delete overrides[s.id];
-            overridesCleaned = true;
+          let prodStatus: ProductionStatus;
+          if (override) {
+            if (s.production_status === override.status || (override.status !== 'concluido' && s.production_status === 'concluido')) {
+              prodStatus = (s.production_status || override.status) as ProductionStatus;
+              delete overrides[s.id];
+              overridesCleaned = true;
+            } else {
+              prodStatus = override.status;
+            }
+          } else {
+            prodStatus = (s.production_status || 'em_producao') as ProductionStatus;
           }
+          const prodStarted = override?.startedAt || s.production_started_at || s.created_at;
 
           let parsedDiff: any = undefined;
           let parsedIsModified = false;
@@ -940,13 +946,19 @@ async function executePollCycle(supabaseClient: any) {
       const remoteMapped: Sale[] = (latestSales as any[]).map(s => {
         const existing = prev.find(p => p.id === s.id);
         const override = overrides[s.id];
-        const prodStatus = (s.production_status || override?.status || existing?.productionStatus || 'em_producao') as ProductionStatus;
-        const prodStarted = s.production_started_at || override?.startedAt || existing?.productionStartedAt || s.created_at;
-
-        if (override && s.production_status) {
-          delete overrides[s.id];
-          overridesCleaned = true;
+        let prodStatus: ProductionStatus;
+        if (override) {
+          if (s.production_status === override.status || (override.status !== 'concluido' && s.production_status === 'concluido')) {
+            prodStatus = (s.production_status || override.status) as ProductionStatus;
+            delete overrides[s.id];
+            overridesCleaned = true;
+          } else {
+            prodStatus = override.status;
+          }
+        } else {
+          prodStatus = (s.production_status || existing?.productionStatus || 'em_producao') as ProductionStatus;
         }
+        const prodStarted = override?.startedAt || s.production_started_at || existing?.productionStartedAt || s.created_at;
 
         let parsedDiff = existing?.orderDiff;
         let parsedIsModified = existing?.isModifiedInKitchen || false;
@@ -2997,15 +3009,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     // 1. Salvar override no storage local para nunca ser sobrescrito pelo polling
     saveProductionOverrides([{ id: saleId, status: newStatus, startedAt: startedAt || new Date().toISOString() }]);
 
-    // 2. Atualizar no Supabase
-    try {
-      const updateData: any = { production_status: newStatus };
-      if (startedAt) updateData.production_started_at = startedAt;
-      await supabase.from('sales').update(updateData).eq('id', saleId);
-    } catch (err) {
-      console.warn('Erro ao atualizar status de produção no Supabase:', err);
-    }
-
+    // 2. Atualização otimista e reativa no store
     setSales(prev => {
       const updated = prev.map(s => {
         if (s.id === saleId) {
@@ -3022,6 +3026,31 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       }
       return updated;
     });
+
+    // 3. Suporte a modo treinamento ou persistência remota
+    if (isTrainingModeActive()) {
+      const currentTraining = getTrainingSales();
+      const updatedTraining = currentTraining.map(ts => {
+        if (ts.id === saleId) {
+          return {
+            ...ts,
+            productionStatus: newStatus,
+            productionStartedAt: startedAt || ts.productionStartedAt || ts.date
+          };
+        }
+        return ts;
+      });
+      saveTrainingSales(updatedTraining);
+      return;
+    }
+
+    try {
+      const updateData: any = { production_status: newStatus };
+      if (startedAt) updateData.production_started_at = startedAt;
+      await supabase.from('sales').update(updateData).eq('id', saleId);
+    } catch (err) {
+      console.warn('Erro ao atualizar status de produção no Supabase:', err);
+    }
   };
 
   // Ação do Balcão: Enviar múltiplos pedidos em lote para a Chapa de uma vez
@@ -3045,15 +3074,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       startedAt: startedAt || new Date().toISOString() 
     })));
 
-    // 2. Atualizar no Supabase em lote
-    try {
-      const updateData: any = { production_status: newStatus };
-      if (startedAt) updateData.production_started_at = startedAt;
-      await supabase.from('sales').update(updateData).in('id', validSaleIds);
-    } catch (err) {
-      console.warn('Erro ao atualizar lote de pedidos no Supabase:', err);
-    }
-
+    // 2. Atualização otimista e reativa no store
     setSales(prev => {
       const updated = prev.map(s => {
         if (validSaleIds.includes(s.id)) {
@@ -3070,6 +3091,31 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       }
       return updated;
     });
+
+    // 3. Suporte a modo treinamento ou persistência remota em lote
+    if (isTrainingModeActive()) {
+      const currentTraining = getTrainingSales();
+      const updatedTraining = currentTraining.map(ts => {
+        if (validSaleIds.includes(ts.id)) {
+          return {
+            ...ts,
+            productionStatus: newStatus,
+            productionStartedAt: startedAt || ts.productionStartedAt || ts.date
+          };
+        }
+        return ts;
+      });
+      saveTrainingSales(updatedTraining);
+      return;
+    }
+
+    try {
+      const updateData: any = { production_status: newStatus };
+      if (startedAt) updateData.production_started_at = startedAt;
+      await supabase.from('sales').update(updateData).in('id', validSaleIds);
+    } catch (err) {
+      console.warn('Erro ao atualizar lote de pedidos no Supabase:', err);
+    }
   };
 
   // Ação da Cozinha: concluir pedido (com justificativa de atraso se aplicável)
@@ -3088,27 +3134,10 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       timeMinutes = Math.max(1, Math.round((endMs - startMs) / 60000));
     }
 
-    try {
-      const updateData: any = {
-        production_status: 'concluido',
-        production_completed_at: completedAt
-      };
-      if (delayReason) {
-        updateData.delay_reason = delayReason;
-        updateData.delay_notes = delayNotes;
-      }
-      const { error } = await supabase.from('sales').update(updateData).eq('id', saleId);
-      if (error) {
-        console.warn('Erro ao atualizar status concluido no Supabase, tentando update simples:', error);
-        await supabase.from('sales').update({ production_status: 'concluido' }).eq('id', saleId);
-      }
-    } catch (err) {
-      console.warn('Erro ao concluir produção no Supabase:', err);
-    }
-
-    // Salvar override no storage local para nunca ressuscitar na chapa
+    // 1. Salvar override no storage local imediatamente para nunca ressuscitar na chapa
     saveProductionOverrides([{ id: saleId, status: 'concluido', startedAt: existing?.productionStartedAt }]);
 
+    // 2. Atualização otimista e reativa imediata no store
     setSales(prev => {
       const updated = prev.map(s => {
         if (s.id === saleId) {
@@ -3128,6 +3157,44 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       }
       return updated;
     });
+
+    // 3. Persistência em sandbox de treinamento ou no banco relacional remoto
+    if (isTrainingModeActive()) {
+      const currentTraining = getTrainingSales();
+      const updatedTraining = currentTraining.map(ts => {
+        if (ts.id === saleId) {
+          return {
+            ...ts,
+            productionStatus: 'concluido' as ProductionStatus,
+            productionCompletedAt: completedAt,
+            productionTimeMinutes: timeMinutes,
+            delayReason: delayReason || ts.delayReason,
+            delayNotes: delayNotes || ts.delayNotes
+          };
+        }
+        return ts;
+      });
+      saveTrainingSales(updatedTraining);
+      return;
+    }
+
+    try {
+      const updateData: any = {
+        production_status: 'concluido',
+        production_completed_at: completedAt
+      };
+      if (delayReason) {
+        updateData.delay_reason = delayReason;
+        updateData.delay_notes = delayNotes;
+      }
+      const { error } = await supabase.from('sales').update(updateData).eq('id', saleId);
+      if (error) {
+        console.warn('Erro ao atualizar status concluido no Supabase, tentando update simples:', error);
+        await supabase.from('sales').update({ production_status: 'concluido' }).eq('id', saleId);
+      }
+    } catch (err) {
+      console.warn('Erro ao concluir produção no Supabase:', err);
+    }
   };
 
   const cancelSale = async (
