@@ -56,6 +56,8 @@ test('Múltiplos atendimentos (Parked Orders): preserva atendimento online e ate
   saveParkedDraft(onlineDraft);
   setActiveDraftId(onlineDraft.id);
 
+  assert.equal(onlineDraft.saleMethod, 'ifood_online');
+  assert.equal(onlineDraft.storeCouponInput, '10.00');
   assert.equal(getParkedDrafts().length, 1);
   assert.equal(getActiveDraftId(), onlineDraft.id);
 

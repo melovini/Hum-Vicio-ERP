@@ -5,7 +5,8 @@ import { calculateCashChange } from '@/lib/pos-financial-helpers';
 import type { Collaborator } from '@/lib/collaborators';
 import { 
   DollarSign, CreditCard, Banknote, Coins, FileCheck2, 
-  Send, RotateCcw, GitCompare, Clock, X, UserCheck
+  Send, RotateCcw, GitCompare, Clock, X, UserCheck,
+  Smartphone, Tag
 } from 'lucide-react';
 
 interface PosCheckoutZoneProps {
@@ -44,11 +45,30 @@ interface PosCheckoutZoneProps {
   saleChannel: 'balcao' | 'ifood';
 }
 
-const PAYMENT_METHODS = [
+interface PaymentMethodOption {
+  id: string;
+  label: string;
+  icon: React.ComponentType<{ size?: number; className?: string }>;
+  fee: string;
+  shortcut?: string;
+}
+
+const IFOOD_PAYMENT_METHODS: PaymentMethodOption[] = [
+  { id: 'ifood_online', label: 'iFood Online', icon: Smartphone, fee: 'Taxa 33%' },
+  { id: 'ifood_entrega', label: 'iFood Entrega', icon: CreditCard, fee: 'Taxa 23%' },
+  { id: 'pix', label: 'PIX Direto', icon: DollarSign, fee: 'Taxa 0%' },
+  { id: 'dinheiro', label: 'Dinheiro', icon: Banknote, fee: 'Taxa 0%' },
+  { id: 'cartao_credito', label: 'Crédito', icon: CreditCard, fee: 'Taxa 3.19%' },
+  { id: 'cartao_debito', label: 'Débito', icon: CreditCard, fee: 'Taxa 1.39%' },
+];
+
+const BALCAO_PAYMENT_METHODS: PaymentMethodOption[] = [
   { id: 'dinheiro', label: 'Dinheiro', icon: Banknote, shortcut: 'F8', fee: 'Taxa: 0%' },
   { id: 'pix', label: 'PIX', icon: DollarSign, shortcut: 'F9', fee: 'Taxa: 0%' },
   { id: 'cartao_debito', label: 'Débito', icon: CreditCard, shortcut: 'F10', fee: 'Taxa: 1.39%' },
   { id: 'cartao_credito', label: 'Crédito', icon: CreditCard, shortcut: 'F11', fee: 'Taxa: 3.19%' },
+  { id: 'ifood_online', label: 'iFood Online', icon: Smartphone, fee: 'Taxa 33%' },
+  { id: 'ifood_entrega', label: 'iFood Entrega', icon: CreditCard, fee: 'Taxa 23%' },
   { id: 'fiado_vip', label: 'Fiado VIP', icon: UserCheck, fee: 'A Prazo' },
   { id: 'consumo_funcionario', label: 'Equipe', icon: UserCheck, fee: 'Interno' },
 ];
@@ -88,9 +108,11 @@ export default function PosCheckoutZone({
   onCheckout,
   saleChannel,
 }: PosCheckoutZoneProps) {
-  const isPickupPending = orderType === 'retirada' && pickupPaymentTiming === 'retirada';
+  const isPickupPending = orderType === 'retirada' && pickupPaymentTiming === 'retirada' && saleChannel !== 'ifood';
   const cashChange = calculateCashChange(cashReceivedInput, cartTotal);
   const isCashInsufficient = saleMethod === 'dinheiro' && !isPickupPending && !cashChange.isEnough;
+
+  const paymentMethods = saleChannel === 'ifood' ? IFOOD_PAYMENT_METHODS : BALCAO_PAYMENT_METHODS;
 
   const isCheckoutDisabled = 
     cart.length === 0 || 
@@ -106,10 +128,71 @@ export default function PosCheckoutZone({
           <span className="flex items-center gap-1.5">
             <CreditCard size={18} className="text-blue-400" /> Resumo e Pagamento
           </span>
-          <span className="text-[10px] text-slate-400 font-mono">
-            {saleChannel === 'ifood' ? 'Canal: iFood' : 'Canal: Balcão'}
+          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full font-mono ${
+            saleChannel === 'ifood' 
+              ? 'bg-red-500/20 text-red-300 border border-red-500/30' 
+              : 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
+          }`}>
+            {saleChannel === 'ifood' ? '🛵 Canal iFood' : '🏪 Canal Balcão'}
           </span>
         </h2>
+
+        {/* Marcação de Cupom iFood da Loja (Subsídio de Faturamento / Hits) */}
+        {saleChannel === 'ifood' && (
+          <div className="bg-red-950/25 p-3 rounded-2xl border border-red-500/40 space-y-2">
+            <div className="flex items-center justify-between">
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-red-200">
+                <input
+                  type="checkbox"
+                  checked={hasStoreCoupon}
+                  onChange={e => onHasStoreCouponChange(e.target.checked)}
+                  className="rounded border-red-500 accent-red-600 cursor-pointer w-4 h-4"
+                />
+                <span className="flex items-center gap-1.5">
+                  <Tag size={13} className="text-red-400" /> Cupom pago pela Loja? (Ex: Hits / Clube)
+                </span>
+              </label>
+              {hasStoreCoupon && (
+                <div className="flex items-center gap-1">
+                  <span className="text-red-400 font-mono text-xs font-bold">-R$</span>
+                  <input
+                    type="number"
+                    step="1"
+                    value={storeCouponInput}
+                    onChange={e => onStoreCouponInputChange(e.target.value)}
+                    placeholder="10.00"
+                    className="w-16 bg-slate-950 border border-red-500/50 rounded-lg px-2 py-1 text-right text-xs font-mono font-black text-red-400 outline-none focus:border-red-400"
+                    aria-label="Valor do cupom da loja"
+                  />
+                </div>
+              )}
+            </div>
+            {hasStoreCoupon && (
+              <div className="flex items-center justify-between pt-1 border-t border-red-500/20 text-[11px]">
+                <span className="text-red-300 text-[10px] font-medium">Valores rápidos:</span>
+                <div className="flex gap-1">
+                  {[5, 10, 12, 15].map(v => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => onStoreCouponInputChange(v.toFixed(2))}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold cursor-pointer transition-all ${
+                        parseFloat(storeCouponInput) === v 
+                          ? 'bg-red-600 text-white shadow-xs' 
+                          : 'bg-slate-950 text-red-300 hover:bg-slate-800 border border-red-900/50'
+                      }`}
+                    >
+                      R$ {v}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <p className="text-[10px] text-red-300/80 italic">
+              * O subsídio é registrado para auditoria e dedução no cálculo do faturamento líquido.
+            </p>
+          </div>
+        )}
 
         {/* Retirada: Pagar Agora ou no Balcão */}
         {orderType === 'retirada' && saleChannel !== 'ifood' && (
@@ -146,7 +229,7 @@ export default function PosCheckoutZone({
               Forma de Pagamento:
             </span>
             <div className="grid grid-cols-2 gap-1.5">
-              {PAYMENT_METHODS.map(m => {
+              {paymentMethods.map(m => {
                 const Icon = m.icon;
                 const isSelected = saleMethod === m.id;
                 return (
@@ -164,13 +247,20 @@ export default function PosCheckoutZone({
                       <Icon size={14} className={isSelected ? 'text-white' : 'text-slate-400'} />
                       <span className="text-xs font-bold truncate">{m.label}</span>
                     </div>
-                    {m.shortcut && (
-                      <kbd className={`px-1 py-0.5 text-[9px] font-mono rounded ${
-                        isSelected ? 'bg-emerald-700 text-emerald-100' : 'bg-slate-800 text-slate-400'
-                      }`}>
-                        {m.shortcut}
-                      </kbd>
-                    )}
+                    <div className="flex items-center gap-1 shrink-0">
+                      {m.fee && (
+                        <span className={`text-[9px] font-mono ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
+                          {m.fee}
+                        </span>
+                      )}
+                      {m.shortcut && (
+                        <kbd className={`px-1 py-0.5 text-[9px] font-mono rounded ${
+                          isSelected ? 'bg-emerald-700 text-emerald-100' : 'bg-slate-800 text-slate-400'
+                        }`}>
+                          {m.shortcut}
+                        </kbd>
+                      )}
+                    </div>
                   </button>
                 );
               })}
@@ -367,6 +457,15 @@ export default function PosCheckoutZone({
             <div className="flex justify-between text-blue-400 font-semibold">
               <span>Taxa Entrega:</span>
               <span className="font-mono">+ R$ {deliveryFeeAmount.toFixed(2)}</span>
+            </div>
+          )}
+
+          {hasStoreCoupon && parseFloat(storeCouponInput) > 0 && (
+            <div className="flex justify-between text-red-400 font-semibold">
+              <span className="flex items-center gap-1">
+                <Tag size={12} /> Subsídio Cupom Loja:
+              </span>
+              <span className="font-mono tabular-nums">- R$ {parseFloat(storeCouponInput).toFixed(2)}</span>
             </div>
           )}
 

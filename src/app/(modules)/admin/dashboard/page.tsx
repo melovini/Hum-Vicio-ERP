@@ -276,8 +276,12 @@ export default function DashboardPage() {
     }
   }, [periodFilter, dailyProratedFixedExpense, totalMonthlyFixedExpense, customStartDate, customEndDate]);
 
+  const totalStoreCoupons = useMemo(() => {
+    return filteredSales.reduce((acc, s) => acc + (Number(s.storeCouponSubsidy) || 0), 0);
+  }, [filteredSales]);
+
   // Margem de Contribuição & Ponto de Equilíbrio
-  const contributionMargin = totalRevenue - realCmv - wasteLoss - totalFees;
+  const contributionMargin = totalRevenue - realCmv - wasteLoss - totalFees - totalStoreCoupons;
   const contributionMarginRatio = totalRevenue > 0 ? (contributionMargin / totalRevenue) : 0;
 
   // Ponto de Equilíbrio Financeiro em R$
@@ -999,6 +1003,13 @@ export default function DashboardPage() {
                   <span className="text-slate-400 pl-3">(-) Taxas de Operação (iFood 33% / 23% / Cartões 1%-3%)</span>
                   <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {totalFees.toFixed(2)}</span>
                 </div>
+
+                {totalStoreCoupons > 0 && (
+                  <div className="flex justify-between p-2.5 px-3 border-b border-surface-border/60">
+                    <span className="text-slate-400 pl-3">(-) Cupons iFood Custeados pela Loja (Subsídio Hits)</span>
+                    <span className="font-mono tabular-nums text-status-danger font-semibold">- R$ {totalStoreCoupons.toFixed(2)}</span>
+                  </div>
+                )}
                 
                 <div className="flex justify-between p-3 bg-surface-elevated rounded-lg border border-brand-accent/20">
                   <div>

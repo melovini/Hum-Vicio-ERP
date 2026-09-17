@@ -11,6 +11,8 @@ export interface ParkedDraft {
   deliveryFeeInput: string;
   discountInput: string;
   saleMethod: string;
+  hasStoreCoupon?: boolean;
+  storeCouponInput?: string;
   cartStep: 'produtos' | 'atendimento' | 'pagamento';
   notes?: string;
   createdAt: number;
@@ -44,12 +46,14 @@ export function createDefaultDraft(channel: 'balcao' | 'ifood' = 'balcao', index
     label: `Atendimento #${index} (${channel === 'ifood' ? 'iFood' : 'Balcão'})`,
     customerName: '',
     saleChannel: channel,
-    orderType: 'retirada',
+    orderType: channel === 'ifood' ? 'delivery' : 'retirada',
     pickupPaymentTiming: 'imediato',
     cart: [],
     deliveryFeeInput: '',
     discountInput: '',
-    saleMethod: 'dinheiro',
+    saleMethod: channel === 'ifood' ? 'ifood_online' : 'dinheiro',
+    hasStoreCoupon: false,
+    storeCouponInput: '10.00',
     cartStep: 'produtos',
     createdAt: now,
     updatedAt: now,

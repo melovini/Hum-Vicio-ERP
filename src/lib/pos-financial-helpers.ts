@@ -1,4 +1,4 @@
-import { SaleItem } from './store';
+import { SaleItem, Product } from './store';
 
 export interface CashChangeResult {
   isEnough: boolean;
@@ -105,3 +105,80 @@ export function normalizeCartItemNotes(cart: SaleItem[]): SaleItem[] {
     notes: item.notes?.trim() ? item.notes.trim().toUpperCase() : undefined
   }));
 }
+
+/**
+ * Calcula o valor em reais do subsídio do cupom iFood custeado pela loja.
+ * Aplica-se exclusivamente quando o canal for iFood e a opção de cupom estiver marcada.
+ */
+export function calculateStoreCouponSubsidy(
+  saleChannel: string,
+  hasStoreCoupon: boolean,
+  couponInput: string | number
+): number {
+  if (saleChannel !== 'ifood' || !hasStoreCoupon) return 0;
+  const num = typeof couponInput === 'number' ? couponInput : parseFloat(String(couponInput).replace(',', '.'));
+  if (isNaN(num) || num <= 0) return 0;
+  return Number(num.toFixed(2));
+}
+
+/**
+ * Recalcula os preços unitários de todos os itens do carrinho ao alternar entre canais (Balcão vs iFood).
+ */
+export function recalculateCartPrices(
+  currentCart: SaleItem[],
+  targetChannel: 'balcao' | 'ifood',
+  productsList: Product[]
+): SaleItem[] {
+  if (!currentCart || !Array.isArray(currentCart)) return [];
+  return currentCart.map(item => {
+    const prod = productsList.find(
+      p => p.id === item.productId || p.name.toLowerCase().trim() === item.productName.toLowerCase().trim()
+    );
+    if (!prod) return item;
+
+    // 1. Preço base do produto no canal de destino
+    const basePrice = targetChannel === 'ifood' ? prod.priceIfood : prod.priceBalcao;
+
+    // 2. Preço de combos no canal de destino
+    let comboPrice = 0;
+    if (item.combo) {
+      if (item.combo.toLowerCase().includes('batata')) {
+        comboPrice = targetChannel === 'ifood' ? 18.00 : 15.00;
+      } else if (item.combo.toLowerCase().includes('anéis') || item.combo.toLowerCase().includes('aneis')) {
+        comboPrice = targetChannel === 'ifood' ? 22.00 : 18.00;
+      }
+    }
+
+    // 3. Preço de adicionais no canal de destino
+    let additionsTotal = 0;
+    const updatedAdditionals = (item.additionals || []).map(add => {
+      const cleanName = add.name.replace(/^\d+x\s*/, '').trim();
+      const matchProd = productsList.find(p => 
+        p.name === `Adicional: ${cleanName}` || 
+        p.name === `Pote Maionese ${cleanName}` || 
+        p.name.toLowerCase().includes(cleanName.toLowerCase())
+      );
+      const unitAddPrice = matchProd 
+        ? (targetChannel === 'ifood' ? matchProd.priceIfood : matchProd.priceBalcao) 
+        : (add.price || 5.00);
+
+      const qtyMatch = add.name.match(/^(\d+)x/);
+      const qty = qtyMatch ? parseInt(qtyMatch[1], 10) : 1;
+      additionsTotal += unitAddPrice * qty;
+      return {
+        ...add,
+        price: unitAddPrice * qty,
+      };
+    });
+
+    const newUnitPrice = item.isGift ? 0 : (basePrice + comboPrice + additionsTotal);
+
+    return {
+      ...item,
+      unitPrice: newUnitPrice,
+      comboPrice: comboPrice > 0 ? comboPrice : undefined,
+      additionals: updatedAdditionals.length > 0 ? updatedAdditionals : item.additionals,
+    };
+  });
+}
+

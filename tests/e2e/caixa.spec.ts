@@ -1,4 +1,4 @@
-﻿import AxeBuilder from '@axe-core/playwright';
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page, type Route } from '@playwright/test';
 
 const sampleProducts = [
@@ -168,5 +168,41 @@ test.describe('Caixa / PDV — ergonomia, 3 zonas e acessibilidade', () => {
     // Troco esperado: 50.00 - 22.00 = 28.00
     await expect(page.getByText(/Devolver de Troco:/i)).toBeVisible();
     await expect(page.getByText(/28/i)).toBeVisible();
+  });
+
+  test('alterna canal para iFood, exibe métodos com taxas, card de cupom e recalcula preços', async ({ page }) => {
+    await mockCaixaApi(page);
+    await page.goto('/caixa', { waitUntil: 'domcontentloaded' });
+
+    await expect(page.getByRole('heading', { name: 'Catálogo de Produtos' })).toBeVisible({ timeout: 15000 });
+
+    // Adiciona Batata no Balcão (preço balcão: R$ 22.00)
+    await page.getByRole('button', { name: /Batata Rústica Especial/i }).click();
+    await expect(page.getByTestId('pos-cart-items').getByText(/22/i)).toBeVisible();
+
+    // Alterna para canal iFood
+    await page.getByRole('button', { name: '🛵 iFood' }).click();
+
+    // Preço do item no carrinho deve ser recalculado para o preço iFood (R$ 26.00)
+    await expect(page.getByTestId('pos-cart-items').getByText(/26/i)).toBeVisible();
+
+    // Métodos iFood visíveis com taxas
+    await expect(page.getByRole('button', { name: /iFood Online/i })).toBeVisible();
+    await expect(page.getByText(/Taxa 33%/i)).toBeVisible();
+    await expect(page.getByRole('button', { name: /iFood Entrega/i })).toBeVisible();
+
+    // Card de subsídio de cupom da loja iFood visível
+    await expect(page.getByText(/Cupom pago pela Loja/i)).toBeVisible();
+
+    // Ativa checkbox de cupom
+    const couponCheckbox = page.getByRole('checkbox');
+    await couponCheckbox.check();
+
+    // Input de valor do cupom deve aparecer com valor padrão ou pills
+    await expect(page.getByLabel('Valor do cupom da loja')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'R$ 10' })).toBeVisible();
+
+    // Resumo financeiro reflete a linha informativa do subsídio da loja
+    await expect(page.getByText(/Subsídio Cupom Loja/i)).toBeVisible();
   });
 });

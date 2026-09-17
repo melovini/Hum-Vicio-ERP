@@ -9,6 +9,8 @@ const {
   calculateCartTotal,
   calculateCashChange,
   normalizeCartItemNotes,
+  calculateStoreCouponSubsidy,
+  recalculateCartPrices,
 } = createLoader()('src/lib/pos-financial-helpers.ts');
 
 test('calculateCartSubtotal calcula a soma dos itens e adicionais respeitando brindes', () => {
@@ -111,4 +113,81 @@ test('normalizeCartItemNotes converte observações para maiúsculas e remove es
   assert.equal(normalized[0].notes, 'SEM CEBOLA, PONTO MAIS PASSADO');
   assert.equal(normalized[1].notes, undefined);
   assert.equal(normalized[2].notes, undefined);
+});
+
+test('calculateStoreCouponSubsidy calcula subsídio exclusivo para canal iFood com cupom ativo', () => {
+  // Não aplica se canal for balcão
+  assert.equal(calculateStoreCouponSubsidy('balcao', true, '10.00'), 0);
+  assert.equal(calculateStoreCouponSubsidy('balcao', true, 15), 0);
+
+  // Não aplica se hasStoreCoupon for false
+  assert.equal(calculateStoreCouponSubsidy('ifood', false, '10.00'), 0);
+  assert.equal(calculateStoreCouponSubsidy('ifood', false, ''), 0);
+
+  // Aplica corretamente no iFood
+  assert.equal(calculateStoreCouponSubsidy('ifood', true, '10.00'), 10.00);
+  assert.equal(calculateStoreCouponSubsidy('ifood', true, '12,50'), 12.50);
+  assert.equal(calculateStoreCouponSubsidy('ifood', true, 15), 15.00);
+  assert.equal(calculateStoreCouponSubsidy('ifood', true, '5'), 5.00);
+
+  // Entradas inválidas retornam 0
+  assert.equal(calculateStoreCouponSubsidy('ifood', true, ''), 0);
+  assert.equal(calculateStoreCouponSubsidy('ifood', true, '-5.00'), 0);
+  assert.equal(calculateStoreCouponSubsidy('ifood', true, 'invalido'), 0);
+});
+
+test('recalculateCartPrices atualiza preços de produtos, combos e adicionais entre balcão e ifood', () => {
+  const products = [
+    {
+      id: 'prod-1',
+      name: 'Smash Clássico',
+      priceBalcao: 25.00,
+      priceIfood: 32.00,
+    },
+    {
+      id: 'prod-2',
+      name: 'Adicional: Bacon Crispy',
+      priceBalcao: 5.00,
+      priceIfood: 7.00,
+    },
+  ];
+
+  const cart = [
+    {
+      id: 'item-1',
+      productId: 'prod-1',
+      productName: 'Smash Clássico',
+      quantity: 1,
+      unitPrice: 45.00, // 25 base + 15 combo batata + 5 bacon
+      combo: 'Batata + Refri',
+      comboPrice: 15.00,
+      additionals: [{ name: '1x Bacon Crispy', price: 5.00 }],
+    },
+    {
+      id: 'item-2',
+      productId: 'prod-1',
+      productName: 'Smash Clássico',
+      quantity: 1,
+      unitPrice: 0,
+      isGift: true,
+      originalPrice: 25.00,
+    },
+  ];
+
+  // Alternar para iFood
+  const ifoodCart = recalculateCartPrices(cart, 'ifood', products);
+  // Item 1: 32 base + 18 combo + 7 bacon = 57.00
+  assert.equal(ifoodCart[0].unitPrice, 57.00);
+  assert.equal(ifoodCart[0].comboPrice, 18.00);
+  assert.equal(ifoodCart[0].additionals[0].price, 7.00);
+
+  // Item 2 (brinde): deve permanecer 0
+  assert.equal(ifoodCart[1].unitPrice, 0);
+
+  // Alternar de volta para Balcão
+  const balcaoCart = recalculateCartPrices(ifoodCart, 'balcao', products);
+  assert.equal(balcaoCart[0].unitPrice, 45.00);
+  assert.equal(balcaoCart[0].comboPrice, 15.00);
+  assert.equal(balcaoCart[0].additionals[0].price, 5.00);
+  assert.equal(balcaoCart[1].unitPrice, 0);
 });

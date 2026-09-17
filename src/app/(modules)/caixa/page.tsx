@@ -32,7 +32,8 @@ import { getOperatorDirectoryAction } from '@/app/(modules)/admin/colaboradores/
 // Helpers puros e tipos
 import { 
   calculateCartSubtotal, calculateDeliveryFee, calculateDiscount, 
-  calculateCartTotal, calculateCashChange, normalizeCartItemNotes 
+  calculateCartTotal, calculateCashChange, normalizeCartItemNotes,
+  calculateStoreCouponSubsidy, recalculateCartPrices
 } from '@/lib/pos-financial-helpers';
 import { 
   PosTab, PosCategory, DeliveryRouteBlock, CashConferenceValues 
@@ -111,7 +112,7 @@ export default function CaixaPage() {
   const [cashReceivedInput, setCashReceivedInput] = useState('');
   const [fiscalCpfInput, setFiscalCpfInput] = useState('');
   const [hasStoreCoupon, setHasStoreCoupon] = useState(false);
-  const [storeCouponInput, setStoreCouponInput] = useState('');
+  const [storeCouponInput, setStoreCouponInput] = useState('10.00');
   const [selectedCollaboratorId, setSelectedCollaboratorId] = useState('');
   const [creditCustomerInput, setCreditCustomerInput] = useState('');
   const [creditDueDateInput, setCreditDueDateInput] = useState('');
@@ -261,6 +262,24 @@ export default function CaixaPage() {
   const deliveryFeeAmount = useMemo(() => calculateDeliveryFee(orderType, deliveryFeeInput), [orderType, deliveryFeeInput]);
   const discountAmount = useMemo(() => calculateDiscount(discountInput, cartSubtotal), [discountInput, cartSubtotal]);
   const cartTotal = useMemo(() => calculateCartTotal(cartSubtotal, discountAmount, deliveryFeeAmount), [cartSubtotal, discountAmount, deliveryFeeAmount]);
+  const storeCouponSubsidyAmount = useMemo(() => calculateStoreCouponSubsidy(saleChannel, hasStoreCoupon, storeCouponInput), [saleChannel, hasStoreCoupon, storeCouponInput]);
+
+  // Troca dinâmica de canal de vendas com recálculo de preços no carrinho
+  const handleSwitchChannel = (newChannel: 'balcao' | 'ifood') => {
+    setSaleChannel(newChannel);
+    setCart(prev => recalculateCartPrices(prev, newChannel, products));
+    if (newChannel === 'ifood') {
+      setSaleMethod('ifood_online');
+      if (orderType === 'mesa') {
+        setOrderType('delivery');
+        setSelectedTable(null);
+      }
+    } else {
+      if (saleMethod === 'ifood_online' || saleMethod === 'ifood_entrega') {
+        setSaleMethod('dinheiro');
+      }
+    }
+  };
 
   // Estatísticas financeiras da sessão de caixa
   const sessionStats = useMemo(() => {
@@ -312,6 +331,8 @@ export default function CaixaPage() {
         deliveryFeeInput,
         discountInput,
         saleMethod,
+        hasStoreCoupon,
+        storeCouponInput,
         cartStep: 'produtos',
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -321,7 +342,7 @@ export default function CaixaPage() {
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [activeDraftId, cart, customerName, saleChannel, orderType, pickupPaymentTiming, deliveryFeeInput, discountInput, saleMethod]);
+  }, [activeDraftId, cart, customerName, saleChannel, orderType, pickupPaymentTiming, deliveryFeeInput, discountInput, saleMethod, hasStoreCoupon, storeCouponInput]);
 
   const handleSelectDraft = (targetId: string) => {
     if (targetId === activeDraftId) return;
@@ -339,6 +360,8 @@ export default function CaixaPage() {
       setDeliveryFeeInput(targetDraft.deliveryFeeInput || '');
       setDiscountInput(targetDraft.discountInput || '');
       setSaleMethod(targetDraft.saleMethod || 'dinheiro');
+      setHasStoreCoupon(targetDraft.hasStoreCoupon || false);
+      setStoreCouponInput(targetDraft.storeCouponInput || '10.00');
       setTimeout(() => { isSwitchingDraftRef.current = false; }, 60);
     }
   };
@@ -355,6 +378,8 @@ export default function CaixaPage() {
     setDeliveryFeeInput('');
     setDiscountInput('');
     setSaleMethod('dinheiro');
+    setHasStoreCoupon(false);
+    setStoreCouponInput('10.00');
     setParkedDrafts(getParkedDrafts());
     notify({ title: 'Novo Atendimento Iniciado', description: 'Comanda pronta para novos itens.', tone: 'info' });
   };
@@ -536,6 +561,7 @@ export default function CaixaPage() {
           subtotal: cartSubtotal,
           discount: discountAmount,
           deliveryFee: orderType === 'delivery' ? deliveryFeeAmount : 0,
+          storeCouponSubsidy: storeCouponSubsidyAmount,
           total: cartTotal,
           paymentMethod: saleMethod,
           items: normalizedCart,
@@ -567,7 +593,7 @@ export default function CaixaPage() {
         subtotal: cartSubtotal,
         discount: discountAmount,
         deliveryFee: orderType === 'delivery' ? deliveryFeeAmount : 0,
-        storeCouponSubsidy: 0,
+        storeCouponSubsidy: storeCouponSubsidyAmount,
         total: cartTotal,
         paymentMethod: isPickupPending ? 'retirada' : saleMethod,
         paymentStatus: finalPaymentStatus,
@@ -616,6 +642,8 @@ export default function CaixaPage() {
       setFiscalCpfInput('');
       setSelectedTable(null);
       setCreditCustomerInput('');
+      setHasStoreCoupon(false);
+      setStoreCouponInput('10.00');
 
       // Remover atendimento concluído da barra e carregar o próximo (ou o novo Atendimento #1 limpo)
       if (activeDraftId) {
@@ -635,6 +663,8 @@ export default function CaixaPage() {
             setDeliveryFeeInput(nextDraft.deliveryFeeInput || '');
             setDiscountInput(nextDraft.discountInput || '');
             setSaleMethod(nextDraft.saleMethod || 'dinheiro');
+            setHasStoreCoupon(nextDraft.hasStoreCoupon || false);
+            setStoreCouponInput(nextDraft.storeCouponInput || '10.00');
           }
         }
       } else {
@@ -870,7 +900,7 @@ export default function CaixaPage() {
                   customerName={customerName}
                   onCustomerNameChange={setCustomerName}
                   saleChannel={saleChannel}
-                  onSwitchChannel={setSaleChannel}
+                  onSwitchChannel={handleSwitchChannel}
                   orderType={orderType}
                   onOrderTypeChange={setOrderType}
                   targetMesa={floorSession?.mesas.find(m => m.id === selectedTable?.id) || null}
