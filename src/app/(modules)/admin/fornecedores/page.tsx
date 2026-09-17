@@ -167,7 +167,7 @@ export default function FornecedoresPage() {
                     <p className="text-xs text-slate-400 mb-3">Vendedor: <strong className="text-slate-200">{sup.contactName}</strong></p>
                   )}
                   {sup.notes && (
-                    <p className="text-xs text-slate-500 mb-4 italic bg-slate-950/40 p-2 rounded-xl">"{sup.notes}"</p>
+                    <p className="mb-4 rounded-xl bg-slate-950/40 p-2 text-xs italic text-text-muted">"{sup.notes}"</p>
                   )}
                 </div>
 
