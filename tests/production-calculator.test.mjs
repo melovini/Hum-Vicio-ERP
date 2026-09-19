@@ -224,6 +224,29 @@ test('Regressão: Brasil Francês não contabiliza pão de hambúrguer como segu
   assert.equal(res.isDouble, false);
 });
 
+test('Classificação explícita é soberana e não depende do nome do ingrediente', () => {
+  const misleadingInventory = [
+    { id: 'bread', name: 'Pão de Hambúrguer Francês', category: 'Carnes', unit: 'un', costPerUnit: 2 },
+    { id: 'patty', name: 'Disco da casa', category: 'Diversos', unit: 'un', costPerUnit: 8 },
+  ];
+  const explicitProduct = {
+    id: 'brasil-explicit', name: 'Brasil Francês', category: 'lanche', priceBalcao: 35, priceIfood: 42,
+    recipe: [
+      { ingredientId: 'bread', quantity: 1, productionStation: 'assembly', productionKind: 'other' },
+      { ingredientId: 'patty', quantity: 1, productionStation: 'grill', productionKind: 'beef_patty' },
+    ],
+  };
+
+  const result = calculateItemProduction(
+    { productId: explicitProduct.id, productName: explicitProduct.name, quantity: 1, unitPrice: 35 },
+    [explicitProduct],
+    misleadingInventory,
+  );
+
+  assert.equal(result.chapaPatties, 1);
+  assert.equal(result.isDouble, false);
+});
+
 test('Caso 2: 2 lanches simples iguais -> 2 carnes totais, sem classificar cada lanche como duplo', () => {
   const item = {
     productId: 'prod-brasil',
@@ -698,5 +721,4 @@ test('Caso 30: Pedido histórico (#3F7C35) sem campo combo, detectado por difere
   assert.equal(details.comboDetails.comboType, 'batata');
   assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo)')));
 });
-
 

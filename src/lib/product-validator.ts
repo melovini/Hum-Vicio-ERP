@@ -156,6 +156,20 @@ export function validateProductIntegrity(
       continue;
     }
 
+    if (!r.productionStation || !r.productionKind) {
+      warnings.push({
+        code: 'MISSING_PRODUCTION_CLASSIFICATION',
+        message: `Defina o destino de produção e a regra de contagem de "${inv.name}".`,
+        severity: 'danger'
+      });
+    } else if (r.productionStation !== 'none' && r.productionKind === 'none') {
+      warnings.push({
+        code: 'MISSING_PRODUCTION_COUNTER',
+        message: `Defina o que "${inv.name}" representa no KDS ou marque como “Outro item produzido”.`,
+        severity: 'danger'
+      });
+    }
+
     const normUnit = normalizeProductionString(inv.unit);
     // Se a unidade for kg mas a quantidade for >= 10 (ex: operador colocou 180 em vez de 0.180 kg)
     if ((normUnit === 'kg' || normUnit === 'kilo') && r.quantity >= 10) {
@@ -191,7 +205,7 @@ export function validateProductIntegrity(
   const ingredientsSummary = recipe.map(r => {
     const inv = invMap.get(r.ingredientId);
     return {
-      station: inv?.station || 'nenhuma',
+      station: r.productionStation || inv?.station || 'não revisado',
       name: inv?.name || 'Insumo',
       quantity: r.quantity,
       unit: inv?.unit || 'un'

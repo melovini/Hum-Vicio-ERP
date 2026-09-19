@@ -645,7 +645,9 @@ export async function executeParallelLoadData(
             isAddon: p.is_addon ?? addonConf.isAddon ?? false,
             recipe: recipesList.filter(r => r.product_id === p.id).map(r => ({
               ingredientId: r.ingredient_id,
-              quantity: Number(r.quantity) || 0
+              quantity: Number(r.quantity) || 0,
+              productionStation: r.production_station || undefined,
+              productionKind: r.production_kind || undefined,
             }))
           };
           if (!prodObj.subcategory) {
@@ -1917,7 +1919,11 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       if (prod.recipe && prod.recipe.length > 0) {
         try {
           const recipeInserts = prod.recipe.map(r => ({
-            product_id: finalId, ingredient_id: r.ingredientId, quantity: r.quantity
+            product_id: finalId,
+            ingredient_id: r.ingredientId,
+            quantity: r.quantity,
+            production_station: r.productionStation || 'none',
+            production_kind: r.productionKind || 'none',
           }));
           const { error: rErr } = await supabase.from('recipes').insert(recipeInserts);
           if (rErr) {
@@ -2031,14 +2037,22 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
 
           if (updates.recipe.length > 0) {
             const recipeInserts = updates.recipe.map(r => ({
-              product_id: id, ingredient_id: r.ingredientId, quantity: r.quantity
+              product_id: id,
+              ingredient_id: r.ingredientId,
+              quantity: r.quantity,
+              production_station: r.productionStation || 'none',
+              production_kind: r.productionKind || 'none',
             }));
             const { error: insErr } = await supabase.from('recipes').insert(recipeInserts);
             if (insErr) {
               console.error('Erro ao inserir nova receita. Restaurando receita anterior...', insErr);
               if (previousRecipe.length > 0) {
                 const restoreInserts = previousRecipe.map(r => ({
-                  product_id: id, ingredient_id: r.ingredientId, quantity: r.quantity
+                  product_id: id,
+                  ingredient_id: r.ingredientId,
+                  quantity: r.quantity,
+                  production_station: r.productionStation || 'none',
+                  production_kind: r.productionKind || 'none',
                 }));
                 try { await supabase.from('recipes').insert(restoreInserts); } catch (resErr) { console.error(resErr); }
               }

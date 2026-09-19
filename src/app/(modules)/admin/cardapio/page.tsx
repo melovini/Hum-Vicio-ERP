@@ -9,7 +9,7 @@ import {
   ChevronDown, ChevronRight, ExternalLink, Info, FolderKanban,
   ArrowUp, ArrowDown, Pencil, Check
 } from 'lucide-react';
-import { useInventory, type Product, type RecipeIngredient, type InventoryItem } from '@/lib/store';
+import { useInventory, type Product, type RecipeIngredient, type InventoryItem, type RecipeProductionStation, type RecipeProductionKind } from '@/lib/store';
 import { FISCAL_CATEGORY_PRESETS } from '@/lib/fiscal';
 import { 
   filterCardapioProducts, 
@@ -43,6 +43,34 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useToast } from '@/components/ui/Toast';
 import { cn } from '@/lib/cn';
+
+const PRODUCTION_STATIONS: Array<{ value: RecipeProductionStation; label: string }> = [
+  { value: 'none', label: 'Sem preparo / estoque' },
+  { value: 'grill', label: 'Chapa' },
+  { value: 'fryer', label: 'Fritadeira' },
+  { value: 'oven', label: 'Forno' },
+  { value: 'cold', label: 'Praça fria' },
+  { value: 'assembly', label: 'Montagem' },
+  { value: 'other', label: 'Outro processo' },
+];
+
+const PRODUCTION_KINDS: Array<{ value: RecipeProductionKind; label: string }> = [
+  { value: 'none', label: 'Não entra em contador' },
+  { value: 'beef_patty', label: 'Hambúrguer / carne' },
+  { value: 'egg', label: 'Ovo' },
+  { value: 'bacon', label: 'Bacon' },
+  { value: 'breaded_chicken', label: 'Frango empanado' },
+  { value: 'breaded_cheese', label: 'Queijo empanado' },
+  { value: 'fries', label: 'Batata' },
+  { value: 'onion_rings', label: 'Anéis de cebola' },
+  { value: 'other', label: 'Outro item produzido' },
+];
+
+const stationLabel = (value?: RecipeProductionStation) =>
+  PRODUCTION_STATIONS.find(option => option.value === value)?.label || 'Não revisado';
+
+const kindLabel = (value?: RecipeProductionKind) =>
+  PRODUCTION_KINDS.find(option => option.value === value)?.label || 'Regra legada';
 
 export default function CardapioAdminPage() {
   const { 
@@ -103,6 +131,8 @@ export default function CardapioAdminPage() {
   const [recipe, setRecipe] = useState<RecipeIngredient[]>([]);
   const [selectedIngId, setSelectedIngId] = useState('');
   const [ingQuantity, setIngQuantity] = useState('');
+  const [ingredientProductionStation, setIngredientProductionStation] = useState<RecipeProductionStation>('none');
+  const [ingredientProductionKind, setIngredientProductionKind] = useState<RecipeProductionKind>('none');
   const [ingSearch, setIngSearch] = useState('');
   const [isIngDropdownOpen, setIsIngDropdownOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
@@ -439,6 +469,8 @@ export default function CardapioAdminPage() {
     setRecipe([]); 
     setSelectedIngId(''); 
     setIngQuantity(''); 
+    setIngredientProductionStation('none');
+    setIngredientProductionKind('none');
     setIngSearch('');
     setIsIngDropdownOpen(false); 
     setIsAdding(false); 
@@ -483,17 +515,9 @@ export default function CardapioAdminPage() {
         setIngSearch(newItem.name);
         setIsIngDropdownOpen(false);
 
-        const qty = Number(ingQuantity);
-        if (!isNaN(qty) && qty > 0) {
-          setRecipe(prev => [...prev, { ingredientId: newItem.id, quantity: qty }]);
-          setSelectedIngId('');
-          setIngQuantity('');
-          setIngSearch('');
-        }
-
         notify({
           title: `Insumo "${newItem.name}" criado no estoque com custo R$ 0,00!`,
-          description: 'O CMV está aproximado. Defina o custo unitário na tabela abaixo ou em Insumos.',
+          description: 'Agora informe quantidade, destino de produção e regra de contagem antes de adicioná-lo.',
           tone: 'warning',
         });
       }
@@ -665,10 +689,25 @@ export default function CardapioAdminPage() {
         notify({ title: 'Informe uma quantidade válida maior que zero.', tone: 'warning' });
         return;
       }
-      setRecipe([...recipe, { ingredientId: selectedIngId, quantity: qty }]);
+      if (ingredientProductionStation !== 'none' && ingredientProductionKind === 'none') {
+        notify({
+          title: 'Informe o que deve ser contabilizado nesse processo.',
+          description: 'Se o ingrediente apenas passa pela estação, escolha “Outro item produzido”.',
+          tone: 'warning',
+        });
+        return;
+      }
+      setRecipe([...recipe, {
+        ingredientId: selectedIngId,
+        quantity: qty,
+        productionStation: ingredientProductionStation,
+        productionKind: ingredientProductionKind,
+      }]);
       setSelectedIngId('');
       setIngQuantity('');
       setIngSearch('');
+      setIngredientProductionStation('none');
+      setIngredientProductionKind('none');
     }
   };
 
@@ -1694,8 +1733,8 @@ export default function CardapioAdminPage() {
                 </div>
 
                 {/* Combobox de Inserção com Criação On-the-Fly */}
-                <div className="flex flex-col sm:flex-row gap-2 relative">
-                  <div className="relative flex-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 relative">
+                  <div className="relative sm:col-span-2">
                     <input
                       type="text"
                       placeholder="Buscar insumo existente ou digitar novo..."
@@ -1796,17 +1835,49 @@ export default function CardapioAdminPage() {
                     placeholder="Qtd"
                     value={ingQuantity}
                     onChange={e => setIngQuantity(e.target.value)}
-                    className="w-24 bg-surface-input border border-border-default rounded-control p-2.5 text-text-primary font-mono text-xs outline-none focus:border-brand-primary"
+                    aria-label="Quantidade do ingrediente"
+                    className="w-full bg-surface-input border border-border-default rounded-control p-2.5 text-text-primary font-mono text-xs outline-none focus:border-brand-primary"
                   />
+
+                  <Select
+                    aria-label="Destino de produção do ingrediente"
+                    value={ingredientProductionStation}
+                    onChange={event => {
+                      const station = event.target.value as RecipeProductionStation;
+                      setIngredientProductionStation(station);
+                      if (station === 'none') setIngredientProductionKind('none');
+                    }}
+                  >
+                    {PRODUCTION_STATIONS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </Select>
+
+                  <Select
+                    aria-label="Regra de contagem do ingrediente no KDS"
+                    value={ingredientProductionKind}
+                    onChange={event => setIngredientProductionKind(event.target.value as RecipeProductionKind)}
+                    disabled={ingredientProductionStation === 'none'}
+                  >
+                    {PRODUCTION_KINDS.map(option => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </Select>
 
                   <Button
                     size="sm"
                     onClick={addIngredientToRecipe}
                     disabled={!selectedIngId || !ingQuantity}
+                    className="sm:col-span-2"
                   >
                     Adicionar
                   </Button>
                 </div>
+
+                <p className="text-[11px] leading-relaxed text-text-muted">
+                  A estação define onde o item será preparado. A regra de contagem define o número exibido no KDS;
+                  nomes como “pão de hambúrguer” nunca serão tratados como carne quando marcados corretamente.
+                </p>
 
                 {/* Alerta de Custo Zerado & CMV Aproximado */}
                 {activeRecipeMetrics.hasZeroCostIngredient && (
@@ -1851,6 +1922,14 @@ export default function CardapioAdminPage() {
                             <span className="text-[11px] text-text-muted font-mono">
                               {r.quantity} {ing?.unit} × R$ {unitCost.toFixed(2)}
                             </span>
+                            <div className="mt-2 flex flex-wrap gap-1.5">
+                              <span className="rounded-full border border-border-default bg-surface-elevated px-2 py-0.5 text-[10px] font-bold text-text-secondary">
+                                {stationLabel(r.productionStation)}
+                              </span>
+                              <span className="rounded-full border border-brand-primary/30 bg-brand-primary/10 px-2 py-0.5 text-[10px] font-bold text-brand-primary">
+                                {kindLabel(r.productionKind)}
+                              </span>
+                            </div>
                           </div>
                           <div className="flex items-center gap-3">
                             <span className="font-mono font-bold text-amber-400 tabular-nums">
@@ -1865,6 +1944,37 @@ export default function CardapioAdminPage() {
                               <Trash2 size={14} aria-hidden="true" />
                             </button>
                           </div>
+                        </div>
+
+                        <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 border-t border-border-default/60 pt-2">
+                          <Select
+                            aria-label={`Destino de produção de ${ing?.name || 'ingrediente'}`}
+                            value={r.productionStation || ''}
+                            onChange={event => {
+                              const station = event.target.value as RecipeProductionStation;
+                              setRecipe(current => current.map((item, itemIndex) => itemIndex === idx
+                                ? { ...item, productionStation: station, productionKind: station === 'none' ? 'none' : item.productionKind }
+                                : item));
+                            }}
+                          >
+                            <option value="" disabled>Revisar destino...</option>
+                            {PRODUCTION_STATIONS.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </Select>
+                          <Select
+                            aria-label={`Regra de contagem de ${ing?.name || 'ingrediente'}`}
+                            value={r.productionKind || ''}
+                            onChange={event => setRecipe(current => current.map((item, itemIndex) => itemIndex === idx
+                              ? { ...item, productionKind: event.target.value as RecipeProductionKind }
+                              : item))}
+                            disabled={r.productionStation === 'none'}
+                          >
+                            <option value="" disabled>Revisar contagem...</option>
+                            {PRODUCTION_KINDS.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </Select>
                         </div>
 
                         {/* Edição Rápida de Custo para Insumo com Custo Zerado */}

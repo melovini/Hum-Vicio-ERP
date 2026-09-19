@@ -54,8 +54,8 @@ test('Validador: Detecta discrepância entre nome "Duplo" e receita com apenas 1
     priceBalcao: 45,
     priceIfood: 54,
     recipe: [
-      { ingredientId: 'inv-pao', quantity: 1 },
-      { ingredientId: 'inv-patty-180', quantity: 1 } // Apenas 1 carne!
+      { ingredientId: 'inv-pao', quantity: 1, productionStation: 'assembly', productionKind: 'other' },
+      { ingredientId: 'inv-patty-180', quantity: 1, productionStation: 'grill', productionKind: 'beef_patty' } // Apenas 1 carne!
     ]
   }, mockInventory);
 
@@ -72,8 +72,8 @@ test('Validador: Reconhece lanche duplo coerente (2 carnes e nome duplo)', () =>
     priceBalcao: 48,
     priceIfood: 58,
     recipe: [
-      { ingredientId: 'inv-pao', quantity: 1 },
-      { ingredientId: 'inv-patty-180', quantity: 2 }
+      { ingredientId: 'inv-pao', quantity: 1, productionStation: 'assembly', productionKind: 'other' },
+      { ingredientId: 'inv-patty-180', quantity: 2, productionStation: 'grill', productionKind: 'beef_patty' }
     ]
   }, mockInventory);
 
@@ -82,6 +82,19 @@ test('Validador: Reconhece lanche duplo coerente (2 carnes e nome duplo)', () =>
   assert.equal(res.productionPreview.chapaPatties, 2);
   assert.equal(res.productionPreview.isDouble, true);
   assert.equal(res.warnings.some(w => w.code === 'NAME_DUPLO_MISMATCH'), false);
+});
+
+test('Validador: exige classificação de produção ao revisar receitas legadas', () => {
+  const res = validateProductIntegrity({
+    name: 'Brasil Francês',
+    category: 'lanche',
+    priceBalcao: 38,
+    priceIfood: 45,
+    recipe: [{ ingredientId: 'inv-pao', quantity: 1 }]
+  }, mockInventory);
+
+  assert.equal(res.isValid, false);
+  assert.ok(res.warnings.some(w => w.code === 'MISSING_PRODUCTION_CLASSIFICATION'));
 });
 
 test('Validador: Detecta ausência de proteína principal em lanche', () => {

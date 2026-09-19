@@ -28,7 +28,31 @@ export interface InventoryItem {
 export interface RecipeIngredient {
   ingredientId: string;
   quantity: number;
+  /** Destino operacional definido pelo usuário para esta linha da ficha técnica. */
+  productionStation?: RecipeProductionStation;
+  /** Tipo contado pelo KDS. `none` envia o item à estação sem somá-lo como proteína/porção. */
+  productionKind?: RecipeProductionKind;
 }
+
+export type RecipeProductionStation =
+  | 'none'
+  | 'grill'
+  | 'fryer'
+  | 'oven'
+  | 'cold'
+  | 'assembly'
+  | 'other';
+
+export type RecipeProductionKind =
+  | 'none'
+  | 'beef_patty'
+  | 'egg'
+  | 'bacon'
+  | 'breaded_chicken'
+  | 'breaded_cheese'
+  | 'fries'
+  | 'onion_rings'
+  | 'other';
 
 export interface SubRecipeItem {
   id: string;

@@ -1,4 +1,4 @@
-import { KitchenStation, InventoryItem, Product, SaleItem, ProductionBreakdown, ItemProductionDetails, ComboStationDetails } from './store/types';
+import { KitchenStation, InventoryItem, Product, SaleItem, ProductionBreakdown, ItemProductionDetails, ComboStationDetails, RecipeIngredient, RecipeProductionKind } from './store/types';
 
 export type { ProductionBreakdown, ItemProductionDetails, ComboStationDetails };
 
@@ -147,6 +147,32 @@ export function inferComponentType(name: string, category: string = ''): Compone
   }
 
   return 'outro';
+}
+
+const EXPLICIT_PRODUCTION_KIND: Record<RecipeProductionKind, ComponentType> = {
+  none: 'outro',
+  beef_patty: 'carne_bovina',
+  egg: 'ovo',
+  bacon: 'bacon',
+  breaded_chicken: 'frango_empanado',
+  breaded_cheese: 'queijo_empanado',
+  fries: 'batata',
+  onion_rings: 'onion',
+  other: 'outro',
+};
+
+/**
+ * A classificação explícita da ficha técnica é soberana. A inferência por nome
+ * existe somente para receitas legadas ainda não revisadas pelo operador.
+ */
+export function resolveRecipeComponentType(
+  recipeItem: RecipeIngredient,
+  inventoryItem?: InventoryItem,
+): ComponentType {
+  if (recipeItem.productionKind) {
+    return EXPLICIT_PRODUCTION_KIND[recipeItem.productionKind];
+  }
+  return inferComponentType(inventoryItem?.name || '', inventoryItem?.category || '');
 }
 
 /**
@@ -446,7 +472,7 @@ export function calculateItemProduction(
       if (isExplicitlyRemoved) continue;
 
       const ingCategory = inv?.category || '';
-      const compType = inferComponentType(ingName, ingCategory);
+      const compType = resolveRecipeComponentType(r, inv);
       const portionInfo = inferPortionWeightFromInventory(inv);
       const unitQty = resolveRecipeUnitQuantity(
         r.quantity, 
@@ -538,7 +564,7 @@ export function calculateItemProduction(
         const inv = inventoryById.get(r.ingredientId);
         const ingName = inv?.name || '';
         const ingCategory = inv?.category || '';
-        const compType = inferComponentType(ingName, ingCategory);
+        const compType = resolveRecipeComponentType(r, inv);
         const portionInfo = inferPortionWeightFromInventory(inv);
         const unitQty = resolveRecipeUnitQuantity(
           r.quantity, 
@@ -693,7 +719,7 @@ export function calculateItemProduction(
       if (Array.isArray(matchedComboProduct.recipe) && matchedComboProduct.recipe.length > 0) {
         for (const r of matchedComboProduct.recipe) {
           const inv = inventoryById.get(r.ingredientId);
-          const compType = inferComponentType(inv?.name || '', inv?.category);
+          const compType = resolveRecipeComponentType(r, inv);
           if (compType === 'batata') isComboBatata = true;
           if (compType === 'onion') isComboOnion = true;
         }
@@ -931,7 +957,7 @@ export function getBurgerPrintDetails(
       const inv = inventoryItems.find(i => i.id === r.ingredientId);
       if (!inv) continue;
       const ingName = inv.name || '';
-      const compType = inferComponentType(ingName, inv.category || '');
+      const compType = resolveRecipeComponentType(r, inv);
       // Pular itens operacionais não alimentares (sacolas, embalagens, guardanapos, gás)
       if (compType === 'nao_alimentar') continue;
 
