@@ -385,6 +385,74 @@ test('fechamento de caixa e movimentações validam dados e sessão', async () =
   assert.equal(rpcCalls[1].name, 'record_cash_movement_transaction');
 });
 
+test('abertura de caixa é persistida no servidor e reutiliza turno já aberto', async () => {
+  const fixture = sessionFixture('caixa');
+  const openedSessionId = 'c0eebc99-9c0b-4ef8-bb6d-6bb9bd380a33';
+  let existingSessions = [];
+  let insertCount = 0;
+
+  const dbMock = {
+    from(table) {
+      if (table === 'app_sessions' || table === 'collaborators') {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          async single() {
+            return {
+              data: table === 'app_sessions' ? fixture.state.session : fixture.state.person,
+              error: null
+            };
+          }
+        };
+      }
+
+      assert.equal(table, 'cash_sessions');
+      return {
+        select() { return this; },
+        eq() { return this; },
+        is() { return this; },
+        order() { return this; },
+        async limit() { return { data: existingSessions, error: null }; },
+        insert(payload) {
+          insertCount += 1;
+          const row = { id: openedSessionId, ...payload };
+          existingSessions = [row];
+          return {
+            select() { return this; },
+            async single() { return { data: row, error: null }; }
+          };
+        }
+      };
+    }
+  };
+
+  const databaseModule = { createServerDatabase: () => dbMock };
+  const load = createLoader({
+    'next/headers': { cookies: async () => ({ get: () => fixture.state.token ? { value: fixture.state.token } : undefined }) },
+    '../supabase-server': databaseModule,
+    '@/lib/supabase-server': databaseModule,
+  });
+  fixture.state.token = await load('src/lib/session.ts').signSessionToken('caixa', 'Operador', 'operator', 'test-session');
+  const route = load('src/app/api/cash/open/route.ts');
+  const post = body => new Request('https://erp.test/api/cash/open', {
+    method: 'POST',
+    headers: { origin: 'https://erp.test', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  assert.equal((await route.POST(post({ initialAmount: -1, operatorName: 'Operador' }))).status, 400);
+
+  const opened = await route.POST(post({ initialAmount: 100, operatorName: 'Caixa 1' }));
+  assert.equal(opened.status, 201);
+  assert.equal(insertCount, 1);
+  assert.equal((await opened.json()).session.status, 'open');
+
+  const reused = await route.POST(post({ initialAmount: 200, operatorName: 'Caixa 2' }));
+  assert.equal(reused.status, 200);
+  assert.equal(insertCount, 1, 'não deve criar outro turno enquanto houver um aberto');
+  assert.equal((await reused.json()).reused, true);
+});
+
 test('cancelamento e quitação de pedidos validam supervisor e impedem fraudes', async () => {
   const rpcCalls = [];
   const fixture = sessionFixture('caixa');
@@ -619,4 +687,3 @@ test('backup e restauração preservam integridade relacional, financeira e cred
   assert.equal(orphanReport.valid, false);
   assert.ok(orphanReport.issues.some(i => i.includes('referencia venda inexistente')));
 });
-

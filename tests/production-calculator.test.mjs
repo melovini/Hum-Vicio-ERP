@@ -25,6 +25,7 @@ const mockInventory = [
   { id: 'inv-ovo', name: 'Ovo Frito na Manteiga', category: 'Laticínios', unit: 'un', station: 'chapa' },
   { id: 'inv-bacon', name: 'Bacon Fatiado Crocante', category: 'Carnes', unit: 'kg', station: 'chapa' },
   { id: 'inv-pao', name: 'Pão Brioche', category: 'Padaria', unit: 'un', station: 'nenhuma' },
+  { id: 'inv-pao-frances', name: 'Pão de Hambúrguer Francês', category: 'Padaria', unit: 'un', station: 'nenhuma' },
   { id: 'inv-cheddar', name: 'Queijo Cheddar Fatiado', category: 'Laticínios', unit: 'kg', station: 'nenhuma' },
   { id: 'inv-batata', name: 'Batata Palito Congelada', category: 'Porções', unit: 'kg', station: 'fritadeira_batata' },
   { id: 'inv-onion', name: 'Anéis de Cebola Congelados', category: 'Porções', unit: 'kg', station: 'fritadeira_onion' },
@@ -60,6 +61,18 @@ const mockProducts = [
       { ingredientId: 'inv-cheddar', quantity: 0.06 },
       { ingredientId: 'inv-bacon', quantity: 0.025 },
       { ingredientId: 'inv-gas', quantity: 1 },
+    ],
+  },
+  {
+    id: 'prod-brasil-frances',
+    name: 'Brasil Francês',
+    category: 'lanche',
+    priceBalcao: 37,
+    priceIfood: 44,
+    recipe: [
+      { ingredientId: 'inv-pao-frances', quantity: 1 },
+      { ingredientId: 'inv-patty-180', quantity: 1 },
+      { ingredientId: 'inv-cheddar', quantity: 0.03 },
     ],
   },
   {
@@ -195,6 +208,20 @@ test('Caso 1: 1 lanche com 1 carne bovina -> exatamente 1 carne na chapa', () =>
   assert.equal(res.eggsCount, 0);
   assert.equal(res.breakdown.basePattiesPerBurger, 1);
   assert.equal(res.breakdown.totalPattiesAllBurgers, 1);
+});
+
+test('Regressão: Brasil Francês não contabiliza pão de hambúrguer como segunda carne', () => {
+  const res = calculateItemProduction({
+    productId: 'prod-brasil-frances',
+    productName: 'Brasil Francês',
+    quantity: 1,
+    unitPrice: 37,
+  }, mockProducts, mockInventory);
+
+  assert.equal(inferComponentType('Pão de Hambúrguer Francês', 'Padaria'), 'pao');
+  assert.equal(res.chapaPatties, 1);
+  assert.equal(res.breakdown.basePattiesPerBurger, 1);
+  assert.equal(res.isDouble, false);
 });
 
 test('Caso 2: 2 lanches simples iguais -> 2 carnes totais, sem classificar cada lanche como duplo', () => {
@@ -671,6 +698,5 @@ test('Caso 30: Pedido histórico (#3F7C35) sem campo combo, detectado por difere
   assert.equal(details.comboDetails.comboType, 'batata');
   assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo)')));
 });
-
 
 

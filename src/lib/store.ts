@@ -799,7 +799,19 @@ export async function executeParallelLoadData(
           openedAt: s.opened_at,
           closedAt: s.closed_at
         }));
-        openSession = mappedSessions.find(s => s.status === 'open') || null;
+        const remoteOpenSession = mappedSessions.find(s => s.status === 'open') || null;
+        const currentRemoteSession = globalStore.activeCashSession
+          ? mappedSessions.find(s => s.id === globalStore.activeCashSession?.id)
+          : null;
+
+        // Uma resposta vazia ou temporariamente incompleta do bootstrap não encerra um
+        // turno localmente. O caixa só é removido quando o servidor confirma que a
+        // mesma sessão foi fechada ou quando closeCaixa é acionado pelo operador.
+        openSession = remoteOpenSession || (
+          globalStore.activeCashSession?.status === 'open' && currentRemoteSession?.status !== 'closed'
+            ? globalStore.activeCashSession
+            : null
+        );
         isOpenNow = !!openSession;
         if (typeof window !== 'undefined') {
           try {
@@ -2306,48 +2318,27 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
         .lt('created_at', new Date().toISOString());
     } catch {}
 
-    try {
-      const { data } = await supabase.from('cash_sessions').insert({
-        status: 'open',
-        initial_amount: initialAmount,
-        opened_by: operatorName,
-        opened_at: new Date().toISOString()
-      }).select().single();
+    const response = await fetch('/api/cash/open', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ initialAmount, operatorName })
+    });
+    const payload = await response.json().catch(() => ({}));
 
-      if (data) {
-        const newSess: CashSession = {
-          id: data.id,
-          status: 'open',
-          initialAmount: Number(data.initial_amount) || initialAmount,
-          openedBy: data.opened_by || operatorName,
-          openedAt: data.opened_at || new Date().toISOString()
-        };
-        setActiveCashSession(newSess);
-        setAllCashSessions(prev => [newSess, ...prev.filter(s => s.id !== newSess.id)]);
-      } else {
-        const fallbackSess: CashSession = {
-          id: 'sess_' + Date.now().toString(36),
-          status: 'open',
-          initialAmount,
-          openedBy: operatorName,
-          openedAt: new Date().toISOString()
-        };
-        setActiveCashSession(fallbackSess);
-        setAllCashSessions(prev => [fallbackSess, ...prev]);
-      }
-      setIsOpen(true);
-    } catch {
-      const fallbackSess: CashSession = {
-        id: 'sess_' + Date.now().toString(36),
-        status: 'open',
-        initialAmount,
-        openedBy: operatorName,
-        openedAt: new Date().toISOString()
-      };
-      setActiveCashSession(fallbackSess);
-      setAllCashSessions(prev => [fallbackSess, ...prev]);
-      setIsOpen(true);
+    if (!response.ok || !payload?.session) {
+      throw new Error(payload?.error || 'Não foi possível abrir o turno de caixa.');
     }
+
+    const data = payload.session;
+    const newSess: CashSession = {
+      id: data.id,
+      status: 'open',
+      initialAmount: Number(data.initial_amount) || initialAmount,
+      openedBy: data.opened_by || operatorName,
+      openedAt: data.opened_at || new Date().toISOString()
+    };
+    setActiveCashSession(newSess);
+    setAllCashSessions(prev => [newSess, ...prev.filter(s => s.id !== newSess.id)]);
 
     addAuditLog(
       'ABERTURA_CAIXA',

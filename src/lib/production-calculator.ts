@@ -87,7 +87,13 @@ export function inferComponentType(name: string, category: string = ''): Compone
     return 'onion';
   }
 
-  // 8. Carnes / Hambúrgueres (bovino, blend, costela, linguiça, smash)
+  // 8. Pães. Esta verificação precisa ocorrer antes de carnes porque nomes como
+  // "Pão de Hambúrguer Francês" contêm a palavra hambúrguer, mas não são proteína.
+  if (normCat === 'paes' || normCat === 'padaria' || normName.includes('pao')) {
+    return 'pao';
+  }
+
+  // 9. Carnes / Hambúrgueres (bovino, blend, costela, linguiça, smash)
   if (
     normName.includes('hamburguer') ||
     normName.includes('hamb.') ||
@@ -100,11 +106,6 @@ export function inferComponentType(name: string, category: string = ''): Compone
     (normName.includes('carne') && !normName.includes('carne seca'))
   ) {
     return 'carne_bovina';
-  }
-
-  // 9. Pães
-  if (normCat === 'paes' || normCat === 'padaria' || normName.includes('pao')) {
-    return 'pao';
   }
 
   // 10. Laticínios

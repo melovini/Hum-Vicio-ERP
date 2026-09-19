@@ -1514,9 +1514,17 @@ export default function CaixaPage() {
           e.preventDefault();
           const amount = parseFloat(initialAmountInput) || 0;
           const operator = operatorOpenInput.trim() || 'Operador';
-          openCaixa(amount, operator);
-          setCashShiftMode(null);
-          notify({ title: 'Turno de Caixa Aberto!', description: `Fundo inicial: R$ ${amount.toFixed(2)}`, tone: 'success' });
+          try {
+            await openCaixa(amount, operator);
+            setCashShiftMode(null);
+            notify({ title: 'Turno de Caixa Aberto!', description: `Fundo inicial: R$ ${amount.toFixed(2)}`, tone: 'success' });
+          } catch (error) {
+            notify({
+              title: 'Não foi possível abrir o caixa',
+              description: error instanceof Error ? error.message : 'Verifique a conexão e tente novamente.',
+              tone: 'danger',
+            });
+          }
         }}
         isBoxOpen={isOpen}
         sessionStats={sessionStats}
