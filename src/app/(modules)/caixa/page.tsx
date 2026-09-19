@@ -984,6 +984,7 @@ export default function CaixaPage() {
                   value={targetPrepMinutes || 20}
                   onChange={e => setTargetPrepMinutes(Number(e.target.value))}
                   className="w-14 sm:w-16 accent-amber-500 cursor-pointer"
+                  aria-label="Meta de tempo da cozinha em minutos"
                   title={`Meta da Cozinha: ${targetPrepMinutes || 20} minutos`}
                 />
                 <button
