@@ -43,6 +43,7 @@ interface PosCheckoutZoneProps {
   isSubmittingOrder: boolean;
   onCheckout: () => void;
   saleChannel: 'balcao' | 'ifood';
+  customerName?: string;
 }
 
 interface PaymentMethodOption {
@@ -107,6 +108,7 @@ export default function PosCheckoutZone({
   isSubmittingOrder,
   onCheckout,
   saleChannel,
+  customerName,
 }: PosCheckoutZoneProps) {
   const isPickupPending = orderType === 'retirada' && pickupPaymentTiming === 'retirada' && saleChannel !== 'ifood';
   const cashChange = calculateCashChange(cashReceivedInput, cartTotal);
@@ -114,16 +116,18 @@ export default function PosCheckoutZone({
 
   const paymentMethods = saleChannel === 'ifood' ? IFOOD_PAYMENT_METHODS : BALCAO_PAYMENT_METHODS;
 
+  const effectiveCreditCustomer = creditCustomerInput.trim() || (customerName && customerName.trim()) || '';
+
   const isCheckoutDisabled = 
     cart.length === 0 || 
     isSubmittingOrder || 
     isCashInsufficient || 
     (saleMethod === 'consumo_funcionario' && !selectedCollaboratorId) ||
-    (saleMethod === 'fiado_vip' && !creditCustomerInput.trim());
+    (saleMethod === 'fiado_vip' && !effectiveCreditCustomer);
 
   return (
-    <div className="bg-slate-900/90 rounded-3xl p-5 border border-slate-800 flex flex-col h-full shadow-lg justify-between">
-      <div className="space-y-3.5">
+    <div className="bg-slate-900/90 rounded-3xl p-4 sm:p-5 border border-slate-800 flex flex-col h-full shadow-lg overflow-hidden">
+      <div className="flex-1 overflow-y-auto pr-1 space-y-3.5">
         <h2 className="text-sm font-bold text-white flex items-center justify-between pb-2 border-b border-slate-800">
           <span className="flex items-center gap-1.5">
             <CreditCard size={18} className="text-blue-400" /> Resumo e Pagamento
@@ -237,28 +241,40 @@ export default function PosCheckoutZone({
                     key={m.id}
                     type="button"
                     onClick={() => onSaleMethodChange(m.id)}
-                    className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-center justify-between ${
+                    className={`p-2 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between ${
                       isSelected
                         ? 'bg-emerald-600 text-white border-emerald-400/80 shadow-md ring-1 ring-emerald-400'
                         : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700 hover:bg-slate-950'
                     }`}
                   >
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <Icon size={14} className={isSelected ? 'text-white' : 'text-slate-400'} />
-                      <span className="text-xs font-bold truncate">{m.label}</span>
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {m.fee && (
-                        <span className={`text-[9px] font-mono ${isSelected ? 'text-emerald-100' : 'text-slate-500'}`}>
-                          {m.fee}
+                    {/* Linha 1: Ícone + Nome Completo + Atalho */}
+                    <div className="flex items-center justify-between w-full gap-1">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <Icon size={14} className={isSelected ? 'text-white shrink-0' : 'text-slate-400 shrink-0'} />
+                        <span className="text-xs font-black tracking-tight leading-none whitespace-nowrap overflow-hidden text-ellipsis">
+                          {m.label}
                         </span>
-                      )}
+                      </div>
                       {m.shortcut && (
-                        <kbd className={`px-1 py-0.5 text-[9px] font-mono rounded ${
-                          isSelected ? 'bg-emerald-700 text-emerald-100' : 'bg-slate-800 text-slate-400'
+                        <kbd className={`px-1 py-0.2 text-[9px] font-mono font-bold rounded shrink-0 ${
+                          isSelected ? 'bg-emerald-700 text-white' : 'bg-slate-800 text-slate-400 border border-slate-700/60'
                         }`}>
                           {m.shortcut}
                         </kbd>
+                      )}
+                    </div>
+
+                    {/* Linha 2: Detalhes / Taxa / Condição */}
+                    <div className="flex items-center justify-between w-full mt-1.5 pt-0.5">
+                      <span className={`text-[10px] font-mono leading-none ${
+                        isSelected ? 'text-emerald-100 font-bold' : 'text-slate-400 font-medium'
+                      }`}>
+                        {m.fee}
+                      </span>
+                      {isSelected && (
+                        <span className="text-[9px] font-black uppercase text-emerald-200 bg-emerald-700/80 px-1 py-0.2 rounded">
+                          ✓
+                        </span>
                       )}
                     </div>
                   </button>
@@ -366,14 +382,21 @@ export default function PosCheckoutZone({
         {saleMethod === 'fiado_vip' && !isPickupPending && (
           <div className="space-y-2 p-3 bg-slate-950 rounded-2xl border border-slate-800 text-xs">
             <div>
-              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
-                Nome do Cliente VIP:
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                  Nome do Cliente VIP:
+                </label>
+                {!creditCustomerInput && customerName?.trim() && (
+                  <span className="text-[10px] text-amber-400 font-semibold">
+                    ✓ Vinculado: {customerName.trim()}
+                  </span>
+                )}
+              </div>
               <input
                 type="text"
                 value={creditCustomerInput}
                 onChange={e => onCreditCustomerInputChange(e.target.value)}
-                placeholder="Ex: João da Silva (VIP)"
+                placeholder={customerName?.trim() ? `Padrão: ${customerName.trim()}` : "Ex: João da Silva (VIP)"}
                 className="w-full py-1.5 px-2.5 bg-slate-900 border border-slate-700 rounded-xl text-xs text-white outline-none"
               />
             </div>
@@ -438,8 +461,8 @@ export default function PosCheckoutZone({
         </div>
       </div>
 
-      {/* Resumo Financeiro e Ação de Finalização */}
-      <div className="pt-3 border-t border-slate-800 space-y-3">
+      {/* Resumo Financeiro e Ação de Finalização (Fixo no Rodapé) */}
+      <div className="pt-2.5 border-t border-slate-800 space-y-2.5 shrink-0 bg-slate-900/95">
         <div className="space-y-1 text-xs">
           <div className="flex justify-between text-slate-400">
             <span>Subtotal:</span>

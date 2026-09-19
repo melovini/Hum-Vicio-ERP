@@ -72,6 +72,92 @@ export async function POST(request: Request) {
     });
 
     if (error) {
+      const isSchemaMismatch = (error as any).code === '42703' || 
+        (typeof error.message === 'string' && (
+          error.message.includes('payment_status') || 
+          error.message.includes('has no field')
+        ));
+
+      if (isSchemaMismatch) {
+        console.warn('[Cancel Sale Fallback] RPC failed with schema mismatch. Executing resilient cancellation for saleId:', saleId, error.message);
+        const now = new Date().toISOString();
+        const cleanReason = reason.trim() || 'Cancelamento manual pelo operador';
+
+        // 1. Buscar a venda para validação
+        const { data: saleToCancel, error: fetchErr } = await db
+          .from('sales')
+          .select('id, total, status, payment_method, customer_name')
+          .eq('id', saleId)
+          .single();
+
+        if (fetchErr || !saleToCancel) {
+          throw new AccessError(404, 'Pedido não encontrado para cancelamento.');
+        }
+
+        if (saleToCancel.status === 'cancelled') {
+          throw new AccessError(400, 'Este pedido já se encontra cancelado.');
+        }
+
+        // 2. Atualização direta: o trigger PostgreSQL estornar_estoque_cancelamento() estorna os insumos e registra em inventory_movements
+        const { error: updateErr } = await db
+          .from('sales')
+          .update({
+            status: 'cancelled',
+            cancellation_reason: cleanReason,
+            cancelled_by: authorizedBy,
+            cancelled_at: now,
+            updated_at: now,
+          })
+          .eq('id', saleId);
+
+        if (updateErr) {
+          console.error('[Cancel Sale Direct Update Error]:', updateErr);
+          throw new AccessError(500, 'Falha ao atualizar status do pedido para cancelado.');
+        }
+
+        // 3. Registro resiliente em payment_events
+        try {
+          await db.from('payment_events').insert({
+            sale_id: saleId,
+            cash_session_id: null,
+            amount: saleToCancel.total,
+            payment_method: saleToCancel.payment_method || 'dinheiro',
+            event_type: 'estorno_cancelamento',
+            operator_id: session.collaboratorId,
+            operator_name: authorizedBy,
+            notes: cleanReason,
+            created_at: now
+          });
+        } catch (peErr) {
+          console.warn('[Payment Events Insert Non-fatal]:', peErr);
+        }
+
+        // 4. Registro de auditoria no servidor
+        try {
+          await db.from('audit_logs').insert({
+            action: 'CANCELAMENTO_VENDA',
+            details: `Venda #${saleId.slice(0, 8)} no valor de R$ ${Number(saleToCancel.total).toFixed(2)} cancelada por ${authorizedBy}. Motivo: ${cleanReason}${notes ? ` (Obs: ${notes.trim()})` : ''}`,
+            operator: authorizedBy,
+            previous_value: 'Concluída',
+            new_value: 'Cancelada',
+            created_at: now
+          });
+        } catch (auditErr) {
+          console.warn('[Audit Log Insert Non-fatal]:', auditErr);
+        }
+
+        return Response.json({
+          success: true,
+          saleId,
+          cancelledAt: now,
+          cancelledBy: authorizedBy,
+          reason: cleanReason
+        }, {
+          status: 200,
+          headers: { 'Cache-Control': 'no-store', 'Content-Type': 'application/json' },
+        });
+      }
+
       console.error('[Cancel Sale Error]:', error);
       throw new AccessError(400, error.message || 'Falha ao cancelar pedido.');
     }

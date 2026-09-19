@@ -133,7 +133,8 @@ INSERT INTO products (name, category, price_balcao, price_ifood) VALUES
   ('Batata Frita Palito 180g', 'porcao', 12.00, 16.00),
   ('Anéis de Cebola 180g', 'porcao', 14.00, 18.00),
   ('Combo: Batata + Bebida', 'combo', 14.00, 18.00),
-  ('Combo: Anéis de Cebola + Bebida', 'combo', 16.00, 20.00)
+  ('Combo: Anéis de Cebola + Bebida', 'combo', 16.00, 20.00),
+  ('Combo: Batata Cheddar e Bacon + Bebida', 'combo', 20.00, 26.00)
 ON CONFLICT DO NOTHING;
 
 -- Bebidas

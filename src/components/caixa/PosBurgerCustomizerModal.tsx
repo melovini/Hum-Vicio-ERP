@@ -58,22 +58,73 @@ export default function PosBurgerCustomizerModal({
     }
   }, [product, isBeefBurger]);
 
-  // Combos promocionais dinâmicos a partir do catálogo real (sem combos hardcoded)
+  // Combos promocionais dinâmicos a partir do catálogo real com garantia dos 3 combos essenciais da casa
   const availableCombos = useMemo(() => {
     const dbCombos = products.filter(p => p.isActive !== false && p.category === 'combo');
-    return dbCombos.map(c => {
+
+    const STANDARD_COMBOS = [
+      {
+        key: 'combo_batata',
+        name: 'Combo: Batata + Bebida',
+        priceBalcao: 14.00,
+        priceIfood: 18.00,
+        displayName: '🍟 Batata + Bebida'
+      },
+      {
+        key: 'combo_onion',
+        name: 'Combo: Anéis de Cebola + Bebida',
+        priceBalcao: 16.00,
+        priceIfood: 20.00,
+        displayName: '🧅 Anéis de Cebola + Bebida'
+      },
+      {
+        key: 'combo_cheddar_bacon',
+        name: 'Combo: Batata Cheddar e Bacon + Bebida',
+        priceBalcao: 20.00,
+        priceIfood: 26.00,
+        displayName: '🍟🥓 Batata Cheddar/Bacon + Refri'
+      }
+    ];
+
+    const result: { id: string; rawName: string; displayName: string; price: number }[] = [];
+    const matchedStandardKeys = new Set<string>();
+
+    for (const c of dbCombos) {
+      const norm = c.name.toLowerCase();
       const price = saleChannel === 'ifood' ? (c.priceIfood ?? c.priceBalcao) : c.priceBalcao;
-      const isBatata = c.name.toLowerCase().includes('batata');
-      const isAneis = c.name.toLowerCase().includes('anéis') || c.name.toLowerCase().includes('aneis');
-      const icon = isBatata ? '🍟' : isAneis ? '🧅' : '🥤';
+      let icon = '🥤';
+      if (norm.includes('cheddar') && norm.includes('bacon')) {
+        icon = '🍟🥓🧀';
+        matchedStandardKeys.add('combo_cheddar_bacon');
+      } else if (norm.includes('batata')) {
+        icon = '🍟';
+        matchedStandardKeys.add('combo_batata');
+      } else if (norm.includes('anéis') || norm.includes('aneis') || norm.includes('cebola')) {
+        icon = '🧅';
+        matchedStandardKeys.add('combo_onion');
+      }
       const cleanName = c.name.replace(/^Combo:\s*/i, '').trim();
-      return {
+      result.push({
         id: c.id,
         rawName: c.name,
         displayName: `${icon} ${cleanName}`,
         price,
-      };
-    });
+      });
+    }
+
+    for (const std of STANDARD_COMBOS) {
+      if (!matchedStandardKeys.has(std.key)) {
+        const price = saleChannel === 'ifood' ? std.priceIfood : std.priceBalcao;
+        result.push({
+          id: std.key,
+          rawName: std.name,
+          displayName: std.displayName,
+          price,
+        });
+      }
+    }
+
+    return result;
   }, [products, saleChannel]);
 
   const selectedComboObj = useMemo(() => {

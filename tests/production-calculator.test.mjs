@@ -9,6 +9,8 @@ const {
   resolveRecipeUnitQuantity,
   parseAdditionalString,
   extractMeatPoint,
+  getBurgerPrintDetails,
+  extractDrinkName,
 } = createLoader()('src/lib/production-calculator.ts');
 
 // Insumos mockados representando o inventário real
@@ -141,6 +143,27 @@ const mockProducts = [
       { ingredientId: 'inv-patty-180', quantity: 1 },
       { ingredientId: 'inv-batata', quantity: 0.15 },
     ],
+  },
+  {
+    id: 'prod-mexico',
+    name: 'México',
+    category: 'lanche',
+    priceBalcao: 43,
+    priceIfood: 52,
+    recipe: [
+      { ingredientId: 'inv-pao', quantity: 1 },
+      { ingredientId: 'inv-patty-180', quantity: 1 },
+      { ingredientId: 'inv-cheddar', quantity: 0.03 },
+      { ingredientId: 'inv-bacon', quantity: 0.02 },
+    ],
+  },
+  {
+    id: 'prod-mexico-duplo',
+    name: 'México Duplo',
+    category: 'lanche',
+    priceBalcao: 52,
+    priceIfood: 62,
+    recipe: [], // Sem receita cadastrada na tabela recipes! Deve herdar de México
   },
 ];
 
@@ -421,3 +444,204 @@ test('Caso 18: Diagnóstico e breakdown expõe rastreabilidade completa', () => 
   assert.equal(res.breakdown.totalEggsAllBurgers, 2);
   assert.equal(res.meatPoint, 'Ao Ponto');
 });
+
+test('Caso 19: getBurgerPrintDetails extrai ficha técnica de montagem e exclui itens não alimentares', () => {
+  const item = {
+    productId: 'prod-brasil',
+    productName: 'Brasil',
+    quantity: 1,
+    unitPrice: 35,
+  };
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+
+  assert.ok(details.recipeIngredients.includes('Pão Brioche'));
+  assert.ok(details.recipeIngredients.includes('Hambúrguer Bovino 180g'));
+  assert.ok(details.recipeIngredients.includes('Queijo Cheddar Fatiado'));
+  assert.ok(details.recipeIngredients.includes('Bacon Fatiado Crocante'));
+  // Não alimentares (gás, energia, embalagem) não devem aparecer na montagem da comanda
+  assert.equal(details.recipeIngredients.some(i => i.toLowerCase().includes('gás')), false);
+  // Ponto da carne padrão para hambúrguer na chapa sem ponto explícito
+  assert.equal(details.effectiveMeatPoint, 'AO PONTO');
+  assert.ok(details.chapaItems.some(c => c.includes('1x Carne [AO PONTO]')));
+});
+
+test('Caso 20: getBurgerPrintDetails exclui ingredientes marcados como retirada (removals)', () => {
+  const item = {
+    productId: 'prod-brasil',
+    productName: 'Brasil',
+    quantity: 1,
+    unitPrice: 35,
+    removals: ['Bacon Fatiado Crocante'],
+  };
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+
+  assert.ok(details.recipeIngredients.includes('Pão Brioche'));
+  assert.ok(details.recipeIngredients.includes('Hambúrguer Bovino 180g'));
+  assert.equal(details.recipeIngredients.includes('Bacon Fatiado Crocante'), false);
+});
+
+test('Caso 21: getBurgerPrintDetails com combo de batata detalha fritadeira', () => {
+  const item = {
+    productId: 'prod-brasil',
+    productName: 'Brasil',
+    quantity: 2,
+    unitPrice: 35,
+    combo: 'Batata e Bebida',
+  };
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+
+  assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo)')));
+  assert.ok(details.comboDetails);
+  assert.equal(details.comboDetails.comboType, 'batata');
+  assert.ok(details.comboDetails.title.includes('BATATA'));
+  assert.ok(details.comboDetails.fryerItem.includes('Batata'));
+});
+
+test('Caso 22: Combo Anéis de Cebola + Bebida detalha fritadeira de cebola e bebida', () => {
+  const item = {
+    productId: 'prod-brasil',
+    productName: 'Brasil',
+    quantity: 1,
+    unitPrice: 35,
+    combo: 'Combo: Anéis de Cebola + Bebida',
+  };
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+
+  assert.ok(details.comboDetails, 'comboDetails deve estar preenchido');
+  assert.equal(details.comboDetails.comboType, 'onion');
+  assert.ok(details.comboDetails.title.includes('ANÉIS DE CEBOLA'));
+  assert.ok(details.comboDetails.fryerItem.includes('Anéis de Cebola'));
+  assert.ok(details.fryerItems.some(f => f.includes('Onion (Combo)')));
+});
+
+test('Caso 23: Combo Batata Cheddar e Bacon + Bebida detalha fritadeira, chapa (bacon/cheddar) e montagem', () => {
+  const item = {
+    productId: 'prod-simples',
+    productName: 'Burger Simples',
+    quantity: 1,
+    unitPrice: 30,
+    combo: 'Combo: Batata Cheddar e Bacon + Bebida',
+  };
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+
+  assert.ok(details.comboDetails, 'comboDetails deve estar preenchido');
+  assert.equal(details.comboDetails.comboType, 'batata_cheddar_bacon');
+  assert.ok(details.comboDetails.title.includes('BATATA CHEDDAR E BACON'));
+  assert.ok(details.comboDetails.fryerItem.includes('Batata'));
+  assert.ok(details.comboDetails.chapaItem.includes('Cheddar') && details.comboDetails.chapaItem.includes('Bacon'));
+  // Chapeiro recebe bacon crocante para a batata na estação de chapa
+  assert.ok(details.chapaItems.some(c => c.includes('Bacon Crocante (Batata Cheddar & Bacon)')));
+  assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo - Cheddar & Bacon)')));
+});
+
+test('Caso 24: extractDrinkName identifica bebidas comuns, texto entre parênteses e observações', () => {
+  assert.equal(extractDrinkName('Combo: Batata + Bebida (Coca Zero)', ''), 'Coca Zero');
+  assert.equal(extractDrinkName('Combo: Batata + Bebida', 'Refri: Guaraná Antarctica'), 'Guaraná Antarctica');
+  assert.equal(extractDrinkName('Combo: Batata + Bebida', 'Cliente pediu coca cola'), 'Coca-Cola');
+  assert.equal(extractDrinkName('Combo: Batata + Bebida', 'com fanta uva'), 'Fanta Uva');
+  assert.equal(extractDrinkName('Combo: Batata + Bebida', ''), 'Refrigerante / Bebida do Combo (Conferir e Enviar)');
+});
+
+test('Caso 25: México Duplo (sem receita própria cadastrada) herda receita de México com 2x carnes', () => {
+  const item = {
+    productId: 'prod-mexico-duplo',
+    productName: 'México Duplo',
+    quantity: 1,
+    unitPrice: 52,
+  };
+
+  const prod = calculateItemProduction(item, mockProducts, mockInventory);
+  assert.equal(prod.chapaPatties, 2, 'México Duplo deve ter 2 carnes na chapa');
+  assert.equal(prod.isDouble, true, 'Deve ser marcado como Duplo');
+  assert.equal(prod.breakdown.resolvedFromRecipe, true, 'Deve resolver a partir da receita base herdada');
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+  assert.ok(details.recipeIngredients.includes('Pão Brioche'), 'Montagem deve conter Pão Brioche');
+  assert.ok(details.recipeIngredients.includes('Hambúrguer Bovino 180g'), 'Montagem deve conter Hambúrguer');
+  assert.ok(details.recipeIngredients.includes('Queijo Cheddar Fatiado'), 'Montagem deve conter Queijo Cheddar');
+  assert.ok(details.chapaItems.some(c => c.includes('2x Carnes (Duplo)')), 'Chapa deve exibir 2x Carnes (Duplo)');
+});
+
+test('Caso 26: Pedido simulado #3F7C35 com México Duplo e combo de batata e bebida', () => {
+  const item = {
+    productId: 'prod-mexico-duplo',
+    productName: 'México Duplo',
+    quantity: 1,
+    unitPrice: 62,
+    combo: 'Combo: Batata + Bebida',
+    additionals: [{ name: 'Salada (Alface, Tomate, Cebola)', price: 0 }],
+  };
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+
+  // Chapa
+  assert.ok(details.chapaItems.some(c => c.includes('2x Carnes (Duplo)')), 'Deve listar 2x Carnes na chapa');
+  // Montagem
+  assert.ok(details.recipeIngredients.length > 0, 'Montagem não pode estar vazia');
+  // Fritadeira e Combo
+  assert.ok(details.comboDetails, 'comboDetails deve estar preenchido');
+  assert.equal(details.comboDetails.comboType, 'batata');
+  assert.ok(details.comboDetails.title.includes('BATATA PALITO'));
+  assert.ok(details.comboDetails.fryerItem.includes('Batata'));
+  assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo)')), 'Fritadeira deve conter Batata (Combo)');
+});
+
+test('Caso 27: México Duplo com combo informado nas observações (notes)', () => {
+  const item = {
+    productId: 'prod-mexico-duplo',
+    productName: 'México Duplo',
+    quantity: 1,
+    unitPrice: 62,
+    notes: 'COMBO BATATA E BEBIDA (COCA ZERO)',
+  };
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+
+  assert.ok(details.comboDetails, 'Deve detectar o combo a partir das observações');
+  assert.equal(details.comboDetails.comboType, 'batata');
+  assert.equal(details.comboDetails.drinkItem, 'Coca Zero', 'Deve extrair o refrigerante das observações');
+  assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo)')));
+});
+
+test('Caso 28: Pedido com combo vindo como adicional estruturado em item.additionals', () => {
+  const item = {
+    productId: 'prod-mexico-duplo',
+    productName: 'México Duplo',
+    quantity: 1,
+    unitPrice: 62,
+    additionals: [
+      { name: 'Combo: Batata + Bebida', price: 14 }
+    ],
+  };
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+
+  assert.ok(details.comboDetails, 'Deve detectar o combo a partir do adicional');
+  assert.equal(details.comboDetails.comboType, 'batata');
+  assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo)')));
+});
+
+test('Caso 29: Pedido com Combo Batata Cheddar e Bacon nas observações', () => {
+  const item = {
+    productId: 'prod-mexico-duplo',
+    productName: 'México Duplo',
+    quantity: 1,
+    unitPrice: 68,
+    notes: 'COMBO BATATA CHEDDAR E BACON E BEBIDA - GUARANA',
+  };
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+
+  assert.ok(details.comboDetails, 'Deve detectar combo cheddar & bacon nas observações');
+  assert.equal(details.comboDetails.comboType, 'batata_cheddar_bacon');
+  assert.equal(details.comboDetails.drinkItem, 'Guaraná Antarctica', 'Deve extrair Guaraná');
+  assert.ok(details.chapaItems.some(c => c.includes('Bacon Crocante (Batata Cheddar & Bacon)')));
+  assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo - Cheddar & Bacon)')));
+});
+
+

@@ -1,8 +1,9 @@
 'use client';
 import { useState } from 'react';
-import { Sale, SaleItem } from '@/lib/store';
+import { Sale, SaleItem, useInventory, Product, InventoryItem } from '@/lib/store';
 import { Printer, X, ChefHat, Receipt, CheckCircle, Copy, AlertTriangle, GitCompare } from 'lucide-react';
 import { printThermalElement } from '@/lib/thermal-printer';
+import { getBurgerPrintDetails } from '@/lib/production-calculator';
 
 export interface OrderDiff {
   added: SaleItem[];
@@ -10,13 +11,17 @@ export interface OrderDiff {
   modified: { item: SaleItem; oldNotes?: string; newNotes?: string }[];
 }
 
-interface ReceiptModalProps {
+export interface ReceiptModalProps {
   sale: Sale | null;
   diff?: OrderDiff;
+  products?: Product[];
+  inventoryItems?: InventoryItem[];
   onClose: () => void;
 }
 
-export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps) {
+export { getBurgerPrintDetails };
+
+export default function ReceiptModal({ sale, diff, products, inventoryItems, onClose }: ReceiptModalProps) {
   const [type, setType] = useState<'cozinha' | 'cliente' | 'diferencial'>(diff || sale?.orderDiff ? 'diferencial' : 'cozinha');
   const [copiedRaw, setCopiedRaw] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
@@ -24,6 +29,10 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
   if (!sale) return null;
 
   const activeDiff = diff || sale.orderDiff;
+
+  const inventory = useInventory('cozinha');
+  const allProducts = (products && products.length > 0) ? products : (inventory.products || []);
+  const allInventoryItems = (inventoryItems && inventoryItems.length > 0) ? inventoryItems : (inventory.items || []);
 
   const handlePrint = () => {
     if (isPrinting) return;
@@ -55,7 +64,37 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
       text += subDivider;
       text += 'ITENS DIFERENCIAIS:\n';
       activeDiff.added.forEach(item => {
+        const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
         text += `[+] ${item.quantity}x ${item.productName} (ADICIONADO)\n`;
+        if (details.recipeIngredients.length > 0) {
+          text += `    MONTAGEM: ${details.recipeIngredients.join(', ')}\n`;
+        }
+        if (details.chapaItems.length > 0) {
+          text += `    * CHAPA: ${details.chapaItems.join(' + ')}\n`;
+        }
+        if (details.fryerItems.length > 0) {
+          text += `    * FRITADEIRA: ${details.fryerItems.join(' + ')}\n`;
+        }
+        if (details.comboDetails) {
+          text += `    ------------------------------------\n`;
+          text += `    >> ${details.comboDetails.title} <<\n`;
+          text += `    * FRITADEIRA: ${details.comboDetails.fryerItem.toUpperCase()}\n`;
+          if (details.comboDetails.chapaItem) {
+            text += `    * CHAPA/MONTAGEM: ${details.comboDetails.chapaItem.toUpperCase()}\n`;
+          }
+          if (details.comboDetails.drinkItem) {
+            text += `    * BEBIDA: ${details.comboDetails.drinkItem.toUpperCase()}\n`;
+          }
+          text += `    ------------------------------------\n`;
+        } else if (item.combo) {
+          text += `    + COMBO: ${item.combo.toUpperCase()}\n`;
+        }
+        if (item.additionals && item.additionals.length > 0) {
+          text += `    + ADICIONAIS: ${item.additionals.map(a => a.name).join(', ')}\n`;
+        }
+        if (item.removals && item.removals.length > 0) {
+          text += `    *** 🚫 ATENCAO RETIRAR: ${item.removals.join(', ').toUpperCase()} ***\n`;
+        }
         if (item.notes) text += `    *** OBS: ${item.notes.toUpperCase()} ***\n`;
       });
       activeDiff.removed.forEach(item => {
@@ -86,16 +125,42 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
       text += subDivider;
       text += 'ITENS PARA PREPARO:\n';
       sale.items.forEach(item => {
+        const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
         text += `[${item.quantity}x] ${item.productName}\n`;
-        if (item.combo) text += `    + COMBO: ${item.combo}\n`;
-        if (item.meatPoint) text += `    * PONTO: ${item.meatPoint.toUpperCase()} *\n`;
+        if (details.recipeIngredients.length > 0) {
+          text += `    MONTAGEM: ${details.recipeIngredients.join(', ')}\n`;
+        }
+        if (details.chapaItems.length > 0) {
+          text += `    * CHAPA: ${details.chapaItems.join(' + ')}\n`;
+        }
+        if (details.fryerItems.length > 0) {
+          text += `    * FRITADEIRA: ${details.fryerItems.join(' + ')}\n`;
+        }
+        if (details.comboDetails) {
+          text += `    ------------------------------------\n`;
+          text += `    >> ${details.comboDetails.title} <<\n`;
+          text += `    * FRITADEIRA: ${details.comboDetails.fryerItem.toUpperCase()}\n`;
+          if (details.comboDetails.chapaItem) {
+            text += `    * CHAPA/MONTAGEM: ${details.comboDetails.chapaItem.toUpperCase()}\n`;
+          }
+          if (details.comboDetails.drinkItem) {
+            text += `    * BEBIDA: ${details.comboDetails.drinkItem.toUpperCase()}\n`;
+          }
+          text += `    ------------------------------------\n`;
+        } else if (item.combo) {
+          text += `    + COMBO: ${item.combo.toUpperCase()}\n`;
+        }
+        if (details.effectiveMeatPoint && details.chapaItems.length === 0) {
+          text += `    * PONTO: ${details.effectiveMeatPoint.toUpperCase()} *\n`;
+        }
         if (item.additionals && item.additionals.length > 0) {
           text += `    + ADICIONAIS: ${item.additionals.map(a => a.name).join(', ')}\n`;
         }
         if (item.removals && item.removals.length > 0) {
-          text += `    - RETIRAR: ${item.removals.join(', ').toUpperCase()}\n`;
+          text += `    *** 🚫 ATENCAO RETIRAR: ${item.removals.join(', ').toUpperCase()} ***\n`;
         }
         if (item.notes) text += `    *** OBS: ${item.notes.toUpperCase()} ***\n`;
+        text += subDivider;
       });
       text += divider;
       text += '        *** AGILIDADE & QUALIDADE ***   \n';
@@ -107,10 +172,16 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
       text += subDivider;
       text += 'ITEM                            QTD  R$ TOTAL\n';
       sale.items.forEach(item => {
+        const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
         const itemTot = ((item.unitPrice || 0) * item.quantity).toFixed(2);
         const namePad = item.productName.slice(0, 26).padEnd(28, ' ');
         text += `${namePad} ${item.quantity}x ${itemTot}\n`;
-        if (item.combo) text += `  + ${item.combo.toUpperCase()}\n`;
+        if (details.comboDetails) {
+          text += `  + ${details.comboDetails.title}\n`;
+          text += `    (Acomp: ${details.comboDetails.fryerItem} + ${details.comboDetails.drinkItem})\n`;
+        } else if (item.combo) {
+          text += `  + ${item.combo.toUpperCase()}\n`;
+        }
         if (item.meatPoint) text += `  * PONTO: ${item.meatPoint.toUpperCase()} *\n`;
         if (item.additionals && item.additionals.length > 0) {
           text += `  + ADICIONAIS: ${item.additionals.map(a => a.name).join(', ')}\n`;
@@ -238,16 +309,71 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                   {activeDiff.added.length > 0 && (
                     <div className="space-y-1.5 pt-1">
                       <p className="text-[11px] font-black text-black uppercase">ITENS ADICIONADOS (+):</p>
-                      {activeDiff.added.map((item, idx) => (
-                        <div key={idx} className="pl-2 border-l-2 border-black font-bold">
-                          <span className="text-sm">[+] {item.quantity}x {item.productName} (ADICIONADO)</span>
-                          {item.notes && (
-                            <p className="text-xs font-black bg-black text-white px-1.5 py-0.5 mt-1 inline-block uppercase">
-                              *** OBS: {item.notes.toUpperCase()} ***
-                            </p>
-                          )}
-                        </div>
-                      ))}
+                      {activeDiff.added.map((item, idx) => {
+                        const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
+                        return (
+                          <div key={idx} className="pl-2 border-l-2 border-black font-bold space-y-0.5">
+                            <span className="text-sm">[+] {item.quantity}x {item.productName} (ADICIONADO)</span>
+                            {details.recipeIngredients.length > 0 && (
+                              <p className="text-[11px] font-semibold text-black leading-tight">
+                                <span className="font-extrabold uppercase">Montagem: </span>
+                                {details.recipeIngredients.join(' • ')}
+                              </p>
+                            )}
+                            {details.chapaItems.length > 0 && (
+                              <p className="text-xs font-black text-black">
+                                🔥 CHAPA: {details.chapaItems.join(' + ')}
+                              </p>
+                            )}
+                            {details.fryerItems.length > 0 && (
+                              <p className="text-xs font-black text-black">
+                                🍟 FRITADEIRA: {details.fryerItems.join(' + ')}
+                              </p>
+                            )}
+                            {/* Combo Detalhado */}
+                            {details.comboDetails ? (
+                              <div className="my-1.5 p-1.5 bg-black text-white rounded-none border border-black space-y-0.5">
+                                <p className="font-black text-xs uppercase tracking-wide text-white flex items-center gap-1">
+                                  <span>{details.comboDetails.icon}</span>
+                                  <span>{details.comboDetails.title}</span>
+                                </p>
+                                <div className="pl-1.5 border-l-2 border-white text-[11px] font-semibold space-y-0.5 text-white">
+                                  <p>🍟 <span className="font-black uppercase">Fritadeira:</span> {details.comboDetails.fryerItem}</p>
+                                  {details.comboDetails.chapaItem && (
+                                    <p>🔥 <span className="font-black uppercase">Chapa/Montagem:</span> {details.comboDetails.chapaItem}</p>
+                                  )}
+                                  {details.comboDetails.drinkItem && (
+                                    <p>🥤 <span className="font-black uppercase">Bebida:</span> {details.comboDetails.drinkItem}</p>
+                                  )}
+                                </div>
+                              </div>
+                            ) : item.combo ? (
+                              <p className="text-xs font-bold text-black">
+                                + COMBO: {item.combo.toUpperCase()}
+                              </p>
+                            ) : null}
+                            {item.additionals && item.additionals.length > 0 && (
+                              <p className="text-xs font-bold text-black">
+                                + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
+                              </p>
+                            )}
+                            {item.removals && item.removals.length > 0 && (
+                              <div>
+                                <span className="bg-black text-white px-2 py-0.5 text-xs font-black uppercase tracking-wider inline-block">
+                                  🚫 RETIRAR: {item.removals.join(', ').toUpperCase()}
+                                </span>
+                              </div>
+                            )}
+                            {item.notes && (
+                              <div>
+                                <p className="text-xs font-black bg-black text-white px-1.5 py-0.5 mt-1 inline-block uppercase">
+                                  *** OBS: {item.notes.toUpperCase()} ***
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
 
@@ -311,38 +437,101 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                 <div className="py-2 border-b-2 border-dashed border-black">
                   <p className="font-bold mb-2 uppercase text-xs">ITENS DO PEDIDO:</p>
                   <div className="space-y-3 text-sm">
-                    {sale.items.map((item, idx) => (
-                      <div key={idx} className="border-b border-dashed border-black pb-2 last:border-0">
-                        <div className="flex justify-between items-start font-bold">
-                          <span className="text-base font-black text-black">[{item.quantity}x] {item.productName}</span>
+                    {sale.items.map((item, idx) => {
+                      const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
+                      return (
+                        <div key={idx} className="border-b-2 border-dashed border-black pb-2.5 last:border-0 last:pb-0 space-y-1">
+                          <div className="flex justify-between items-start font-bold">
+                            <span className="text-base font-black text-black leading-tight">
+                              [{item.quantity}x] {item.productName}
+                            </span>
+                          </div>
+
+                          {/* Ficha Técnica / Montagem da Receita */}
+                          {details.recipeIngredients.length > 0 && (
+                            <div className="pl-2 border-l-2 border-black text-[11px] font-semibold text-black leading-tight">
+                              <span className="font-black uppercase">Montagem: </span>
+                              <span>{details.recipeIngredients.join(' • ')}</span>
+                            </div>
+                          )}
+
+                          {/* Estação Chapa */}
+                          {details.chapaItems.length > 0 && (
+                            <p className="text-xs font-black text-black pl-2">
+                              🔥 CHAPA: {details.chapaItems.join(' + ')}
+                            </p>
+                          )}
+
+                          {/* Estação Fritadeira */}
+                          {details.fryerItems.length > 0 && (
+                            <p className="text-xs font-black text-black pl-2">
+                              🍟 FRITADEIRA: {details.fryerItems.join(' + ')}
+                            </p>
+                          )}
+
+                          {/* Combo Detalhado com Destaque Máximo para Chapeiro e Montador */}
+                          {details.comboDetails ? (
+                            <div className="my-1.5 p-2 bg-black text-white rounded-none border border-black space-y-1">
+                              <div className="flex items-center gap-1.5 font-black text-xs uppercase tracking-wider text-white">
+                                <span>{details.comboDetails.icon}</span>
+                                <span>{details.comboDetails.title}</span>
+                              </div>
+                              <div className="pl-2 border-l-2 border-white text-[11px] font-semibold space-y-0.5 text-white">
+                                <p>
+                                  🍟 <span className="font-black uppercase">Fritadeira:</span> {details.comboDetails.fryerItem}
+                                </p>
+                                {details.comboDetails.chapaItem && (
+                                  <p>
+                                    🔥 <span className="font-black uppercase">Chapa/Montagem:</span> {details.comboDetails.chapaItem}
+                                  </p>
+                                )}
+                                {details.comboDetails.drinkItem && (
+                                  <p>
+                                    🥤 <span className="font-black uppercase">Bebida:</span> {details.comboDetails.drinkItem}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          ) : item.combo ? (
+                            <p className="text-xs font-bold pl-2 text-black">
+                              + COMBO: {item.combo.toUpperCase()}
+                            </p>
+                          ) : null}
+
+                          {/* Ponto da Carne (se não incluso acima) */}
+                          {details.effectiveMeatPoint && details.chapaItems.length === 0 && (
+                            <p className="text-xs font-black pl-2 text-black">
+                              🥩 PONTO: {details.effectiveMeatPoint.toUpperCase()}
+                            </p>
+                          )}
+
+                          {/* Adicionais */}
+                          {item.additionals && item.additionals.length > 0 && (
+                            <p className="text-xs font-black pl-2 text-black">
+                              + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
+                            </p>
+                          )}
+
+                          {/* Retiradas com Destaque Máximo (Fundo Preto / Texto Branco Invertido) */}
+                          {item.removals && item.removals.length > 0 && (
+                            <div>
+                              <span className="bg-black text-white px-2 py-1 text-xs font-black uppercase tracking-wider inline-block">
+                                🚫 RETIRAR: {item.removals.join(', ').toUpperCase()}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Observações */}
+                          {item.notes && (
+                            <div>
+                              <p className="text-xs font-black bg-black text-white px-1.5 py-0.5 mt-0.5 inline-block uppercase">
+                                *** OBS: {item.notes.toUpperCase()} ***
+                              </p>
+                            </div>
+                          )}
                         </div>
-                        {item.combo && (
-                          <p className="text-xs font-bold pl-3">
-                            + {item.combo.toUpperCase()}
-                          </p>
-                        )}
-                        {item.meatPoint && (
-                          <p className="text-xs font-black pl-3 text-black">
-                            * PONTO: {item.meatPoint.toUpperCase()} *
-                          </p>
-                        )}
-                        {item.additionals && item.additionals.length > 0 && (
-                          <p className="text-xs font-bold pl-3">
-                            + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
-                          </p>
-                        )}
-                        {item.removals && item.removals.length > 0 && (
-                          <p className="text-xs font-black pl-3 text-black underline">
-                            - RETIRAR: {item.removals.join(', ').toUpperCase()}
-                          </p>
-                        )}
-                        {item.notes && (
-                          <p className="text-xs font-black bg-black text-white px-1.5 py-0.5 mt-1 ml-2 inline-block">
-                            *** OBS: {item.notes.toUpperCase()} ***
-                          </p>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -369,25 +558,37 @@ export default function ReceiptModal({ sale, diff, onClose }: ReceiptModalProps)
                     <span>QTD x VALOR</span>
                   </div>
                   <div className="space-y-2">
-                    {sale.items.map((item, idx) => (
-                      <div key={idx} className="flex justify-between items-start text-xs">
-                        <div className="pr-2">
-                          <p className="font-bold">{item.productName}</p>
-                          {item.combo && <p className="text-[10px] font-bold text-black pl-2 uppercase">+ {item.combo.toUpperCase()}</p>}
-                          {item.meatPoint && <p className="text-[10px] font-bold text-black pl-2 uppercase">* PONTO: {item.meatPoint.toUpperCase()}</p>}
-                          {item.additionals && item.additionals.length > 0 && (
-                            <p className="text-[10px] font-bold text-black pl-2 uppercase">+ {item.additionals.map(a => a.name.toUpperCase()).join(', ')}</p>
-                          )}
-                          {item.removals && item.removals.length > 0 && (
-                            <p className="text-[10px] font-bold text-black pl-2 uppercase">- RETIRAR: {item.removals.join(', ').toUpperCase()}</p>
-                          )}
-                          {item.notes && <p className="text-[10px] font-black text-black pl-2 uppercase">*** OBS: {item.notes.toUpperCase()} ***</p>}
+                    {sale.items.map((item, idx) => {
+                      const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
+                      return (
+                        <div key={idx} className="flex justify-between items-start text-xs">
+                          <div className="pr-2">
+                            <p className="font-bold">{item.productName}</p>
+                            {details.comboDetails ? (
+                              <div className="text-[10px] font-bold text-black pl-2 uppercase">
+                                <p>+ {details.comboDetails.title}</p>
+                                <p className="text-[9px] text-black font-semibold pl-1.5">
+                                  • {details.comboDetails.fryerItem} + {details.comboDetails.drinkItem}
+                                </p>
+                              </div>
+                            ) : item.combo ? (
+                              <p className="text-[10px] font-bold text-black pl-2 uppercase">+ {item.combo.toUpperCase()}</p>
+                            ) : null}
+                            {item.meatPoint && <p className="text-[10px] font-bold text-black pl-2 uppercase">* PONTO: {item.meatPoint.toUpperCase()}</p>}
+                            {item.additionals && item.additionals.length > 0 && (
+                              <p className="text-[10px] font-bold text-black pl-2 uppercase">+ {item.additionals.map(a => a.name.toUpperCase()).join(', ')}</p>
+                            )}
+                            {item.removals && item.removals.length > 0 && (
+                              <p className="text-[10px] font-bold text-black pl-2 uppercase">- RETIRAR: {item.removals.join(', ').toUpperCase()}</p>
+                            )}
+                            {item.notes && <p className="text-[10px] font-black text-black pl-2 uppercase">*** OBS: {item.notes.toUpperCase()} ***</p>}
+                          </div>
+                          <span className="font-bold shrink-0">
+                            {item.quantity}x R$ {(item.unitPrice || 0).toFixed(2)}
+                          </span>
                         </div>
-                        <span className="font-bold shrink-0">
-                          {item.quantity}x R$ {(item.unitPrice || 0).toFixed(2)}
-                        </span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
 

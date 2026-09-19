@@ -10,9 +10,11 @@ ALTER TABLE public.sale_items
   ADD COLUMN IF NOT EXISTS production_snapshot jsonb,
   ADD COLUMN IF NOT EXISTS recipe_version integer DEFAULT 1,
   ADD COLUMN IF NOT EXISTS combo_id text,
+  ADD COLUMN IF NOT EXISTS combo text,
   ADD COLUMN IF NOT EXISTS combo_price numeric(10,2),
   ADD COLUMN IF NOT EXISTS meat_point text,
-  ADD COLUMN IF NOT EXISTS removals jsonb DEFAULT '[]'::jsonb;
+  ADD COLUMN IF NOT EXISTS removals jsonb DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS notes text;
 
 -- 2. ATUALIZAR TRIGGER DE ESTORNO DE ESTOQUE NO CANCELAMENTO (V05)
 CREATE OR REPLACE FUNCTION public.estornar_estoque_cancelamento() RETURNS TRIGGER AS $$
@@ -176,7 +178,7 @@ BEGIN
       INSERT INTO public.sale_items (
         sale_id, product_id, product_name, quantity, unit_price,
         original_price, is_gift, gift_reason, gift_notes, additionals,
-        production_snapshot, recipe_version, combo_id, combo_price, meat_point, removals
+        production_snapshot, recipe_version, combo_id, combo, combo_price, meat_point, removals, notes
       ) VALUES (
         v_sale_id, v_item_product_id, v_item_name, v_item_qty, v_item_price,
         (v_item->>'originalPrice')::numeric,
@@ -187,9 +189,11 @@ BEGIN
         v_item->'productionSnapshot',
         COALESCE((v_item->>'recipeVersion')::integer, 1),
         v_item->>'comboId',
+        v_item->>'combo',
         (v_item->>'comboPrice')::numeric,
         v_item->>'meatPoint',
-        COALESCE(v_item->'removals', '[]'::jsonb)
+        COALESCE(v_item->'removals', '[]'::jsonb),
+        v_item->>'notes'
       );
 
       -- Baixa dos insumos cadastrados na Ficha Técnica (Receita)

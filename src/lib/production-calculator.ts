@@ -1,6 +1,6 @@
-import { KitchenStation, InventoryItem, Product, SaleItem, ProductionBreakdown, ItemProductionDetails } from './store/types';
+import { KitchenStation, InventoryItem, Product, SaleItem, ProductionBreakdown, ItemProductionDetails, ComboStationDetails } from './store/types';
 
-export type { ProductionBreakdown, ItemProductionDetails };
+export type { ProductionBreakdown, ItemProductionDetails, ComboStationDetails };
 
 export type ComponentType =
   | 'carne_bovina'      // Discos de hambúrguer bovino, costela, linguiça, smash
@@ -350,8 +350,15 @@ export function calculateItemProduction(
   inventoryItems: InventoryItem[] = []
 ): ItemProductionDetails {
   // Se o item já possui composição confirmada salva (Etapa 4), respeita o snapshot original imutável
-  if (item.productionSnapshot) {
-    return item.productionSnapshot;
+  // EXCETO se o snapshot estiver com 0 carnes em lanche conhecido sem retirada de carne
+  if (item.productionSnapshot && item.productionSnapshot.chapaPatties !== undefined) {
+    const checkName = (item.productName || '').toLowerCase();
+    const isBurger = checkName.includes('burger') || checkName.includes('lanche') || checkName.includes('mexico') || checkName.includes('argentina') || checkName.includes('brasil') || checkName.includes('alemanha') || checkName.includes('israel') || checkName.includes('wakanda') || checkName.includes('duplo');
+    const removalsStr = Array.isArray(item.removals) ? item.removals.join(' ').toLowerCase() : '';
+    const explicitlyRemovedMeat = removalsStr.includes('sem carne') || removalsStr.includes('sem burger');
+    if (!isBurger || item.productionSnapshot.chapaPatties > 0 || explicitlyRemovedMeat) {
+      return item.productionSnapshot;
+    }
   }
 
   const rawName = (item.productName || '').trim();
@@ -376,7 +383,7 @@ export function calculateItemProduction(
     .trim();
   const normBaseName = normalizeProductionString(baseCleanName);
 
-  // Localiza produto base cadastrado
+  // Localiza produto cadastrado
   const matchedProduct = products.find(p =>
     (item.productId && p.id === item.productId) ||
     normalizeProductionString(p.name) === normBaseName
@@ -391,11 +398,41 @@ export function calculateItemProduction(
   let recipeOnionsPerBurger = 0;
   let resolvedFromRecipe = false;
 
-  // 1. Resolução dos componentes do produto base via Receita Oficial
-  if (matchedProduct && Array.isArray(matchedProduct.recipe) && matchedProduct.recipe.length > 0) {
+  // Se o matchedProduct não possui receita cadastrada, ou se é um lanche variante (Duplo, Triplo),
+  // buscar o produto base para herdar a receita oficial (ex: "México Duplo" herda "México")
+  let effectiveRecipe = (matchedProduct && Array.isArray(matchedProduct.recipe) && matchedProduct.recipe.length > 0)
+    ? matchedProduct.recipe
+    : undefined;
+
+  let isInheritedFromBase = false;
+  const isDuploVariant = normBaseName.includes('duplo') || normBaseName.includes('dupla') || normBaseName.includes('2x');
+  const isTriploVariant = normBaseName.includes('triplo') || normBaseName.includes('tripla') || normBaseName.includes('3x');
+
+  if (!effectiveRecipe) {
+    const baseCleanWithoutVariant = normBaseName
+      .replace(/\b(duplo|dupla|triplo|tripla|smash duplo|smash triplo|duplo burger)\b/gi, '')
+      .trim();
+
+    const baseProduct = products.find(p =>
+      normalizeProductionString(p.name) === baseCleanWithoutVariant
+    );
+
+    if (baseProduct && Array.isArray(baseProduct.recipe) && baseProduct.recipe.length > 0) {
+      effectiveRecipe = baseProduct.recipe;
+      isInheritedFromBase = true;
+    }
+  }
+
+  // Multiplica as carnes apenas se a receita for herdada da base (se o próprio produto tem receita, a receita é soberana)
+  const pattyMultiplier = isInheritedFromBase
+    ? (isTriploVariant ? 3 : (isDuploVariant ? 2 : 1))
+    : 1;
+
+  // 1. Resolução dos componentes do produto base via Receita Oficial (própria ou herdada)
+  if (effectiveRecipe && effectiveRecipe.length > 0) {
     resolvedFromRecipe = true;
 
-    for (const r of matchedProduct.recipe) {
+    for (const r of effectiveRecipe) {
       const inv = inventoryById.get(r.ingredientId);
       const ingName = inv?.name || '';
       const normIng = normalizeProductionString(ingName);
@@ -419,13 +456,13 @@ export function calculateItemProduction(
       );
 
       if (compType === 'carne_bovina') {
-        basePattiesPerBurger += unitQty;
+        basePattiesPerBurger += (unitQty * pattyMultiplier);
       } else if (compType === 'ovo') {
         eggsPerBurger += unitQty;
       } else if (compType === 'bacon') {
         baconChapaPerBurger += unitQty;
       } else if (compType === 'frango_empanado') {
-        chickenPerBurger += unitQty;
+        chickenPerBurger += (unitQty * (isDuploVariant ? 2 : 1));
       } else if (compType === 'queijo_empanado') {
         cheeseBreadedPerBurger += unitQty;
       } else if (compType === 'batata') {
@@ -436,15 +473,14 @@ export function calculateItemProduction(
     }
   } else {
     // Fallback restrito e explícito quando o produto preparado não tem receita cadastrada
-    // Não inventa carnes duplas: respeita 1 carne padrão por lanche artesanal conhecido
     if (
       normBaseName.includes('estados unidos') ||
       normBaseName === 'eua' ||
       normBaseName.includes('frango empanado')
     ) {
-      chickenPerBurger = 1;
+      chickenPerBurger = isDuploVariant ? 2 : 1;
     } else if (normBaseName.includes('argentina') && normBaseName.includes('empanado')) {
-      basePattiesPerBurger = 1;
+      basePattiesPerBurger = isDuploVariant ? 2 : 1;
       cheeseBreadedPerBurger = 1;
     } else if (normBaseName.includes('israel')) {
       cheeseBreadedPerBurger = 1;
@@ -458,12 +494,7 @@ export function calculateItemProduction(
       normBaseName.includes('burger') ||
       normBaseName.includes('hamb')
     ) {
-      // Se for explicitamente um lanche duplo cadastrado no catálogo sem receita
-      if (normBaseName.includes('duplo')) {
-        basePattiesPerBurger = 2;
-      } else {
-        basePattiesPerBurger = 1;
-      }
+      basePattiesPerBurger = isDuploVariant ? 2 : 1;
     } else if (normBaseName.includes('batata') || normBaseName.includes('fritas')) {
       recipeBatatasPerBurger = 1;
     } else if (normBaseName.includes('onion') || normBaseName.includes('anel') || normBaseName.includes('aneis')) {
@@ -612,35 +643,71 @@ export function calculateItemProduction(
   // CRITÉRIO REAL: Tem 2 ou mais carnes na composição por lanche. NÃO depende do nome conter 'duplo'.
   const isDouble = netPattiesPerBurger >= 2;
 
-  // 7. Combos de Batata e Onion Rings
+  // 7. Combos de Batata e Onion Rings (detecção em combo, notes, additionals e nome)
   const normCombo = normalizeProductionString(combo);
-  const normComboInName = normalizeProductionString(rawName);
+  const additionalsNames = Array.isArray(item.additionals)
+    ? item.additionals.map(a => a.name).join(' ')
+    : '';
+  const allComboSearchText = normalizeProductionString(
+    `${combo} ${rawName} ${notes} ${additionalsNames}`
+  );
 
-  let isComboBatata =
-    normCombo.includes('batata') ||
-    normComboInName.includes('combo batata') ||
-    normComboInName.includes('batata e bebida') ||
-    normComboInName.includes('batata + bebida');
+  let isComboCheddarBacon =
+    allComboSearchText.includes('cheddar') &&
+    allComboSearchText.includes('bacon') &&
+    (allComboSearchText.includes('combo') || allComboSearchText.includes('batata') || allComboSearchText.includes('bebida'));
 
   let isComboOnion =
-    normCombo.includes('onion') ||
-    normCombo.includes('anel') ||
-    normCombo.includes('cebola') ||
-    normComboInName.includes('combo onion') ||
-    normComboInName.includes('combo aneis') ||
-    normComboInName.includes('combo anéis') ||
-    normComboInName.includes('aneis de cebola + bebida');
+    allComboSearchText.includes('combo onion') ||
+    allComboSearchText.includes('combo aneis') ||
+    allComboSearchText.includes('combo anéis') ||
+    allComboSearchText.includes('combo anel') ||
+    allComboSearchText.includes('aneis de cebola') ||
+    allComboSearchText.includes('anéis de cebola') ||
+    allComboSearchText.includes('cebola empanada') ||
+    allComboSearchText.includes('onion rings') ||
+    ((allComboSearchText.includes('onion') || allComboSearchText.includes('anel') || allComboSearchText.includes('aneis') || allComboSearchText.includes('anéis') || allComboSearchText.includes('cebola empanada')) &&
+      (allComboSearchText.includes('combo') || allComboSearchText.includes('bebida') || allComboSearchText.includes('refri')));
+
+  let isComboBatata =
+    allComboSearchText.includes('combo batata') ||
+    allComboSearchText.includes('batata e bebida') ||
+    allComboSearchText.includes('batata + bebida') ||
+    allComboSearchText.includes('batata & bebida') ||
+    allComboSearchText.includes('combo com batata') ||
+    (allComboSearchText.includes('combo') && (allComboSearchText.includes('batata') || allComboSearchText.includes('frita'))) ||
+    isComboCheddarBacon;
 
   if (item.comboId) {
     const matchedComboProduct = products.find(p => p.id === item.comboId);
-    if (matchedComboProduct && Array.isArray(matchedComboProduct.recipe) && matchedComboProduct.recipe.length > 0) {
-      for (const r of matchedComboProduct.recipe) {
-        const inv = inventoryById.get(r.ingredientId);
-        const compType = inferComponentType(inv?.name || '', inv?.category);
-        if (compType === 'batata') isComboBatata = true;
-        if (compType === 'onion') isComboOnion = true;
+    if (matchedComboProduct) {
+      const normCName = normalizeProductionString(matchedComboProduct.name);
+      if (normCName.includes('cheddar') && normCName.includes('bacon')) {
+        isComboCheddarBacon = true;
+        isComboBatata = true;
+      }
+      if (normCName.includes('batata')) isComboBatata = true;
+      if (normCName.includes('onion') || normCName.includes('anel') || normCName.includes('cebola')) isComboOnion = true;
+
+      if (Array.isArray(matchedComboProduct.recipe) && matchedComboProduct.recipe.length > 0) {
+        for (const r of matchedComboProduct.recipe) {
+          const inv = inventoryById.get(r.ingredientId);
+          const compType = inferComponentType(inv?.name || '', inv?.category);
+          if (compType === 'batata') isComboBatata = true;
+          if (compType === 'onion') isComboOnion = true;
+        }
       }
     }
+  }
+
+  // Se o item tiver 'combo' genérico explícito e não for onion, trata como batata (padrão da casa)
+  if (!isComboBatata && !isComboOnion && (normCombo.includes('combo') || allComboSearchText.includes('combo'))) {
+    isComboBatata = true;
+  }
+
+  // Se o combo for Batata Cheddar e Bacon, o chapeiro prepara o bacon crocante para a batata
+  if (isComboCheddarBacon) {
+    baconChapaPerBurger += 1;
   }
 
   let fryerBatatasCombo = 0;
@@ -695,5 +762,345 @@ export function calculateItemProduction(
     fryerOnionsCombo,
     fryerOnionsAvulsa,
     breakdown
+  };
+}
+
+export interface BurgerPrintDetails {
+  matchedProduct?: Product;
+  production: ItemProductionDetails;
+  recipeIngredients: string[];
+  effectiveMeatPoint?: string;
+  chapaItems: string[];
+  fryerItems: string[];
+  comboDetails?: ComboStationDetails;
+}
+
+function normalizeStandardDrink(candidate: string): string {
+  const norm = normalizeProductionString(candidate);
+  if (norm === 'coca zero' || norm.includes('coca zero')) return 'Coca Zero';
+  if (norm.includes('coca cola zero')) return 'Coca-Cola Zero';
+  if (norm.includes('coca cola') || norm.includes('coca')) return 'Coca-Cola';
+  if (norm.includes('guarana zero') || norm.includes('antarctica zero')) return 'Guaraná Antarctica Zero';
+  if (norm.includes('guarana') || norm.includes('antarctica')) return 'Guaraná Antarctica';
+  if (norm.includes('fanta uva')) return 'Fanta Uva';
+  if (norm.includes('fanta laranja') || norm === 'fanta') return 'Fanta Laranja';
+  if (norm.includes('sprite zero')) return 'Sprite Zero';
+  if (norm.includes('sprite')) return 'Sprite';
+  if (norm.includes('schweppes')) return 'Schweppes';
+  if (norm.includes('agua com gas')) return 'Água com Gás';
+  if (norm.includes('agua sem gas') || norm.includes('agua mineral')) return 'Água Mineral';
+  return candidate;
+}
+
+/**
+ * Identifica o nome da bebida a partir do texto do combo, observações ou adicionais.
+ */
+export function extractDrinkName(comboStr: string = '', notesStr: string = '', additionalsStr: string = ''): string {
+  const fullText = `${comboStr} ${notesStr} ${additionalsStr}`;
+
+  // Verificar texto entre parênteses, ex: "Combo: Batata + Bebida (Coca Zero)" ou "Batata + Bebida (Guaraná)"
+  const parenMatch = comboStr.match(/\((.*?)\)/) || notesStr.match(/\((.*?)\)/);
+  if (parenMatch && parenMatch[1]) {
+    const candidate = parenMatch[1].trim();
+    if (candidate.length > 1) return normalizeStandardDrink(candidate);
+  }
+
+  // Verificar prefixo explícito nas observações ou combo, ex: "Refri: Coca Zero" ou "Bebida: Fanta Laranja"
+  const prefixMatch = fullText.match(/(?:refri(?:gerante)?|bebida)\s*[:=-]\s*([a-zA-Z0-9\s-]+?)(?:;|,|\.|$)/i);
+  if (prefixMatch && prefixMatch[1]) {
+    const candidate = prefixMatch[1].trim();
+    if (candidate.length > 1) return normalizeStandardDrink(candidate);
+  }
+
+  // Identificar refrigerantes e bebidas comuns
+  const norm = normalizeProductionString(fullText);
+  if (norm.includes('coca cola zero') || norm.includes('coca zero')) return 'Coca-Cola Zero';
+  if (norm.includes('coca cola') || norm.includes('coca')) return 'Coca-Cola';
+  if (norm.includes('guarana zero') || norm.includes('antarctica zero')) return 'Guaraná Antarctica Zero';
+  if (norm.includes('guarana') || norm.includes('antarctica')) return 'Guaraná Antarctica';
+  if (norm.includes('fanta uva')) return 'Fanta Uva';
+  if (norm.includes('fanta laranja') || norm.includes('fanta')) return 'Fanta Laranja';
+  if (norm.includes('sprite zero')) return 'Sprite Zero';
+  if (norm.includes('sprite')) return 'Sprite';
+  if (norm.includes('schweppes')) return 'Schweppes';
+  if (norm.includes('agua com gas')) return 'Água com Gás';
+  if (norm.includes('agua sem gas') || norm.includes('agua mineral') || norm.includes('agua')) return 'Água Mineral';
+  if (norm.includes('suco')) return 'Suco';
+
+  return 'Refrigerante / Bebida do Combo (Conferir e Enviar)';
+}
+
+/**
+ * Consolida os detalhes completos de montagem, ficha técnica, ponto da carne
+ * e estações de preparo para a comanda física e digital da cozinha.
+ */
+export function getBurgerPrintDetails(
+  item: SaleItem,
+  products: Product[] = [],
+  inventoryItems: InventoryItem[] = []
+): BurgerPrintDetails {
+  const normItemName = normalizeProductionString(item.productName || '');
+  const matchedProduct = products.find(p =>
+    (item.productId && p.id === item.productId) ||
+    normalizeProductionString(p.name) === normItemName ||
+    normItemName.startsWith(normalizeProductionString(p.name))
+  );
+
+  let effectiveRecipe = (matchedProduct && Array.isArray(matchedProduct.recipe) && matchedProduct.recipe.length > 0)
+    ? matchedProduct.recipe
+    : undefined;
+
+  let effectiveDescription = matchedProduct?.description;
+
+  // Herança de receita para lanches variantes (ex: "México Duplo" herda a montagem de "México")
+  if (!effectiveRecipe) {
+    const baseCleanWithoutVariant = normItemName
+      .replace(/\b(duplo|dupla|triplo|tripla|smash duplo|smash triplo|duplo burger)\b/gi, '')
+      .trim();
+
+    const baseProduct = products.find(p =>
+      normalizeProductionString(p.name) === baseCleanWithoutVariant
+    );
+
+    if (baseProduct) {
+      if (Array.isArray(baseProduct.recipe) && baseProduct.recipe.length > 0) {
+        effectiveRecipe = baseProduct.recipe;
+      }
+      if (!effectiveDescription && baseProduct.description) {
+        effectiveDescription = baseProduct.description;
+      }
+    }
+  }
+
+  const production = calculateItemProduction(item, products, inventoryItems);
+  const qty = typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1;
+  const matchedComboProduct = item.comboId ? products.find(p => p.id === item.comboId) : undefined;
+  const rawCombo = (item.combo || matchedComboProduct?.name || '').trim();
+  const normCombo = normalizeProductionString(rawCombo);
+
+  // Ficha técnica / Ingredientes da Montagem (receita cadastrada ou herdada)
+  let recipeIngredients: string[] = [];
+
+  if (effectiveRecipe && effectiveRecipe.length > 0) {
+    const removalsList = Array.isArray(item.removals)
+      ? item.removals.map(r => normalizeProductionString(r))
+      : [];
+
+    for (const r of effectiveRecipe) {
+      const inv = inventoryItems.find(i => i.id === r.ingredientId);
+      if (!inv) continue;
+      const ingName = inv.name || '';
+      const compType = inferComponentType(ingName, inv.category || '');
+      // Pular itens operacionais não alimentares (sacolas, embalagens, guardanapos, gás)
+      if (compType === 'nao_alimentar') continue;
+
+      const normIng = normalizeProductionString(ingName);
+      // Pular se foi explicitamente removido
+      const isRemoved = removalsList.some(rem => normIng.includes(rem) || rem.includes(normIng));
+      if (!isRemoved) {
+        recipeIngredients.push(ingName);
+      }
+    }
+  } else if (effectiveDescription) {
+    recipeIngredients = [effectiveDescription.trim()];
+  }
+
+  // Ponto da Carne: se não foi especificado e tem hambúrguer bovino na chapa, padrão é "AO PONTO"
+  let effectiveMeatPoint = item.meatPoint || production.meatPoint;
+  if (!effectiveMeatPoint && production.chapaPatties > 0) {
+    effectiveMeatPoint = 'AO PONTO';
+  }
+
+  // Detecção e Estruturação de Combos em todas as fontes (combo, notes, additionals, productName)
+  const additionalsNames = Array.isArray(item.additionals)
+    ? item.additionals.map(a => a.name).join(' ')
+    : '';
+  const allComboSearchText = normalizeProductionString(
+    `${rawCombo} ${normItemName} ${item.notes || ''} ${additionalsNames}`
+  );
+
+  let isComboCheddarBacon =
+    allComboSearchText.includes('cheddar') &&
+    allComboSearchText.includes('bacon') &&
+    (allComboSearchText.includes('combo') || allComboSearchText.includes('batata') || allComboSearchText.includes('bebida'));
+
+  let isComboOnion =
+    allComboSearchText.includes('combo onion') ||
+    allComboSearchText.includes('combo aneis') ||
+    allComboSearchText.includes('combo anéis') ||
+    allComboSearchText.includes('combo anel') ||
+    allComboSearchText.includes('aneis de cebola') ||
+    allComboSearchText.includes('anéis de cebola') ||
+    allComboSearchText.includes('cebola empanada') ||
+    allComboSearchText.includes('onion rings') ||
+    ((allComboSearchText.includes('onion') || allComboSearchText.includes('anel') || allComboSearchText.includes('aneis') || allComboSearchText.includes('anéis') || allComboSearchText.includes('cebola empanada')) &&
+      (allComboSearchText.includes('combo') || allComboSearchText.includes('bebida') || allComboSearchText.includes('refri')));
+
+  let isComboBatata =
+    allComboSearchText.includes('combo batata') ||
+    allComboSearchText.includes('batata e bebida') ||
+    allComboSearchText.includes('batata + bebida') ||
+    allComboSearchText.includes('batata & bebida') ||
+    allComboSearchText.includes('combo com batata') ||
+    (allComboSearchText.includes('combo') && (allComboSearchText.includes('batata') || allComboSearchText.includes('frita'))) ||
+    isComboCheddarBacon;
+
+  if (matchedComboProduct) {
+    const normCName = normalizeProductionString(matchedComboProduct.name);
+    if (normCName.includes('cheddar') && normCName.includes('bacon')) {
+      isComboCheddarBacon = true;
+      isComboBatata = true;
+    }
+    if (normCName.includes('batata')) isComboBatata = true;
+    if (normCName.includes('onion') || normCName.includes('anel') || normCName.includes('aneis') || normCName.includes('cebola empanada')) isComboOnion = true;
+  }
+
+  // Se o item tiver 'combo' genérico (ex: "Combo", "Combo 1") e não for onion, trata como batata (padrão)
+  if (!isComboBatata && !isComboOnion && (normCombo.includes('combo') || allComboSearchText.includes('combo'))) {
+    isComboBatata = true;
+  }
+
+  const hasCombo = Boolean(
+    rawCombo || 
+    isComboCheddarBacon || 
+    isComboOnion || 
+    isComboBatata || 
+    production.fryerBatatasCombo > 0 || 
+    production.fryerOnionsCombo > 0
+  );
+
+  let comboDetails: ComboStationDetails | undefined = undefined;
+
+  if (hasCombo) {
+    const drinkName = extractDrinkName(rawCombo, item.notes || '', additionalsNames);
+    const drinkLabel = qty > 1 ? `${qty}x ${drinkName}` : drinkName;
+
+    if (isComboCheddarBacon) {
+      comboDetails = {
+        rawCombo: rawCombo || 'Combo: Batata Cheddar e Bacon + Bebida',
+        comboType: 'batata_cheddar_bacon',
+        title: 'COMBO: BATATA CHEDDAR E BACON + BEBIDA',
+        icon: '🍟🥓🧀🥤',
+        fryerItem: `${qty}x Batata Palito / Frita (Combo)`,
+        chapaItem: `${qty > 1 ? `${qty}x ` : ''}Cobertura Cheddar Cremoso + Bacon Crocante na Batata`,
+        drinkItem: drinkLabel,
+        summary: `${qty}x Batata Cheddar & Bacon + Bebida`
+      };
+    } else if (isComboOnion) {
+      comboDetails = {
+        rawCombo: rawCombo || 'Combo: Anéis de Cebola + Bebida',
+        comboType: 'onion',
+        title: 'COMBO: ANÉIS DE CEBOLA + BEBIDA',
+        icon: '🧅🥤',
+        fryerItem: `${qty}x Porção de Anéis de Cebola (Combo)`,
+        chapaItem: undefined,
+        drinkItem: drinkLabel,
+        summary: `${qty}x Anéis de Cebola + Bebida`
+      };
+    } else if (isComboBatata || production.fryerBatatasCombo > 0) {
+      comboDetails = {
+        rawCombo: rawCombo || 'Combo: Batata + Bebida',
+        comboType: 'batata',
+        title: 'COMBO: BATATA PALITO + BEBIDA',
+        icon: '🍟🥤',
+        fryerItem: `${qty}x Batata Palito / Frita (Combo)`,
+        chapaItem: undefined,
+        drinkItem: drinkLabel,
+        summary: `${qty}x Batata Palito + Bebida`
+      };
+    } else if (rawCombo) {
+      const cleanCombo = rawCombo.replace(/^combo:\s*/i, '').trim();
+      comboDetails = {
+        rawCombo,
+        comboType: 'custom',
+        title: `COMBO: ${cleanCombo.toUpperCase()}`,
+        icon: '🍟🥤',
+        fryerItem: `${qty}x Acompanhamento do Combo`,
+        chapaItem: undefined,
+        drinkItem: drinkLabel,
+        summary: `${qty}x ${cleanCombo}`
+      };
+    }
+  }
+
+  // Resumo de Estação Chapa
+  const chapaItems: string[] = [];
+  if (production.chapaPatties > 0) {
+    const burgerLabel = production.chapaPatties > 1
+      ? (production.isDouble ? `${production.chapaPatties}x Carnes (Duplo)` : `${production.chapaPatties}x Carnes`)
+      : '1x Carne';
+    chapaItems.push(`${burgerLabel}${effectiveMeatPoint ? ` [${effectiveMeatPoint.toUpperCase()}]` : ''}`);
+  }
+  if (production.eggsCount > 0) {
+    chapaItems.push(`${production.eggsCount}x ${production.eggsCount > 1 ? 'Ovos' : 'Ovo'}`);
+  }
+  if (production.baconChapaCount > 0) {
+    if (isComboCheddarBacon) {
+      const burgerHasBacon = (production.baconChapaCount - qty) > 0;
+      if (burgerHasBacon) {
+        chapaItems.push('Bacon Crocante (Lanche)');
+      }
+      chapaItems.push('Bacon Crocante (Batata Cheddar & Bacon)');
+    } else {
+      chapaItems.push('Bacon Crocante');
+    }
+  }
+
+  // Resumo de Estação Fritadeira
+  const fryerItems: string[] = [];
+  if (production.fryerChicken > 0) {
+    fryerItems.push(`${production.fryerChicken}x Frango Empanado`);
+  }
+  if (production.fryerCheese > 0) {
+    fryerItems.push(`${production.fryerCheese}x Queijo Empanado`);
+  }
+  if (production.fryerBatatasCombo > 0) {
+    if (isComboCheddarBacon) {
+      fryerItems.push(`${production.fryerBatatasCombo}x Batata (Combo - Cheddar & Bacon)`);
+    } else {
+      fryerItems.push(`${production.fryerBatatasCombo}x Batata (Combo)`);
+    }
+  }
+  if (production.fryerBatatasAvulsa > 0) {
+    fryerItems.push(`${production.fryerBatatasAvulsa}x Porção Batata`);
+  }
+  if (production.fryerOnionsCombo > 0) {
+    fryerItems.push(`${production.fryerOnionsCombo}x Onion (Combo)`);
+  }
+  if (production.fryerOnionsAvulsa > 0) {
+    fryerItems.push(`${production.fryerOnionsAvulsa}x Porção Onion`);
+  }
+
+  // Garantia de sincronização de estações: se há comboDetails, adiciona na Fritadeira/Chapa caso não estejam presentes
+  if (comboDetails) {
+    if (comboDetails.comboType === 'batata_cheddar_bacon') {
+      if (!fryerItems.some(f => f.toLowerCase().includes('batata'))) {
+        fryerItems.push(`${qty}x Batata (Combo - Cheddar & Bacon)`);
+      }
+      if (!chapaItems.some(c => c.toLowerCase().includes('bacon crocante'))) {
+        chapaItems.push('Bacon Crocante (Batata Cheddar & Bacon)');
+      }
+    } else if (comboDetails.comboType === 'onion') {
+      if (!fryerItems.some(f => f.toLowerCase().includes('onion') || f.toLowerCase().includes('cebola'))) {
+        fryerItems.push(`${qty}x Porção de Anéis de Cebola (Combo)`);
+      }
+    } else if (comboDetails.comboType === 'batata') {
+      if (!fryerItems.some(f => f.toLowerCase().includes('batata'))) {
+        fryerItems.push(`${qty}x Batata (Combo)`);
+      }
+    }
+  }
+
+  return {
+    matchedProduct,
+    production: {
+      ...production,
+      comboDetails
+    },
+    recipeIngredients,
+    effectiveMeatPoint,
+    chapaItems,
+    fryerItems,
+    comboDetails
   };
 }

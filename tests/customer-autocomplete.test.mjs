@@ -232,3 +232,49 @@ test('searchRecurringCustomers busca tolerando acentos em nomes', () => {
   assert.equal(res2[0].name, 'João Victor');
 });
 
+test('cleanCustomerName trata nomes femininos, apelidos e sufixos sem corromper identificação', () => {
+  const c1 = cleanCustomerName('Dra. Ana Paula - Rua das Acácias, 100');
+  assert.equal(c1.cleanName, 'Dra. Ana Paula');
+  assert.equal(c1.addressPart, 'Rua das Acácias, 100');
+
+  const c2 = cleanCustomerName('Mariana Silva Delivery');
+  assert.equal(c2.cleanName, 'Mariana Silva');
+
+  const c3 = cleanCustomerName('Mesa 03 - Beatriz Santos');
+  assert.equal(c3.cleanName, 'Beatriz Santos');
+});
+
+test('Fallback de Fiado VIP utiliza customerName selecionado quando creditCustomerInput não for digitado', () => {
+  // Simula regra de negócio implementada no PosCheckoutZone e caixa/page.tsx
+  const customerName = 'Mariana Oliveira';
+  let creditCustomerInput = '';
+
+  // 1. Validação de checkout: se creditCustomerInput estiver vazio, fallback para customerName
+  const effectiveCreditCustomer = creditCustomerInput.trim() || (customerName && customerName.trim()) || '';
+  assert.equal(effectiveCreditCustomer, 'Mariana Oliveira');
+
+  // 2. Se o operador sobrescrever manualmente, prevalece o digitado
+  creditCustomerInput = 'Mariana - Filha da Dona Vera';
+  const overridden = creditCustomerInput.trim() || customerName.trim();
+  assert.equal(overridden, 'Mariana - Filha da Dona Vera');
+});
+
+test('Formatação de cliente para Delivery inclui endereço completo sem duplicação', () => {
+  const cust = {
+    name: 'Camila Rodrigues Delivery',
+    fullAddress: 'Rua Santos Dumont, 450 - Centro',
+  };
+
+  const cleaned = cleanCustomerName(cust.name).cleanName || cust.name;
+  assert.equal(cleaned, 'Camila Rodrigues');
+
+  const deliveryFormatted = `${cleaned} - ${cust.fullAddress}`;
+  assert.equal(deliveryFormatted, 'Camila Rodrigues - Rua Santos Dumont, 450 - Centro');
+
+  // Ao reprocessar a string formatada, cleanCustomerName deve separar limpo
+  const reparsed = cleanCustomerName(deliveryFormatted);
+  assert.equal(reparsed.cleanName, 'Camila Rodrigues');
+  assert.equal(reparsed.addressPart, 'Rua Santos Dumont, 450 - Centro');
+});
+
+

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useId } from 'react';
-import { User, Phone, MapPin, Star, X, Sparkles, Loader2 } from 'lucide-react';
+import { User, Phone, MapPin, Star, X, Sparkles, Loader2, CheckCircle2 } from 'lucide-react';
 import { 
   CustomerProfile, 
   CustomerSearchResult, 
@@ -36,9 +36,11 @@ export default function PosCustomerAutocomplete({
   const [activeIndex, setActiveIndex] = useState(-1);
   const [isSearchingCloud, setIsSearchingCloud] = useState(false);
   const [customerCacheVersion, setCustomerCacheVersion] = useState(0);
+  const [selectedCustomerMeta, setSelectedCustomerMeta] = useState<CustomerSearchResult | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const justSelectedRef = useRef(false);
   const listboxId = useId();
 
   // Escuta atualizações de clientes no IndexedDB ou sincronização em segundo plano
@@ -64,6 +66,7 @@ export default function PosCustomerAutocomplete({
   }, []);
 
   // Busca instantânea em memória local (0ms) + busca leve e debounced no Supabase
+  // Controlado para não reabrir a lista quando o operador acabou de selecionar uma opção
   useEffect(() => {
     const query = value.trim();
     if (query.length < 2) {
@@ -73,22 +76,22 @@ export default function PosCustomerAutocomplete({
       return;
     }
 
+    if (justSelectedRef.current) {
+      return;
+    }
+
     // 1. Resposta IMEDIATA a partir do cache local (sub-milissegundo)
     const stored = getStoredImportedCustomers();
     const instantResults = searchRecurringCustomers(query, customerProfiles, stored, 8);
     setResults(instantResults);
-    if (instantResults.length > 0) {
-      setIsOpen(true);
-    }
 
     // 2. Consulta leve em background na nuvem com debounce de 120ms
     const timer = setTimeout(async () => {
       try {
         setIsSearchingCloud(true);
         const cloudResults = await searchCustomersFast(query, customerProfiles, { limit: 8, fetchCloud: true });
-        if (cloudResults && cloudResults.length > 0) {
+        if (cloudResults && cloudResults.length > 0 && !justSelectedRef.current) {
           setResults(cloudResults);
-          setIsOpen(true);
         }
       } catch {
         // Mantém os resultados locais sem interromper o usuário
@@ -101,6 +104,8 @@ export default function PosCustomerAutocomplete({
   }, [value, customerProfiles, customerCacheVersion]);
 
   const handleSelect = (cust: CustomerSearchResult) => {
+    justSelectedRef.current = true;
+    setSelectedCustomerMeta(cust);
     const cleaned = cleanCustomerName(cust.name).cleanName || cust.name;
     let finalValue = cleaned;
     if (orderType === 'delivery' && cust.fullAddress) {
@@ -165,20 +170,29 @@ export default function PosCustomerAutocomplete({
 
   return (
     <div ref={containerRef} className="relative flex-1 flex items-center">
-      <User size={14} className="absolute left-3 text-slate-500 pointer-events-none z-10" />
+      {selectedCustomerMeta ? (
+        <CheckCircle2 size={14} className="absolute left-3 text-emerald-400 pointer-events-none z-10 animate-in fade-in zoom-in-75 duration-150" />
+      ) : (
+        <User size={14} className="absolute left-3 text-slate-500 pointer-events-none z-10" />
+      )}
 
       <input
         ref={inputRef}
         type="text"
         value={value}
         onChange={e => {
-          onChange(e.target.value);
-          if (!isOpen && e.target.value.trim().length >= 2) {
+          justSelectedRef.current = false;
+          setSelectedCustomerMeta(null);
+          const newVal = e.target.value;
+          onChange(newVal);
+          if (newVal.trim().length >= 2) {
             setIsOpen(true);
+          } else {
+            setIsOpen(false);
           }
         }}
         onFocus={() => {
-          if (value.trim().length >= 2 && results.length > 0) {
+          if (!justSelectedRef.current && value.trim().length >= 2 && results.length > 0) {
             setIsOpen(true);
           }
         }}
@@ -190,7 +204,12 @@ export default function PosCustomerAutocomplete({
         aria-expanded={isOpen}
         aria-controls={listboxId}
         aria-label="Nome do cliente"
-        className="w-full pl-8 pr-8 py-2 bg-slate-950 border border-slate-700/80 focus:border-amber-500 rounded-xl text-xs text-white placeholder-slate-500 outline-none transition-all shadow-inner"
+        title={selectedCustomerMeta ? `Cliente Vinculado: ${selectedCustomerMeta.name}` : undefined}
+        className={`w-full pl-8 pr-8 py-2 bg-slate-950 border rounded-xl text-xs text-white placeholder-slate-500 outline-none transition-all shadow-inner ${
+          selectedCustomerMeta 
+            ? 'border-emerald-500/60 ring-1 ring-emerald-500/20' 
+            : 'border-slate-700/80 focus:border-amber-500'
+        }`}
         autoComplete="off"
         spellCheck="false"
       />
@@ -204,6 +223,8 @@ export default function PosCustomerAutocomplete({
           <button
             type="button"
             onClick={() => {
+              justSelectedRef.current = false;
+              setSelectedCustomerMeta(null);
               onChange('');
               setIsOpen(false);
               setResults([]);

@@ -90,6 +90,23 @@ function saveProductionOverrides(updates: { id: string; status: ProductionStatus
   } catch {}
 }
 
+function removeProductionOverrides(ids: string[]) {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedProductionOverrides();
+    let changed = false;
+    ids.forEach(id => {
+      if (map[id]) {
+        delete map[id];
+        changed = true;
+      }
+    });
+    if (changed) {
+      localStorage.setItem('hum_vicio_prod_status_map', JSON.stringify(map));
+    }
+  } catch {}
+}
+
 function getSavedMinStockMap(): Record<string, number> {
   if (typeof window === 'undefined') return {};
   try {
@@ -208,6 +225,30 @@ export function savePickupPendingOverride(saleId: string, pickupData: any): void
     const map = getSavedPickupPendingSalesMap();
     map[saleId] = { ...(map[saleId] || {}), ...pickupData };
     localStorage.setItem(STORAGE_PICKUP_PENDING_KEY, JSON.stringify(map));
+  } catch {}
+}
+
+// === CONTROLE DE RETIRADA CONCLUÍDA PELO CLIENTE (PERSISTÊNCIA LOCAL) ===
+const STORAGE_DELIVERED_PICKUPS_KEY = 'hum_vicio_delivered_pickups';
+
+export function getSavedDeliveredPickupsMap(): Record<string, {
+  deliveredAt?: string;
+  deliveredBy?: string;
+}> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_DELIVERED_PICKUPS_KEY) || '{}');
+  } catch {
+    return {};
+  }
+}
+
+export function saveDeliveredPickupOverride(saleId: string, deliveryData: { deliveredAt?: string; deliveredBy?: string }): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedDeliveredPickupsMap();
+    map[saleId] = { ...(map[saleId] || {}), ...deliveryData };
+    localStorage.setItem(STORAGE_DELIVERED_PICKUPS_KEY, JSON.stringify(map));
   } catch {}
 }
 
@@ -630,6 +671,7 @@ export async function executeParallelLoadData(
         const overrides = getSavedProductionOverrides();
         const creditMap = getSavedCreditSalesMap();
         const pickupMap = getSavedPickupPendingSalesMap();
+        const deliveredMap = getSavedDeliveredPickupsMap();
         let overridesCleaned = false;
         const saleItemsList = (saleItemsData as any[]) || [];
         const itemsBySale = new Map<string, any[]>();
@@ -648,7 +690,13 @@ export async function executeParallelLoadData(
           const creditInfo = creditMap[s.id] || {};
           const pickupInfo = pickupMap[s.id] || {};
           let prodStatus: ProductionStatus;
-          if (override) {
+          if (s.status === 'cancelled') {
+            prodStatus = (s.production_status === 'concluido' ? 'em_espera' : (s.production_status || 'em_espera')) as ProductionStatus;
+            if (override) {
+              delete overrides[s.id];
+              overridesCleaned = true;
+            }
+          } else if (override) {
             if (s.production_status === override.status || (override.status !== 'concluido' && s.production_status === 'concluido')) {
               prodStatus = (s.production_status || override.status) as ProductionStatus;
               delete overrides[s.id];
@@ -686,6 +734,8 @@ export async function executeParallelLoadData(
             paymentStatus,
             paidAt: pickupInfo.paidAt || s.paid_at || undefined,
             paidMethod: pickupInfo.paidMethod || s.paid_method || undefined,
+            deliveredAt: deliveredMap[s.id]?.deliveredAt || s.delivered_at || undefined,
+            deliveredBy: deliveredMap[s.id]?.deliveredBy || s.delivered_by || undefined,
             isOfflineSynced: true,
             date: s.created_at, 
             status: s.status,
@@ -947,7 +997,13 @@ async function executePollCycle(supabaseClient: any) {
         const existing = prev.find(p => p.id === s.id);
         const override = overrides[s.id];
         let prodStatus: ProductionStatus;
-        if (override) {
+        if (s.status === 'cancelled') {
+          prodStatus = (s.production_status === 'concluido' ? 'em_espera' : (s.production_status || existing?.productionStatus || 'em_espera')) as ProductionStatus;
+          if (override) {
+            delete overrides[s.id];
+            overridesCleaned = true;
+          }
+        } else if (override) {
           if (s.production_status === override.status || (override.status !== 'concluido' && s.production_status === 'concluido')) {
             prodStatus = (s.production_status || override.status) as ProductionStatus;
             delete overrides[s.id];
@@ -2812,6 +2868,8 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       paymentStatus,
       paidAt: paymentStatus === 'pago' ? (sale.paidAt || new Date().toISOString()) : undefined,
       paidMethod: paymentStatus === 'pago' ? (sale.paidMethod || sale.paymentMethod) : undefined,
+      deliveredAt: sale.deliveredAt || undefined,
+      deliveredBy: sale.deliveredBy || undefined,
       isOfflineSynced: !isOffline,
       syncStatus: isOffline ? 'pending' : 'synced',
       productionStatus: initialProductionStatus,
@@ -2882,18 +2940,26 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     if (!target) return { success: false, message: 'Pedido não encontrado' };
 
     const paidAt = new Date().toISOString();
+    const opName = operatorName || 'Operador';
     const updatedSale: Sale = {
       ...target,
       paymentStatus: 'pago',
       paidAt,
       paidMethod: paymentMethod,
-      paymentMethod: paymentMethod
+      paymentMethod: paymentMethod,
+      deliveredAt: target.deliveredAt || paidAt,
+      deliveredBy: target.deliveredBy || opName
     };
 
     savePickupPendingOverride(saleId, {
       paymentStatus: 'pago',
       paidAt,
       paidMethod: paymentMethod
+    });
+
+    saveDeliveredPickupOverride(saleId, {
+      deliveredAt: target.deliveredAt || paidAt,
+      deliveredBy: target.deliveredBy || opName
     });
 
     // Se estiver na fila offline outbox, atualiza o item da fila
@@ -2930,6 +2996,61 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       }
       return updated;
     });
+
+    return { success: true, sale: updatedSale };
+  };
+
+  // Ação do Balcão: confirmar que o cliente retirou o pedido
+  const markPickupAsDelivered = async (saleId: string, operatorName?: string) => {
+    const target = sales.find(s => s.id === saleId);
+    if (!target) return { success: false, message: 'Pedido não encontrado' };
+
+    const deliveredAt = new Date().toISOString();
+    const opName = operatorName || 'Operador';
+    const updatedSale: Sale = {
+      ...target,
+      deliveredAt,
+      deliveredBy: opName
+    };
+
+    saveDeliveredPickupOverride(saleId, {
+      deliveredAt,
+      deliveredBy: opName
+    });
+
+    // Se estiver na fila offline outbox, atualiza o item da fila
+    const queue = getOfflineSalesQueue();
+    const qIdx = queue.findIndex(s => s.id === saleId);
+    if (qIdx > -1) {
+      queue[qIdx] = updatedSale;
+      saveOfflineSalesQueue(queue);
+    }
+
+    addAuditLog(
+      'RETIRADA_ENTREGUE',
+      `Pedido #${saleId.slice(0, 6).toUpperCase()} retirado pelo cliente (${target.customerName || 'Balcão'}) confirmado por ${opName}.`,
+      opName,
+      'Pronto no Balcão',
+      'Concluído / Retirado'
+    );
+
+    setSales(prev => {
+      const updated = prev.map(s => s.id === saleId ? updatedSale : s);
+      if (typeof window !== 'undefined') {
+        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+      }
+      return updated;
+    });
+
+    try {
+      await supabase.from('sales').update({
+        delivered_at: deliveredAt,
+        delivered_by: opName,
+        updated_at: deliveredAt
+      }).eq('id', saleId);
+    } catch (err) {
+      console.warn('Erro ao atualizar status de retirada no Supabase:', err);
+    }
 
     return { success: true, sale: updatedSale };
   };
@@ -3204,19 +3325,21 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     notes?: string,
     supervisorPassword?: string
   ): Promise<{ success: boolean; error?: string }> => {
-    // Salvar override no storage local
-    saveProductionOverrides([{ id, status: 'concluido' }]);
-
     const existingSale = sales.find(s => s.id === id);
     const cancellationReason = reason || 'Desistência do cliente antes do preparo';
     const now = new Date().toISOString();
 
     // Se estiver em modo treinamento, cancela localmente no sandbox sem chamar o servidor
     if (isTrainingModeActive()) {
+      removeProductionOverrides([id]);
+      const safeProdStatus: ProductionStatus = existingSale?.productionStatus === 'concluido'
+        ? 'em_espera'
+        : (existingSale?.productionStatus || 'em_espera');
       const currentTrainingSales = getTrainingSales();
       const updated = currentTrainingSales.map(s => s.id === id ? { 
         ...s, 
         status: 'cancelled' as const, 
+        productionStatus: safeProdStatus,
         cancellationReason,
         cancelledAt: now,
         cancelledBy: authorizedBy || 'Supervisor (Treino)'
@@ -3224,7 +3347,8 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       saveTrainingSales(updated);
       setSales(prev => prev.map(s => s.id === id ? { 
         ...s, 
-        status: 'cancelled' as const,
+        status: 'cancelled' as const, 
+        productionStatus: safeProdStatus,
         cancellationReason,
         cancelledAt: now,
         cancelledBy: authorizedBy || 'Supervisor (Treino)'
@@ -3329,10 +3453,15 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
         }
       }
 
+      removeProductionOverrides([id]);
+      const safeProdStatus: ProductionStatus = existingSale?.productionStatus === 'concluido'
+        ? 'em_espera'
+        : (existingSale?.productionStatus || 'em_espera');
       setSales(prev => {
         const updated = prev.map(s => s.id === id ? { 
           ...s, 
           status: 'cancelled' as const,
+          productionStatus: safeProdStatus,
           cancellationReason,
           cancelledBy: confirmedCancelledBy,
           cancelledAt: now,
@@ -3717,7 +3846,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus, completeOrderProduction,
     auditLogs, addAuditLog,
     fixedExpensesConfig, saveFixedExpensesConfig, settleCreditSale,
-    settlePickupPayment, offlineQueueCount, isOnline, syncOfflineQueueNow,
+    settlePickupPayment, markPickupAsDelivered, offlineQueueCount, isOnline, syncOfflineQueueNow,
     connectionStatus, lastServerSync, offlineSalesList, checkServerHealth,
     isTrainingMode, setTrainingMode: setTrainingModeActive, resetTrainingSandbox
   };

@@ -9,7 +9,7 @@ import {
   Sparkles, Coffee, Flame, Check, UtensilsCrossed,
   Receipt, Truck, LayoutGrid, HelpCircle, GraduationCap, 
   RotateCcw, ShieldAlert, Key, Keyboard, ArrowLeft,
-  Home, ShieldCheck, UserCheck, BellRing
+  Home, ShieldCheck, UserCheck, BellRing, Clock
 } from 'lucide-react';
 
 import { useInventory, Product, SaleItem, Sale, ProductionStatus, GiftReason } from '@/lib/store';
@@ -72,7 +72,7 @@ import PosNavigationModal from '@/components/caixa/PosNavigationModal';
 
 // Abas especializadas
 import PosMesasTab from '@/components/caixa/tabs/PosMesasTab';
-import PosProducaoTab from '@/components/caixa/tabs/PosProducaoTab';
+import PosProducaoTab, { PosProductionFilter } from '@/components/caixa/tabs/PosProducaoTab';
 import PosRotasTab from '@/components/caixa/tabs/PosRotasTab';
 import PosHistoricoTab from '@/components/caixa/tabs/PosHistoricoTab';
 import PosSangriaTab from '@/components/caixa/tabs/PosSangriaTab';
@@ -91,8 +91,8 @@ export default function CaixaPage() {
     sales, addSale, cancelSale, 
     reopenOrderForEdit, updateReopenedOrder,
     movements, addMovement,
-    targetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus,
-    settleCreditSale, settlePickupPayment, offlineQueueCount, isOnline,
+    targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus,
+    settleCreditSale, settlePickupPayment, markPickupAsDelivered, offlineQueueCount, isOnline,
     connectionStatus, isLoaded
   } = useInventory('caixa');
 
@@ -201,7 +201,7 @@ export default function CaixaPage() {
   });
 
   // Produção e Lotes
-  const [productionFilter, setProductionFilter] = useState<'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido'>('todos');
+  const [productionFilter, setProductionFilter] = useState<PosProductionFilter>('todos');
   const [selectedOrdersForBatch, setSelectedOrdersForBatch] = useState<string[]>([]);
 
   // Carregar dados auxiliares
@@ -295,9 +295,15 @@ export default function CaixaPage() {
       if (s.status === 'cancelled') return false;
       if (s.productionStatus !== 'concluido') return false;
       if (sessionStartTime > 0 && new Date(s.date).getTime() < sessionStartTime) return false;
+      // Retirada no balcão: só conta enquanto NÃO foi retirado pelo cliente
+      if (s.orderType === 'retirada' && s.deliveredAt) return false;
+      // Delivery: não conta se já foi entregue
+      if (s.orderType === 'delivery' && (deliveredSaleIds.includes(s.id) || s.deliveredAt)) return false;
+      // Mesa: não conta se já foi servido/entregue
+      if (s.orderType === 'mesa' && s.deliveredAt) return false;
       return true;
     });
-  }, [sales, sessionStartTime]);
+  }, [sales, sessionStartTime, deliveredSaleIds]);
 
   // Monitorar em tempo real quando a cozinha concluir pedidos para notificar o operador do PDV
   const isInitialReadyMount = useRef(true);
@@ -356,6 +362,37 @@ export default function CaixaPage() {
 
     prevCompletedOrderIdsRef.current = currentCompletedIds;
   }, [sales, isOpen, sessionStartTime]);
+
+  // Se o pedido pronto em destaque for cancelado, retirado ou deixar de existir, fecha o banner automaticamente
+  useEffect(() => {
+    if (latestReadyOrderAlert) {
+      const current = sales.find(s => s.id === latestReadyOrderAlert.id);
+      if (!current || current.status === 'cancelled' || current.productionStatus !== 'concluido' || current.deliveredAt) {
+        setLatestReadyOrderAlert(null);
+      }
+    }
+  }, [sales, latestReadyOrderAlert]);
+
+  // Ação de confirmar retirada do pedido pelo cliente no balcão
+  const handleConfirmPickupDelivered = async (sale: Sale) => {
+    const res = await markPickupAsDelivered(sale.id, activeCashSession?.openedBy || 'Operador');
+    if (res.success) {
+      if (latestReadyOrderAlert?.id === sale.id) {
+        setLatestReadyOrderAlert(null);
+      }
+      notify({
+        title: `Retirada Concluída! #${sale.id.slice(0, 6).toUpperCase()}`,
+        description: `Pedido de "${sale.customerName || 'Balcão'}" entregue com sucesso.`,
+        tone: 'success'
+      });
+    } else {
+      notify({
+        title: 'Erro ao confirmar retirada',
+        description: res.message || 'Tente novamente.',
+        tone: 'danger'
+      });
+    }
+  };
 
   // Cálculos financeiros puros do pedido
   const cartSubtotal = useMemo(() => calculateCartSubtotal(cart), [cart]);
@@ -641,6 +678,7 @@ export default function CaixaPage() {
     setDiscountInput('');
     setDeliveryFeeInput('');
     setCashReceivedInput('');
+    setCreditCustomerInput('');
     setSelectedTable(null);
     setIsConfirmClearCartOpen(false);
     notify({ title: 'Comanda limpa', tone: 'info' });
@@ -735,7 +773,7 @@ export default function CaixaPage() {
         targetPrepMinutes: targetPrepMinutes || 20,
         collaboratorId: saleMethod === 'consumo_funcionario' ? selectedCollaboratorId : undefined,
         collaboratorName: collaborators.find(c => c.id === selectedCollaboratorId)?.name,
-        creditCustomerName: saleMethod === 'fiado_vip' ? creditCustomerInput : undefined,
+        creditCustomerName: saleMethod === 'fiado_vip' ? (creditCustomerInput.trim() || finalCustomerName) : undefined,
         creditDueDate: saleMethod === 'fiado_vip' ? creditDueDateInput : undefined,
         creditStatus: (saleMethod === 'consumo_funcionario' || saleMethod === 'fiado_vip') ? 'pendente' : undefined,
         ...fiscalDataToAttach,
@@ -917,6 +955,48 @@ export default function CaixaPage() {
               <span>Atalhos [F1]</span>
             </button>
 
+            {/* Widget de Ajuste de Meta de Tempo da Cozinha (Timer do Caixa) */}
+            <div 
+              className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-700 shadow-xs"
+              title="Ajuste do Tempo Alvo de Produção da Cozinha (sincronizado em tempo real com o KDS)"
+            >
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-300">
+                <Clock size={15} className="text-amber-400 shrink-0" />
+                <span className="hidden xl:inline text-slate-400">Meta Cozinha:</span>
+                <span className="font-mono font-black text-amber-400 text-xs">
+                  {targetPrepMinutes || 20}m
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setTargetPrepMinutes(Math.max(10, (targetPrepMinutes || 20) - 5))}
+                  className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center cursor-pointer transition-colors"
+                  title="Diminuir meta em 5 min"
+                >
+                  -
+                </button>
+                <input
+                  type="range"
+                  min="10"
+                  max="60"
+                  step="5"
+                  value={targetPrepMinutes || 20}
+                  onChange={e => setTargetPrepMinutes(Number(e.target.value))}
+                  className="w-14 sm:w-16 accent-amber-500 cursor-pointer"
+                  title={`Meta da Cozinha: ${targetPrepMinutes || 20} minutos`}
+                />
+                <button
+                  type="button"
+                  onClick={() => setTargetPrepMinutes(Math.min(60, (targetPrepMinutes || 20) + 5))}
+                  className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center cursor-pointer transition-colors"
+                  title="Aumentar meta em 5 min"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
             {isOpen ? (
               <>
                 <button
@@ -1067,11 +1147,26 @@ export default function CaixaPage() {
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              {latestReadyOrderAlert.orderType === 'retirada' && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (latestReadyOrderAlert.paymentStatus === 'pendente_retirada') {
+                      setSettlementModal({ sale: latestReadyOrderAlert, mode: 'pickup' });
+                    } else {
+                      handleConfirmPickupDelivered(latestReadyOrderAlert);
+                    }
+                  }}
+                  className="px-3 py-2 bg-white hover:bg-emerald-100 text-slate-950 rounded-xl text-xs font-black uppercase cursor-pointer transition-all shadow-md active:scale-95 flex items-center gap-1.5"
+                >
+                  <Check size={14} className="text-emerald-700" /> Confirmar Retirada
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
                   setActiveTab('producao');
-                  setProductionFilter('concluido');
+                  setProductionFilter(latestReadyOrderAlert.orderType === 'retirada' ? 'prontos' : 'concluido');
                   setLatestReadyOrderAlert(null);
                 }}
                 className="px-3 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-xl text-xs font-black uppercase cursor-pointer transition-all shadow-md active:scale-95"
@@ -1106,8 +1201,8 @@ export default function CaixaPage() {
 
             {/* As 3 ZONAS ESTÁVEIS: CATÁLOGO -> PEDIDO ATUAL -> RESUMO E FINALIZAÇÃO */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-[75vh]">
-              {/* ZONA 1: CATÁLOGO (col-span-5) */}
-              <div className="lg:col-span-5 xl:col-span-5 flex flex-col">
+              {/* ZONA 1: CATÁLOGO (col-span-5 em xl, col-span-4 em lg) */}
+              <div className="lg:col-span-4 xl:col-span-5 flex flex-col">
                 <PosCatalogZone
                   products={products}
                   sales={sales}
@@ -1128,7 +1223,23 @@ export default function CaixaPage() {
                 <PosCartZone
                   cart={cart}
                   customerName={customerName}
-                  onCustomerNameChange={setCustomerName}
+                  onCustomerNameChange={name => {
+                    setCustomerName(name);
+                    if (!creditCustomerInput || creditCustomerInput === customerName) {
+                      setCreditCustomerInput(name);
+                    }
+                  }}
+                  onSelectCustomer={cust => {
+                    if (!creditCustomerInput || creditCustomerInput === customerName) {
+                      setCreditCustomerInput(cust.name);
+                    }
+                    if (!selectedCollaboratorId && collaborators.length > 0) {
+                      const matchedCollab = collaborators.find(c => c.name.trim().toLowerCase() === cust.name.trim().toLowerCase());
+                      if (matchedCollab) {
+                        setSelectedCollaboratorId(matchedCollab.id);
+                      }
+                    }
+                  }}
                   customerProfiles={customerProfiles}
                   saleChannel={saleChannel}
                   onSwitchChannel={handleSwitchChannel}
@@ -1159,8 +1270,8 @@ export default function CaixaPage() {
                 />
               </div>
 
-              {/* ZONA 3: RESUMO E FINALIZAÇÃO (col-span-3) */}
-              <div className="lg:col-span-3 xl:col-span-3 flex flex-col">
+              {/* ZONA 3: RESUMO E FINALIZAÇÃO (col-span-4 em lg, col-span-3 em xl) */}
+              <div className="lg:col-span-4 xl:col-span-3 flex flex-col">
                 <PosCheckoutZone
                   cart={cart}
                   cartSubtotal={cartSubtotal}
@@ -1195,6 +1306,7 @@ export default function CaixaPage() {
                   isSubmittingOrder={isSubmittingOrder}
                   onCheckout={handleCheckout}
                   saleChannel={saleChannel}
+                  customerName={customerName}
                 />
               </div>
             </div>
@@ -1249,11 +1361,16 @@ export default function CaixaPage() {
             }}
             onPrintSale={sale => setSelectedSaleToPrint(sale)}
             onSettlePickupPayment={sale => setSettlementModal({ sale, mode: 'pickup' })}
+            onMarkPickupAsDelivered={handleConfirmPickupDelivered}
             onPauseGrillOrder={sale => {
               updateOrderProductionStatus(sale.id, 'em_espera');
               notify({ title: 'Comanda pausada para espera', tone: 'warning' });
             }}
             onNavigateToRotas={() => setActiveTab('rotas')}
+            targetPrepMinutes={targetPrepMinutes}
+            onSetTargetPrepMinutes={setTargetPrepMinutes}
+            products={products}
+            items={items}
           />
         )}
 
@@ -1529,6 +1646,8 @@ export default function CaixaPage() {
       {selectedSaleToPrint && (
         <ReceiptModal
           sale={selectedSaleToPrint}
+          products={products}
+          inventoryItems={items}
           onClose={() => setSelectedSaleToPrint(null)}
         />
       )}

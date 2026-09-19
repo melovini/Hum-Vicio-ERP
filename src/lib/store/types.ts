@@ -42,6 +42,7 @@ export interface Product {
   name: string;
   category: 'lanche' | 'bebida' | 'porcao' | 'combo';
   subcategory?: string;
+  description?: string;
   priceBalcao: number;
   priceIfood: number;
   recipe: RecipeIngredient[];
@@ -89,6 +90,17 @@ export interface ProductionBreakdown {
   notesSummary: string;
 }
 
+export interface ComboStationDetails {
+  rawCombo: string;
+  comboType: 'batata' | 'onion' | 'batata_cheddar_bacon' | 'custom';
+  title: string;
+  icon: string;
+  fryerItem: string;
+  chapaItem?: string;
+  drinkItem: string;
+  summary: string;
+}
+
 export interface ItemProductionDetails {
   chapaPatties: number;
   isDouble: boolean;
@@ -103,6 +115,7 @@ export interface ItemProductionDetails {
   fryerOnionsCombo: number;
   fryerOnionsAvulsa: number;
   breakdown: ProductionBreakdown;
+  comboDetails?: ComboStationDetails;
 }
 
 export interface SaleItem {
@@ -188,6 +201,8 @@ export interface Sale {
   paymentStatus?: 'pago' | 'pendente_retirada';
   paidAt?: string;
   paidMethod?: string;
+  deliveredAt?: string;
+  deliveredBy?: string;
   isOfflineSynced?: boolean;
   syncStatus?: 'synced' | 'pending' | 'failed';
   syncError?: string;
@@ -283,6 +298,7 @@ export type AuditAction =
   | 'CHECKLIST_TAREFA'
   | 'LIQUIDACAO_FIADO'
   | 'LIQUIDACAO_RETIRADA'
+  | 'RETIRADA_ENTREGUE'
   | 'CUSTOS_FIXOS_CONFIG'
   | 'VINCULO_LOTE_RECEITAS'
   | 'BAIXA_ESTOQUE_VENDA';

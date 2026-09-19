@@ -1,13 +1,13 @@
 'use client';
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useInventory, Sale, SaleItem, DelayReason, InventoryItem, ChecklistTask, DEFAULT_INGREDIENT_STATIONS, KitchenStation } from '@/lib/store';
-import { calculateItemProduction, ItemProductionDetails } from '@/lib/production-calculator';
+import { calculateItemProduction, ItemProductionDetails, getBurgerPrintDetails } from '@/lib/production-calculator';
 import { 
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
   Eye, Check, ListChecks, MessageSquare, Utensils,
   Volume2, Volume1, VolumeX, BellRing, User, X, Play, ArrowLeft, FileText,
-  HelpCircle, GraduationCap
+  HelpCircle, GraduationCap, Printer
 } from 'lucide-react';
 import Link from 'next/link';
 import LogoutButton from '@/components/LogoutButton';
@@ -18,6 +18,7 @@ import TrainingBanner from '@/components/TrainingBanner';
 import TrainingExercisesModal from '@/components/TrainingExercisesModal';
 import QuickHelpModal from '@/components/QuickHelpModal';
 import { isTrainingModeActive, setTrainingModeActive } from '@/lib/training';
+import ReceiptModal from '@/components/ReceiptModal';
 
 interface KitchenProductionOrderCardProps {
   order: Sale;
@@ -28,6 +29,7 @@ interface KitchenProductionOrderCardProps {
   onConfirmPendingConclude: () => void;
   onAcknowledgeMod: (orderId: string) => void;
   getItemStationDetails: (item: SaleItem) => ItemProductionDetails;
+  onPrintOrder?: (order: Sale) => void;
 }
 
 function KitchenProductionOrderCard({
@@ -39,6 +41,7 @@ function KitchenProductionOrderCard({
   onConfirmPendingConclude,
   onAcknowledgeMod,
   getItemStationDetails,
+  onPrintOrder,
 }: KitchenProductionOrderCardProps) {
   const [now, setNow] = useState(Date.now());
 
@@ -81,6 +84,16 @@ function KitchenProductionOrderCard({
                 <span className="px-1.5 py-0.5 rounded bg-slate-800 text-emerald-300 border border-slate-700 font-mono font-black text-[11px]" title={`Pressione a tecla ${orderIdx + 1} para concluir`}>
                   [{orderIdx + 1}]
                 </span>
+              )}
+              {onPrintOrder && (
+                <button
+                  type="button"
+                  onClick={() => onPrintOrder(order)}
+                  className="p-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-all cursor-pointer border border-slate-700 shadow-xs"
+                  title="Imprimir comanda da cozinha"
+                >
+                  <Printer size={13} />
+                </button>
               )}
               <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider ${
                 order.orderType === 'delivery' 
@@ -278,11 +291,28 @@ function KitchenProductionOrderCard({
                   )}
                 </div>
 
-                {item.combo && (
+                {/* Destaque do Combo na Cozinha (KDS) */}
+                {details.comboDetails ? (
+                  <div className="mt-1.5 p-2 bg-slate-900/90 rounded-xl border border-amber-500/40 text-xs space-y-1">
+                    <div className="font-extrabold text-amber-300 flex items-center gap-1 uppercase tracking-wide">
+                      <span>{details.comboDetails.icon}</span>
+                      <span>{details.comboDetails.title}</span>
+                    </div>
+                    <div className="pl-2 border-l-2 border-amber-500/50 text-[11px] text-slate-200 space-y-0.5">
+                      <p>🍟 <span className="font-bold">Fritadeira:</span> {details.comboDetails.fryerItem}</p>
+                      {details.comboDetails.chapaItem && (
+                        <p className="text-amber-300 font-bold">🔥 Chapa/Montagem: {details.comboDetails.chapaItem}</p>
+                      )}
+                      {details.comboDetails.drinkItem && (
+                        <p className="text-cyan-300 font-semibold">🥤 Bebida: {details.comboDetails.drinkItem}</p>
+                      )}
+                    </div>
+                  </div>
+                ) : item.combo ? (
                   <p className="text-xs font-bold text-amber-400 pl-1">
                     + COMBO: {item.combo.toUpperCase()}
                   </p>
-                )}
+                ) : null}
 
                 {item.meatPoint && (
                   <p className="text-xs font-black text-orange-400 pl-1 flex items-center gap-1">
@@ -351,6 +381,7 @@ export default function CozinhaKDSPage() {
   } = useInventory('cozinha');
 
   const [activeTab, setActiveTab] = useState<'chapa' | 'previsao' | 'faltas' | 'checklist'>('chapa');
+  const [selectedSaleToPrint, setSelectedSaleToPrint] = useState<Sale | null>(null);
 
   // Horário de abertura do turno ativo para isolamento estrito
   const sessionStartTime = useMemo(() => {
@@ -586,9 +617,9 @@ export default function CozinhaKDSPage() {
       });
   }, [sales, activeCashSession, isOpen, sessionStartTime]);
 
-  // Motor determinístico de produção por estação (Chapa, Fritadeira, Ovos e Pontos)
+  // Motor determinístico de produção por estação (Chapa, Fritadeira, Ovos, Pontos e Combos Detalhados)
   const getItemStationDetails = (item: SaleItem) => {
-    return calculateItemProduction(item, products, items);
+    return getBurgerPrintDetails(item, products, items).production;
   };
 
   // Monitor Consolidado Duplo de Estações: Chapa & Fritadeira
@@ -1434,6 +1465,7 @@ export default function CozinhaKDSPage() {
                     }}
                     onAcknowledgeMod={(orderId) => acknowledgeOrderModification(orderId)}
                     getItemStationDetails={getItemStationDetails}
+                    onPrintOrder={setSelectedSaleToPrint}
                   />
                 ))}
               </div>
@@ -2060,6 +2092,16 @@ export default function CozinhaKDSPage() {
         onClose={() => setShowHelpModal(false)} 
         context="cozinha" 
       />
+
+      {/* Modal de Impressão Direta da Comanda da Cozinha */}
+      {selectedSaleToPrint && (
+        <ReceiptModal
+          sale={selectedSaleToPrint}
+          products={products}
+          inventoryItems={items}
+          onClose={() => setSelectedSaleToPrint(null)}
+        />
+      )}
 
     </div>
   );

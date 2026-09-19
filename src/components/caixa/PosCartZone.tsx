@@ -2,7 +2,7 @@
 import React from 'react';
 import { SaleItem, Sale } from '@/lib/store';
 import { SalaoMesaInstancia } from '@/lib/mesas';
-import { CustomerProfile } from '@/lib/crm-clientes';
+import { CustomerProfile, CustomerSearchResult } from '@/lib/crm-clientes';
 import PosCustomerAutocomplete from './PosCustomerAutocomplete';
 import { 
   ShoppingCart as CartIcon, Plus, Minus, Trash2, 
@@ -30,6 +30,7 @@ interface PosCartZoneProps {
   onCreateNewDraft: () => void;
   onClearCart: () => void;
   activeDraftLabel?: string;
+  onSelectCustomer?: (customer: CustomerSearchResult) => void;
 }
 
 export default function PosCartZone({
@@ -53,6 +54,7 @@ export default function PosCartZone({
   onCreateNewDraft,
   onClearCart,
   activeDraftLabel,
+  onSelectCustomer,
 }: PosCartZoneProps) {
   return (
     <div className="bg-slate-900/90 rounded-3xl p-5 border border-slate-800 flex flex-col h-full shadow-lg">
@@ -185,6 +187,19 @@ export default function PosCartZone({
             onChange={onCustomerNameChange}
             customerProfiles={customerProfiles}
             orderType={orderType}
+            onSelectCustomer={cust => {
+              if (orderType === 'mesa' && !targetMesa && cust.name) {
+                const matchedMesa = floorMesas.find(
+                  m => m.clienteNome && m.clienteNome.trim().toLowerCase() === cust.name.trim().toLowerCase()
+                );
+                if (matchedMesa) {
+                  onSelectTable(matchedMesa.id);
+                }
+              }
+              if (onSelectCustomer) {
+                onSelectCustomer(cust);
+              }
+            }}
           />
         </div>
       </div>

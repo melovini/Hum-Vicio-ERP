@@ -1,15 +1,18 @@
 'use client';
 import React, { useMemo } from 'react';
-import { Sale, ProductionStatus } from '@/lib/store';
+import { Sale, ProductionStatus, Product, InventoryItem } from '@/lib/store';
 import { 
   Flame, Truck, Utensils, Printer, Play, 
-  Pause, Edit3, DollarSign, AlertOctagon 
+  Pause, Edit3, DollarSign, AlertOctagon, Check, Clock 
 } from 'lucide-react';
+import { getBurgerPrintDetails } from '@/lib/production-calculator';
+
+export type PosProductionFilter = 'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido' | 'prontos';
 
 interface PosProducaoTabProps {
   currentSessionSales: Sale[];
-  productionFilter: 'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido';
-  onProductionFilterChange: (filter: 'todos' | 'em_espera' | 'agendado' | 'em_producao' | 'concluido') => void;
+  productionFilter: PosProductionFilter;
+  onProductionFilterChange: (filter: PosProductionFilter) => void;
   selectedOrdersForBatch: string[];
   onSelectedOrdersForBatchChange: (ids: string[]) => void;
   waitingOrders: Sale[];
@@ -18,8 +21,13 @@ interface PosProducaoTabProps {
   onStartReopenSale: (sale: Sale) => void;
   onPrintSale: (sale: Sale) => void;
   onSettlePickupPayment: (sale: Sale) => void;
+  onMarkPickupAsDelivered: (sale: Sale) => void;
   onPauseGrillOrder: (sale: Sale) => void;
   onNavigateToRotas: () => void;
+  targetPrepMinutes?: number;
+  onSetTargetPrepMinutes?: (mins: number) => void;
+  products?: Product[];
+  items?: InventoryItem[];
 }
 
 export default function PosProducaoTab({
@@ -34,8 +42,13 @@ export default function PosProducaoTab({
   onStartReopenSale,
   onPrintSale,
   onSettlePickupPayment,
+  onMarkPickupAsDelivered,
   onPauseGrillOrder,
   onNavigateToRotas,
+  targetPrepMinutes,
+  onSetTargetPrepMinutes,
+  products = [],
+  items = [],
 }: PosProducaoTabProps) {
   const batchBurgersSummary = useMemo(() => {
     const selectedSales = currentSessionSales.filter(s => selectedOrdersForBatch.includes(s.id));
@@ -56,9 +69,16 @@ export default function PosProducaoTab({
     return { totalBurgers, summaryList };
   }, [currentSessionSales, selectedOrdersForBatch]);
 
+  const pendingPickupSales = useMemo(() => {
+    return currentSessionSales.filter(s => s.orderType === 'retirada' && s.productionStatus === 'concluido' && !s.deliveredAt);
+  }, [currentSessionSales]);
+
   const filteredSales = useMemo(() => {
     return currentSessionSales.filter(s => {
       if (productionFilter === 'todos') return true;
+      if (productionFilter === 'prontos') {
+        return s.orderType === 'retirada' && s.productionStatus === 'concluido' && !s.deliveredAt;
+      }
       return (s.productionStatus || 'em_producao') === productionFilter;
     });
   }, [currentSessionSales, productionFilter]);
@@ -75,36 +95,89 @@ export default function PosProducaoTab({
           </p>
         </div>
 
-        {/* Filtros de Produção */}
-        <div className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1 rounded-2xl border border-slate-800">
-          {[
-            { id: 'todos', label: 'Todos' },
-            { id: 'em_espera', label: '⏳ Em Espera' },
-            { id: 'agendado', label: '📅 Agendados' },
-            { id: 'em_producao', label: '🔥 Na Chapa' },
-            { id: 'concluido', label: '✅ Concluídos' },
-          ].map(tab => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => onProductionFilterChange(tab.id as any)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                productionFilter === tab.id
-                  ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
-                  : 'text-slate-400 hover:text-white'
-              }`}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Widget de Meta de Tempo da Cozinha (Timer do Caixa) */}
+          {targetPrepMinutes !== undefined && onSetTargetPrepMinutes && (
+            <div 
+              className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-2xl border border-slate-800 shadow-inner"
+              title="Ajuste do Tempo Alvo de Produção da Cozinha (sincronizado em tempo real com o KDS)"
             >
-              {tab.label}
+              <div className="flex items-center gap-1.5 text-xs font-bold text-slate-300">
+                <Clock size={15} className="text-amber-400 shrink-0" />
+                <span className="hidden sm:inline text-slate-400">Meta Cozinha:</span>
+                <span className="font-mono font-black text-amber-400 text-xs">
+                  {targetPrepMinutes}m
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => onSetTargetPrepMinutes(Math.max(10, targetPrepMinutes - 5))}
+                  className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center cursor-pointer transition-colors"
+                  title="Diminuir meta em 5 min"
+                >
+                  -
+                </button>
+                <input
+                  type="range"
+                  min="10"
+                  max="60"
+                  step="5"
+                  value={targetPrepMinutes}
+                  onChange={e => onSetTargetPrepMinutes(Number(e.target.value))}
+                  className="w-16 accent-amber-500 cursor-pointer"
+                  title={`Meta de Produção da Cozinha: ${targetPrepMinutes} minutos`}
+                />
+                <button
+                  type="button"
+                  onClick={() => onSetTargetPrepMinutes(Math.min(60, targetPrepMinutes + 5))}
+                  className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs flex items-center justify-center cursor-pointer transition-colors"
+                  title="Aumentar meta em 5 min"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Filtros de Produção */}
+          <div className="flex flex-wrap items-center gap-1.5 bg-slate-950 p-1 rounded-2xl border border-slate-800">
+            {[
+              { id: 'todos', label: 'Todos' },
+              { id: 'em_espera', label: '⏳ Em Espera' },
+              { id: 'agendado', label: '📅 Agendados' },
+              { id: 'em_producao', label: '🔥 Na Chapa' },
+              { 
+                id: 'prontos', 
+                label: pendingPickupSales.length > 0 ? `🛎️ Prontos Balcão (${pendingPickupSales.length})` : '🛎️ Prontos Balcão',
+                highlight: pendingPickupSales.length > 0
+              },
+              { id: 'concluido', label: '✅ Concluídos' },
+            ].map(tab => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => onProductionFilterChange(tab.id as PosProductionFilter)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                  productionFilter === tab.id
+                    ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
+                    : tab.highlight
+                      ? 'text-emerald-400 hover:text-emerald-300 font-extrabold bg-emerald-950/40 border border-emerald-500/30 animate-pulse'
+                      : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={onNavigateToRotas}
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer transition-all ml-1"
+              title="Ir para o painel de rotas de entregadores"
+            >
+              <Truck size={14} /> Rotas ({currentSessionSales.filter(s => s.orderType === 'delivery').length})
             </button>
-          ))}
-          <button
-            type="button"
-            onClick={onNavigateToRotas}
-            className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-xs cursor-pointer transition-all ml-1"
-            title="Ir para o painel de rotas de entregadores"
-          >
-            <Truck size={14} /> Rotas ({currentSessionSales.filter(s => s.orderType === 'delivery').length})
-          </button>
+          </div>
         </div>
       </div>
 
@@ -166,6 +239,9 @@ export default function PosProducaoTab({
             const isWaiting = status === 'em_espera' || status === 'agendado';
             const isCooking = status === 'em_producao';
             const isDone = status === 'concluido';
+            const isPickup = sale.orderType === 'retirada';
+            const isPickupDelivered = isPickup && !!sale.deliveredAt;
+            const isPickupReadyWaiting = isPickup && isDone && !sale.deliveredAt;
 
             return (
               <div
@@ -177,7 +253,11 @@ export default function PosProducaoTab({
                       ? selectedOrdersForBatch.includes(sale.id)
                         ? 'bg-amber-950/30 border-amber-500 ring-1 ring-amber-500/50'
                         : 'bg-slate-950/70 border-slate-800'
-                      : 'bg-emerald-950/15 border-emerald-500/30'
+                      : isPickupReadyWaiting
+                        ? 'bg-emerald-950/30 border-emerald-500/60 ring-1 ring-emerald-500/40 shadow-lg'
+                        : isPickupDelivered
+                          ? 'bg-slate-950/40 border-slate-800/80 opacity-80'
+                          : 'bg-emerald-950/15 border-emerald-500/30'
                 }`}
               >
                 <div>
@@ -207,9 +287,21 @@ export default function PosProducaoTab({
                               ? 'bg-amber-500 text-slate-950'
                               : isWaiting
                                 ? status === 'agendado' ? 'bg-purple-600 text-white' : 'bg-slate-700 text-slate-200'
-                                : 'bg-emerald-600 text-white'
+                                : isPickupReadyWaiting
+                                  ? 'bg-emerald-500 text-slate-950 animate-pulse ring-2 ring-emerald-400/50'
+                                  : isPickupDelivered
+                                    ? 'bg-slate-800 text-emerald-400 border border-emerald-500/30'
+                                    : 'bg-emerald-600 text-white'
                           }`}>
-                            {isCooking ? '🔥 NA CHAPA' : isWaiting ? (status === 'agendado' ? '📅 AGENDADO' : '⏳ EM ESPERA') : '✅ CONCLUÍDO'}
+                            {isCooking 
+                              ? '🔥 NA CHAPA' 
+                              : isWaiting 
+                                ? (status === 'agendado' ? '📅 AGENDADO' : '⏳ EM ESPERA') 
+                                : isPickupReadyWaiting
+                                  ? '🥡 PRONTO NO BALCÃO'
+                                  : isPickupDelivered
+                                    ? '✅ RETIRADO'
+                                    : '✅ CONCLUÍDO'}
                           </span>
                         </div>
                         <p className="text-xs font-bold text-amber-300 mt-0.5 uppercase">
@@ -233,12 +325,45 @@ export default function PosProducaoTab({
 
                   {/* Itens */}
                   <div className="space-y-1 my-1.5">
-                    {sale.items?.map((i, idx) => (
-                      <div key={idx} className="text-xs text-slate-200 flex justify-between">
-                        <span>[{i.quantity}x] {i.productName}</span>
-                        {i.combo && <span className="text-[10px] text-amber-400 pl-2">+{i.combo}</span>}
-                      </div>
-                    ))}
+                    {sale.items?.map((i, idx) => {
+                      const details = getBurgerPrintDetails(i, products, items);
+                      return (
+                        <div key={idx} className="text-xs text-slate-200 space-y-0.5">
+                          <div className="flex justify-between">
+                            <span className="font-semibold">[{i.quantity}x] {i.productName}</span>
+                          </div>
+                          {details.comboDetails ? (
+                            <div className="text-[11px] text-amber-300 pl-2 mt-0.5 font-semibold bg-amber-950/30 p-1.5 rounded-lg border border-amber-500/20">
+                              <span className="flex items-center gap-1 font-bold">
+                                {details.comboDetails.icon} {details.comboDetails.title}
+                              </span>
+                              <div className="text-[10px] text-slate-300 pl-2 mt-0.5 space-y-0.5 border-l border-amber-500/30">
+                                <p>• 🍟 {details.comboDetails.fryerItem}</p>
+                                {details.comboDetails.chapaItem && <p className="text-amber-200">• 🔥 {details.comboDetails.chapaItem}</p>}
+                                {details.comboDetails.drinkItem && <p className="text-cyan-200">• 🥤 {details.comboDetails.drinkItem}</p>}
+                              </div>
+                            </div>
+                          ) : i.combo ? (
+                            <span className="text-[10px] text-amber-400 pl-2">+{i.combo}</span>
+                          ) : null}
+                          {i.additionals && i.additionals.length > 0 && (
+                            <p className="text-[10px] text-emerald-400 pl-2 font-medium">
+                              + {i.additionals.map(a => a.name).join(', ')}
+                            </p>
+                          )}
+                          {i.removals && i.removals.length > 0 && (
+                            <p className="text-[10px] text-rose-400 pl-2 font-bold">
+                              🚫 RETIRAR: {i.removals.join(', ')}
+                            </p>
+                          )}
+                          {i.notes && (
+                            <p className="text-[10px] text-amber-300 pl-2 font-bold">
+                              📝 OBS: {i.notes}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
 
                   {sale.delayReason && (
@@ -295,18 +420,56 @@ export default function PosProducaoTab({
                   )}
 
                   {isDone && (
-                    <div className="w-full space-y-1.5">
-                      <div className="w-full text-center py-1.5 text-xs font-bold text-emerald-400 bg-emerald-950/40 rounded-xl border border-emerald-500/20">
-                        {sale.orderType === 'retirada' ? '🥡 Pronto no Balcão' : 'Pronto para Servir / Despacho'}
-                      </div>
-                      {sale.orderType === 'retirada' && sale.paymentStatus === 'pendente_retirada' && (
-                        <button
-                          type="button"
-                          onClick={() => onSettlePickupPayment(sale)}
-                          className="w-full py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-xs uppercase flex items-center justify-center gap-1 shadow-xs cursor-pointer transition-all"
-                        >
-                          <DollarSign size={13} /> Receber Pagamento (R$ {sale.total.toFixed(2)})
-                        </button>
+                    <div className="w-full space-y-2">
+                      {isPickupReadyWaiting ? (
+                        <>
+                          <div className="w-full text-center py-1.5 text-xs font-bold text-emerald-300 bg-emerald-950/60 rounded-xl border border-emerald-500/40 flex items-center justify-center gap-1.5">
+                            <span className="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+                            🥡 Pronto no Balcão • Aguardando Cliente
+                          </div>
+                          {sale.paymentStatus === 'pendente_retirada' ? (
+                            <div className="flex flex-col sm:flex-row gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => onSettlePickupPayment(sale)}
+                                className="flex-1 py-2.5 bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-xl font-black text-xs uppercase flex items-center justify-center gap-1.5 shadow-md cursor-pointer transition-all active:scale-95"
+                                title="Receber pagamento pendente e concluir retirada"
+                              >
+                                <DollarSign size={14} /> Receber e Concluir (R$ {sale.total.toFixed(2)})
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => onMarkPickupAsDelivered(sale)}
+                                className="py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-bold text-xs uppercase flex items-center justify-center gap-1 cursor-pointer transition-all shrink-0"
+                                title="Apenas marcar como retirado sem alterar pagamento"
+                              >
+                                <Check size={14} /> Marcar Retirado
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => onMarkPickupAsDelivered(sale)}
+                              className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-black text-xs uppercase flex items-center justify-center gap-2 shadow-lg shadow-emerald-950/50 cursor-pointer transition-all active:scale-98"
+                            >
+                              <Check size={16} /> ✓ Cliente Retirou o Pedido
+                            </button>
+                          )}
+                        </>
+                      ) : isPickupDelivered ? (
+                        <div className="w-full py-2 px-3 text-xs font-medium text-slate-400 bg-slate-950/80 rounded-xl border border-slate-800 flex items-center justify-between">
+                          <span className="text-emerald-400 font-bold flex items-center gap-1">
+                            <Check size={13} /> Retirado pelo cliente
+                          </span>
+                          <span className="text-[11px] text-slate-400 font-mono">
+                            {new Date(sale.deliveredAt!).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                            {sale.deliveredBy ? ` (${sale.deliveredBy})` : ''}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="w-full text-center py-1.5 text-xs font-bold text-emerald-400 bg-emerald-950/40 rounded-xl border border-emerald-500/20">
+                          {sale.orderType === 'delivery' ? '🛵 Despachado para Rota' : '🍽️ Servido no Salão / Mesa'}
+                        </div>
                       )}
                     </div>
                   )}

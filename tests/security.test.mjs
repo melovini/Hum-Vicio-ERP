@@ -466,6 +466,82 @@ test('cancelamento e quitação de pedidos validam supervisor e impedem fraudes'
   assert.equal(rpcCalls[1].name, 'settle_order_payment_transaction');
 });
 
+test('cancelamento e quitação acionam fallback resiliente quando RPC falha por incompatibilidade de schema', async () => {
+  const fixture = sessionFixture('admin');
+  await fixture.sign();
+
+  let updateCalled = false;
+  let updatedPayload = null;
+
+  const dbMock = {
+    from(table) {
+      const builder = {
+        select() { return this; },
+        eq() { return this; },
+        in() { return this; },
+        update(payload) {
+          updateCalled = true;
+          updatedPayload = payload;
+          return this;
+        },
+        insert() {
+          return Promise.resolve({ data: null, error: null });
+        },
+        async single() {
+          if (table === 'app_sessions') return { data: fixture.state.session, error: null };
+          if (table === 'collaborators') return { data: fixture.state.person, error: null };
+          if (table === 'sales') {
+            return {
+              data: {
+                id: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+                total: 44,
+                status: 'completed',
+                payment_method: 'dinheiro',
+                customer_name: 'Cliente Balcão'
+              },
+              error: null
+            };
+          }
+          return { data: null, error: null };
+        },
+        then(resolve) {
+          resolve({ data: [], error: null });
+        }
+      };
+      return builder;
+    },
+    rpc: async () => {
+      // Simula o erro do PostgreSQL 42703 (record "v_sale" has no field "payment_status")
+      return { data: null, error: { code: '42703', message: 'record "v_sale" has no field "payment_status"' } };
+    }
+  };
+
+  const databaseModule = { createServerDatabase: () => dbMock };
+  const load = createLoader({
+    'next/headers': { cookies: async () => ({ get: () => fixture.state.token ? { value: fixture.state.token } : undefined }) },
+    '../supabase-server': databaseModule,
+    '@/lib/supabase-server': databaseModule,
+  });
+
+  const cancelRoute = load('src/app/api/sales/cancel/route.ts');
+  const post = (url, body) => new Request(url, {
+    method: 'POST',
+    headers: { origin: 'https://erp.test', 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+
+  const cancelRes = await cancelRoute.POST(post('https://erp.test/api/sales/cancel', {
+    saleId: 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+    reason: 'Desistência do cliente'
+  }));
+
+  assert.equal(cancelRes.status, 200);
+  const resBody = await cancelRes.json();
+  assert.equal(resBody.success, true);
+  assert.equal(updateCalled, true);
+  assert.equal(updatedPayload.status, 'cancelled');
+});
+
 test('backup e restauração preservam integridade relacional, financeira e credenciais scrypt', async () => {
   const { createDatabaseBackup } = await import('../scripts/backup.mjs');
   const { verifySnapshotIntegrity } = await import('../scripts/restore-verify.mjs');
