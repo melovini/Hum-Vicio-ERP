@@ -6,6 +6,7 @@ const sampleProducts = [
     id: 'prod-burger-1',
     name: 'Hum Burger Clássico',
     category: 'lanche',
+    status: 'validado',
     price_balcao: 32.0,
     price_ifood: 38.0,
     is_active: true,
@@ -18,6 +19,7 @@ const sampleProducts = [
     id: 'prod-fries-1',
     name: 'Batata Rústica Especial',
     category: 'porcao',
+    status: 'validado',
     price_balcao: 22.0,
     price_ifood: 26.0,
     is_active: true,
@@ -27,11 +29,18 @@ const sampleProducts = [
     id: 'prod-drink-1',
     name: 'Refrigerante Lata 350ml',
     category: 'bebida',
+    status: 'validado',
     price_balcao: 7.0,
     price_ifood: 9.0,
     is_active: true,
     recipe: [],
   },
+];
+
+const sampleRecipes = [
+  { product_id: 'prod-burger-1', ingredient_id: 'ing-1', quantity: 1 },
+  { product_id: 'prod-fries-1', ingredient_id: 'ing-2', quantity: 1 },
+  { product_id: 'prod-drink-1', ingredient_id: 'ing-3', quantity: 1 },
 ];
 
 const sampleCashSessions = [
@@ -59,7 +68,7 @@ async function mockCaixaApi(page: Page) {
           scope: 'caixa',
           inventory: [],
           products: sampleProducts,
-          recipes: [],
+          recipes: sampleRecipes,
           sales: [],
           saleItems: [],
           cashSessions: sampleCashSessions,
