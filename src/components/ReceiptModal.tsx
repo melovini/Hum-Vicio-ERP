@@ -25,6 +25,20 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
   const [type, setType] = useState<'cozinha' | 'cliente' | 'diferencial'>(diff || sale?.orderDiff ? 'diferencial' : 'cozinha');
   const [copiedRaw, setCopiedRaw] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
+  const [showMontagem, setShowMontagem] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('hum_vicio_print_show_montagem');
+      return saved !== null ? saved === 'true' : false;
+    }
+    return false;
+  });
+
+  const handleToggleShowMontagem = (val: boolean) => {
+    setShowMontagem(val);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('hum_vicio_print_show_montagem', String(val));
+    }
+  };
 
   if (!sale) return null;
 
@@ -66,7 +80,7 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
       activeDiff.added.forEach(item => {
         const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
         text += `[+] ${item.quantity}x ${item.productName} (ADICIONADO)\n`;
-        if (details.recipeIngredients.length > 0) {
+        if (showMontagem && details.recipeIngredients.length > 0) {
           text += `    MONTAGEM: ${details.recipeIngredients.join(', ')}\n`;
         }
         if (details.chapaItems.length > 0) {
@@ -127,7 +141,7 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
       sale.items.forEach(item => {
         const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
         text += `[${item.quantity}x] ${item.productName}\n`;
-        if (details.recipeIngredients.length > 0) {
+        if (showMontagem && details.recipeIngredients.length > 0) {
           text += `    MONTAGEM: ${details.recipeIngredients.join(', ')}\n`;
         }
         if (details.chapaItems.length > 0) {
@@ -278,6 +292,26 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
           </button>
         </div>
 
+        {/* Opções de Impressão (Ficha Técnica / Montagem) */}
+        {type !== 'cliente' && (
+          <div className="flex items-center justify-between px-3.5 py-2 mb-3 bg-slate-950/80 rounded-xl border border-slate-800 text-xs no-print">
+            <span className="text-slate-300 font-semibold flex items-center gap-1.5">
+              <span>📋</span> Detalhes da Montagem (Receita)
+            </span>
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={showMontagem}
+                onChange={(e) => handleToggleShowMontagem(e.target.checked)}
+                className="w-4 h-4 rounded text-amber-500 bg-slate-900 border-slate-700 focus:ring-amber-400 cursor-pointer"
+              />
+              <span className={`text-[11px] font-bold ${showMontagem ? 'text-amber-400' : 'text-slate-500'}`}>
+                {showMontagem ? 'Exibir na Comanda' : 'Ocultar (Economizar papel)'}
+              </span>
+            </label>
+          </div>
+        )}
+
         {/* Pré-visualização da Bobina Térmica (80mm) */}
         <div className="flex-1 overflow-y-auto bg-white text-black p-5 rounded-2xl font-sans font-bold text-xs shadow-inner select-none border-2 border-slate-300">
           <div id="thermal-receipt-printable">
@@ -314,7 +348,7 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
                         return (
                           <div key={idx} className="pl-2 border-l-2 border-black font-bold space-y-0.5">
                             <span className="text-sm">[+] {item.quantity}x {item.productName} (ADICIONADO)</span>
-                            {details.recipeIngredients.length > 0 && (
+                            {showMontagem && details.recipeIngredients.length > 0 && (
                               <p className="text-[11px] font-semibold text-black leading-tight">
                                 <span className="font-extrabold uppercase">Montagem: </span>
                                 {details.recipeIngredients.join(' • ')}
@@ -447,8 +481,8 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
                             </span>
                           </div>
 
-                          {/* Ficha Técnica / Montagem da Receita */}
-                          {details.recipeIngredients.length > 0 && (
+                          {/* Ficha Técnica / Montagem da Receita (Opcional) */}
+                          {showMontagem && details.recipeIngredients.length > 0 && (
                             <div className="pl-2 border-l-2 border-black text-[11px] font-semibold text-black leading-tight">
                               <span className="font-black uppercase">Montagem: </span>
                               <span>{details.recipeIngredients.join(' • ')}</span>

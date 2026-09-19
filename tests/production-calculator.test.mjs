@@ -165,6 +165,16 @@ const mockProducts = [
     priceIfood: 62,
     recipe: [], // Sem receita cadastrada na tabela recipes! Deve herdar de México
   },
+  {
+    id: 'prod-combo-batata-bebida',
+    name: 'Combo: Batata + Bebida',
+    category: 'combo',
+    priceBalcao: 14,
+    priceIfood: 16,
+    recipe: [
+      { ingredientId: 'inv-batata', quantity: 0.15 },
+    ],
+  },
 ];
 
 // =========================================================================
@@ -643,5 +653,24 @@ test('Caso 29: Pedido com Combo Batata Cheddar e Bacon nas observações', () =>
   assert.ok(details.chapaItems.some(c => c.includes('Bacon Crocante (Batata Cheddar & Bacon)')));
   assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo - Cheddar & Bacon)')));
 });
+
+test('Caso 30: Pedido histórico (#3F7C35) sem campo combo, detectado por diferença de preço unitário', () => {
+  const item = {
+    productId: 'prod-mexico-duplo',
+    productName: 'México Duplo',
+    quantity: 1,
+    unitPrice: 82, // 62 (ifood base México Duplo) + 4 (salada) + 16 (combo batata)
+    additionals: [{ name: 'Salada (Alface, Tomate, Cebola)', price: 4 }],
+  };
+
+  const prod = calculateItemProduction(item, mockProducts, mockInventory);
+  assert.equal(prod.fryerBatatasCombo, 1, 'Deve detectar 1 batata de combo pela diferença de preço');
+
+  const details = getBurgerPrintDetails(item, mockProducts, mockInventory);
+  assert.ok(details.comboDetails, 'Deve gerar comboDetails automaticamente pela diferença de preço');
+  assert.equal(details.comboDetails.comboType, 'batata');
+  assert.ok(details.fryerItems.some(f => f.includes('Batata (Combo)')));
+});
+
 
 

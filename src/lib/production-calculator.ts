@@ -705,6 +705,47 @@ export function calculateItemProduction(
     isComboBatata = true;
   }
 
+  // Detecção matemática resiliente: se o campo combo estiver vazio, mas o valor cobrado incluir o valor de um combo
+  if (!isComboBatata && !isComboOnion && matchedProduct && typeof item.unitPrice === 'number' && item.unitPrice > 0) {
+    const additionalsTotal = Array.isArray(item.additionals)
+      ? item.additionals.reduce((sum, a) => sum + (Number(a.price || (a.unitPrice || 0) * (a.quantity || 1)) || 0), 0)
+      : 0;
+    const baseIfood = matchedProduct.priceIfood ?? matchedProduct.priceBalcao ?? 0;
+    const baseBalcao = matchedProduct.priceBalcao ?? 0;
+    const diffIfood = Number((item.unitPrice - baseIfood - additionalsTotal).toFixed(2));
+    const diffBalcao = Number((item.unitPrice - baseBalcao - additionalsTotal).toFixed(2));
+
+    const comboProducts = products.filter(p => p.category === 'combo' && p.isActive !== false);
+    const matchedByDiff = comboProducts.find(cp => 
+      (cp.priceIfood && Math.abs(diffIfood - cp.priceIfood) <= 0.05) ||
+      (cp.priceBalcao && Math.abs(diffBalcao - cp.priceBalcao) <= 0.05)
+    );
+
+    if (matchedByDiff) {
+      const normCP = normalizeProductionString(matchedByDiff.name);
+      if (normCP.includes('cheddar') && normCP.includes('bacon')) {
+        isComboCheddarBacon = true;
+        isComboBatata = true;
+      } else if (normCP.includes('onion') || normCP.includes('anel') || normCP.includes('cebola empanada')) {
+        isComboOnion = true;
+      } else {
+        isComboBatata = true;
+      }
+    } else {
+      const maxDiff = Math.max(diffIfood, diffBalcao);
+      if (maxDiff >= 13) {
+        if (diffIfood >= 24 || diffBalcao >= 20) {
+          isComboCheddarBacon = true;
+          isComboBatata = true;
+        } else if (diffIfood === 18) {
+          isComboOnion = true;
+        } else {
+          isComboBatata = true;
+        }
+      }
+    }
+  }
+
   // Se o combo for Batata Cheddar e Bacon, o chapeiro prepara o bacon crocante para a batata
   if (isComboCheddarBacon) {
     baconChapaPerBurger += 1;
@@ -840,11 +881,10 @@ export function getBurgerPrintDetails(
   inventoryItems: InventoryItem[] = []
 ): BurgerPrintDetails {
   const normItemName = normalizeProductionString(item.productName || '');
-  const matchedProduct = products.find(p =>
-    (item.productId && p.id === item.productId) ||
-    normalizeProductionString(p.name) === normItemName ||
-    normItemName.startsWith(normalizeProductionString(p.name))
-  );
+  const matchedProduct =
+    (item.productId ? products.find(p => p.id === item.productId) : undefined) ||
+    products.find(p => normalizeProductionString(p.name) === normItemName) ||
+    products.find(p => normItemName.startsWith(normalizeProductionString(p.name)));
 
   let effectiveRecipe = (matchedProduct && Array.isArray(matchedProduct.recipe) && matchedProduct.recipe.length > 0)
     ? matchedProduct.recipe
@@ -875,8 +915,8 @@ export function getBurgerPrintDetails(
   const production = calculateItemProduction(item, products, inventoryItems);
   const qty = typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1;
   const matchedComboProduct = item.comboId ? products.find(p => p.id === item.comboId) : undefined;
-  const rawCombo = (item.combo || matchedComboProduct?.name || '').trim();
-  const normCombo = normalizeProductionString(rawCombo);
+  let rawCombo = (item.combo || matchedComboProduct?.name || '').trim();
+  let normCombo = normalizeProductionString(rawCombo);
 
   // Ficha técnica / Ingredientes da Montagem (receita cadastrada ou herdada)
   let recipeIngredients: string[] = [];
@@ -958,6 +998,53 @@ export function getBurgerPrintDetails(
   // Se o item tiver 'combo' genérico (ex: "Combo", "Combo 1") e não for onion, trata como batata (padrão)
   if (!isComboBatata && !isComboOnion && (normCombo.includes('combo') || allComboSearchText.includes('combo'))) {
     isComboBatata = true;
+  }
+
+  // Detecção matemática resiliente: se o campo combo estiver vazio, mas o valor cobrado incluir o valor de um combo
+  if (!isComboBatata && !isComboOnion && matchedProduct && typeof item.unitPrice === 'number' && item.unitPrice > 0) {
+    const additionalsTotal = Array.isArray(item.additionals)
+      ? item.additionals.reduce((sum, a) => sum + (Number(a.price || (a.unitPrice || 0) * (a.quantity || 1)) || 0), 0)
+      : 0;
+    const baseIfood = matchedProduct.priceIfood ?? matchedProduct.priceBalcao ?? 0;
+    const baseBalcao = matchedProduct.priceBalcao ?? 0;
+    const diffIfood = Number((item.unitPrice - baseIfood - additionalsTotal).toFixed(2));
+    const diffBalcao = Number((item.unitPrice - baseBalcao - additionalsTotal).toFixed(2));
+
+    const comboProducts = products.filter(p => p.category === 'combo' && p.isActive !== false);
+    const matchedByDiff = comboProducts.find(cp => 
+      (cp.priceIfood && Math.abs(diffIfood - cp.priceIfood) <= 0.05) ||
+      (cp.priceBalcao && Math.abs(diffBalcao - cp.priceBalcao) <= 0.05)
+    );
+
+    if (matchedByDiff) {
+      const normCP = normalizeProductionString(matchedByDiff.name);
+      if (normCP.includes('cheddar') && normCP.includes('bacon')) {
+        isComboCheddarBacon = true;
+        isComboBatata = true;
+        if (!rawCombo) rawCombo = matchedByDiff.name;
+      } else if (normCP.includes('onion') || normCP.includes('anel') || normCP.includes('cebola empanada')) {
+        isComboOnion = true;
+        if (!rawCombo) rawCombo = matchedByDiff.name;
+      } else {
+        isComboBatata = true;
+        if (!rawCombo) rawCombo = matchedByDiff.name;
+      }
+    } else {
+      const maxDiff = Math.max(diffIfood, diffBalcao);
+      if (maxDiff >= 13) {
+        if (diffIfood >= 24 || diffBalcao >= 20) {
+          isComboCheddarBacon = true;
+          isComboBatata = true;
+          if (!rawCombo) rawCombo = 'Combo: Batata Cheddar e Bacon + Bebida';
+        } else if (diffIfood === 18) {
+          isComboOnion = true;
+          if (!rawCombo) rawCombo = 'Combo: Anéis de Cebola + Bebida';
+        } else {
+          isComboBatata = true;
+          if (!rawCombo) rawCombo = 'Combo: Batata + Bebida';
+        }
+      }
+    }
   }
 
   const hasCombo = Boolean(
