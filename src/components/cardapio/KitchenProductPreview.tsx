@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import { 
   Flame, 
   Egg, 
@@ -11,7 +11,9 @@ import {
   ChefHat, 
   ShieldAlert,
   Layers,
-  Sparkles
+  Sparkles,
+  Timer,
+  ShoppingBag
 } from 'lucide-react';
 import type { ProductValidationResult } from '@/lib/product-validator';
 import { cn } from '@/lib/cn';
@@ -27,6 +29,8 @@ export function KitchenProductPreview({
   productName = '',
   category = 'lanche'
 }: KitchenProductPreviewProps) {
+  const [simQty, setSimQty] = useState<number>(1);
+
   const { productionPreview, warnings, status, ingredientsSummary } = validationResult;
   const { 
     chapaPatties, 
@@ -40,19 +44,24 @@ export function KitchenProductPreview({
     fryerOnionsCombo 
   } = productionPreview;
 
-  const totalBatatas = fryerBatatasCombo + fryerBatatasAvulsa;
-  const totalOnions = fryerOnionsCombo + fryerOnionsAvulsa;
+  const totalBatatas = (fryerBatatasCombo + fryerBatatasAvulsa) * simQty;
+  const totalOnions = (fryerOnionsCombo + fryerOnionsAvulsa) * simQty;
+  const totalPatties = chapaPatties * simQty;
+  const totalEggs = eggsCount * simQty;
+  const totalChicken = fryerChicken * simQty;
+  const totalCheese = fryerCheese * simQty;
 
-  // Insumos que vão para montagem (estação 'nenhuma' ou sem estação quente)
-  const montagemIngredients = ingredientsSummary.filter(
-    i => !['chapa', 'fritadeira_frango', 'fritadeira_queijo', 'fritadeira_batata', 'fritadeira_onion'].includes(i.station)
-  );
-
-  const hasHotStation = chapaPatties > 0 || eggsCount > 0 || fryerChicken > 0 || fryerCheese > 0 || totalBatatas > 0 || totalOnions > 0;
+  // Insumos agrupados por praça
+  const chapaItems = ingredientsSummary.filter(i => i.station === 'grill');
+  const fryerItems = ingredientsSummary.filter(i => i.station === 'fryer');
+  const ovenItems = ingredientsSummary.filter(i => i.station === 'oven');
+  const coldItems = ingredientsSummary.filter(i => i.station === 'cold');
+  const assemblyItems = ingredientsSummary.filter(i => i.station === 'assembly' || (!i.station || i.station === 'none') && i.kind !== 'none');
+  const nonKitchenItems = ingredientsSummary.filter(i => i.station === 'none' && (!i.kind || i.kind === 'none'));
 
   return (
     <div className="rounded-2xl border border-border-default bg-surface-elevated/40 overflow-hidden text-xs">
-      {/* Cabeçalho da Prévia */}
+      {/* Cabeçalho com Simulação Interativa */}
       <div className="p-3.5 bg-surface-card border-b border-border-default flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <div className="p-1.5 rounded-lg bg-brand-primary/10 text-brand-primary">
@@ -60,47 +69,72 @@ export function KitchenProductPreview({
           </div>
           <div>
             <h4 className="font-bold text-text-primary text-xs uppercase tracking-wide flex items-center gap-2">
-              Como este produto aparece na Cozinha (KDS)
+              Para vender {simQty} {simQty === 1 ? 'unidade' : 'unidades'}, a cozinha preparará:
             </h4>
             <span className="text-[11px] text-text-muted">
-              Prévia ao vivo da interpretação das estações da cozinha
+              Prévia determinística por praça • KDS e comanda de produção
             </span>
           </div>
         </div>
 
-        {/* Badge de Status de Validação */}
-        <div>
-          {status === 'validado' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[11px] border border-emerald-500/30">
-              <CheckCircle2 size={12} /> Ficha Validada
-            </span>
-          )}
-          {status === 'alerta' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300 font-bold text-[11px] border border-amber-500/30">
-              <AlertTriangle size={12} /> Alerta de Coerência
-            </span>
-          )}
-          {status === 'rascunho' && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-500/15 text-zinc-300 font-bold text-[11px] border border-zinc-500/30">
-              <Layers size={12} /> Rascunho / Incompleto
-            </span>
-          )}
+        {/* Controles de Simulação & Badge de Status */}
+        <div className="flex items-center gap-2">
+          <div className="flex items-center rounded-lg border border-border-default bg-surface-input p-0.5 text-[11px] font-bold">
+            <button
+              type="button"
+              onClick={() => setSimQty(1)}
+              className={cn(
+                'px-2 py-0.5 rounded-md transition-colors cursor-pointer',
+                simQty === 1 ? 'bg-brand-primary text-white' : 'text-text-muted hover:text-text-primary'
+              )}
+            >
+              1 unidade
+            </button>
+            <button
+              type="button"
+              onClick={() => setSimQty(2)}
+              className={cn(
+                'px-2 py-0.5 rounded-md transition-colors cursor-pointer',
+                simQty === 2 ? 'bg-brand-primary text-white' : 'text-text-muted hover:text-text-primary'
+              )}
+            >
+              2 unidades
+            </button>
+          </div>
+
+          <div>
+            {status === 'validado' && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-500/15 text-emerald-400 font-bold text-[10px] border border-emerald-500/30">
+                <CheckCircle2 size={11} /> Validada
+              </span>
+            )}
+            {status === 'alerta' && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-500/15 text-amber-300 font-bold text-[10px] border border-amber-500/30">
+                <AlertTriangle size={11} /> Alerta
+              </span>
+            )}
+            {status === 'rascunho' && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-zinc-500/15 text-zinc-300 font-bold text-[10px] border border-zinc-500/30">
+                <Layers size={11} /> Rascunho
+              </span>
+            )}
+          </div>
         </div>
       </div>
 
       <div className="p-4 space-y-4">
-        {/* Painel de Estações e Quantidades */}
+        {/* Painel por Praças Operacionais */}
         <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2.5">
-          {/* Estação Chapa: Carnes Bovina */}
+          {/* Estação Chapa */}
           <div className={cn(
             'p-3 rounded-xl border flex flex-col justify-between transition-all',
-            chapaPatties > 0 
+            (totalPatties > 0 || totalEggs > 0 || chapaItems.length > 0)
               ? 'bg-amber-500/10 border-amber-500/30 text-amber-200' 
               : 'bg-surface-card border-border-default text-text-muted opacity-60'
           )}>
             <div className="flex items-center justify-between">
               <span className="font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5">
-                <Flame size={14} className={chapaPatties > 0 ? 'text-amber-400' : ''} /> Chapa (Carnes)
+                <Flame size={14} className={totalPatties > 0 ? 'text-amber-400' : ''} /> Chapa
               </span>
               {isDouble && (
                 <span className="text-[10px] font-black px-1.5 py-0.5 rounded bg-amber-500 text-black uppercase tracking-tighter">
@@ -108,134 +142,121 @@ export function KitchenProductPreview({
                 </span>
               )}
             </div>
-            <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="text-2xl font-black font-mono">
-                {chapaPatties}x
-              </span>
-              <span className="text-xs font-semibold">
-                {chapaPatties === 1 ? 'Carne Bovina' : 'Carnes Bovinas'}
-              </span>
-            </div>
-          </div>
-
-          {/* Estação Chapa: Ovos Fritos (SEPARADOS DE CARNES) */}
-          <div className={cn(
-            'p-3 rounded-xl border flex flex-col justify-between transition-all',
-            eggsCount > 0 
-              ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-200' 
-              : 'bg-surface-card border-border-default text-text-muted opacity-60'
-          )}>
-            <div className="flex items-center justify-between">
-              <span className="font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5">
-                <Egg size={14} className={eggsCount > 0 ? 'text-yellow-400' : ''} /> Chapa (Ovos)
-              </span>
-              {eggsCount > 0 && (
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-yellow-500/20 text-yellow-300">
-                  Separado
-                </span>
+            <div className="mt-2 space-y-1">
+              {totalPatties > 0 && (
+                <div className="flex items-baseline gap-1.5">
+                  <span className="text-xl font-black font-mono">{totalPatties}x</span>
+                  <span className="text-xs font-semibold">
+                    {totalPatties === 1 ? 'Carne Bovina' : 'Carnes Bovinas'}
+                  </span>
+                </div>
               )}
-            </div>
-            <div className="mt-2 flex items-baseline gap-1.5">
-              <span className="text-2xl font-black font-mono">
-                {eggsCount}x
-              </span>
-              <span className="text-xs font-semibold">
-                {eggsCount === 1 ? 'Ovo na Chapa' : 'Ovos na Chapa'}
-              </span>
+              {totalEggs > 0 && (
+                <div className="flex items-baseline gap-1.5 text-yellow-300 font-semibold">
+                  <span className="text-lg font-black font-mono">{totalEggs}x</span>
+                  <span className="text-xs">{totalEggs === 1 ? 'Ovo na Chapa' : 'Ovos na Chapa'}</span>
+                </div>
+              )}
+              {totalPatties === 0 && totalEggs === 0 && chapaItems.length === 0 && (
+                <span className="text-xs text-text-muted">Sem preparo na chapa</span>
+              )}
+              {/* Outros itens de chapa sem contador principal */}
+              {chapaItems.filter(c => c.kind !== 'beef_patty' && c.kind !== 'egg').map((item, idx) => (
+                <div key={idx} className="text-[11px] text-amber-300/80">
+                  + {item.name}: {Number((item.quantity * simQty).toFixed(3))} {item.unit} ({item.portionLabel})
+                </div>
+              ))}
             </div>
           </div>
 
-          {/* Fritadeiras: Frango e Queijo Empanados */}
+          {/* Fritadeira */}
           <div className={cn(
             'p-3 rounded-xl border flex flex-col justify-between transition-all',
-            (fryerChicken > 0 || fryerCheese > 0)
+            (totalBatatas > 0 || totalOnions > 0 || totalChicken > 0 || totalCheese > 0 || fryerItems.length > 0)
               ? 'bg-orange-500/10 border-orange-500/30 text-orange-200' 
               : 'bg-surface-card border-border-default text-text-muted opacity-60'
           )}>
             <div className="flex items-center justify-between">
               <span className="font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5">
-                <UtensilsCrossed size={14} className={(fryerChicken > 0 || fryerCheese > 0) ? 'text-orange-400' : ''} /> Fritadeira (Proteínas)
+                <UtensilsCrossed size={14} className="text-orange-400" /> Fritadeira
               </span>
             </div>
-            <div className="mt-2 space-y-0.5">
-              {fryerChicken > 0 && (
+            <div className="mt-2 space-y-1">
+              {totalBatatas > 0 && (
+                <div className="text-xs font-bold text-amber-300">
+                  <span className="font-mono text-base">{totalBatatas}x</span> Porção de Batata
+                </div>
+              )}
+              {totalOnions > 0 && (
+                <div className="text-xs font-bold text-amber-300">
+                  <span className="font-mono text-base">{totalOnions}x</span> Porção de Onions
+                </div>
+              )}
+              {totalChicken > 0 && (
                 <div className="text-xs font-bold text-orange-300">
-                  {fryerChicken}x Frango Empanado
+                  <span className="font-mono text-base">{totalChicken}x</span> Frango Empanado
                 </div>
               )}
-              {fryerCheese > 0 && (
+              {totalCheese > 0 && (
                 <div className="text-xs font-bold text-yellow-300">
-                  {fryerCheese}x Queijo Minas Empanado
+                  <span className="font-mono text-base">{totalCheese}x</span> Queijo Empanado
                 </div>
               )}
-              {fryerChicken === 0 && fryerCheese === 0 && (
-                <span className="text-sm font-bold text-text-muted">0 itens</span>
+              {totalBatatas === 0 && totalOnions === 0 && totalChicken === 0 && totalCheese === 0 && fryerItems.length === 0 && (
+                <span className="text-xs text-text-muted">Sem itens de fritadeira</span>
               )}
             </div>
           </div>
 
-          {/* Fritadeiras: Batatas e Acompanhamentos */}
+          {/* Montagem & Preparo Frio */}
           <div className={cn(
-            'p-3 rounded-xl border flex flex-col justify-between transition-all sm:col-span-2 md:col-span-3',
-            (totalBatatas > 0 || totalOnions > 0)
-              ? 'bg-amber-500/10 border-amber-500/20 text-amber-200' 
+            'p-3 rounded-xl border flex flex-col justify-between transition-all',
+            assemblyItems.length > 0 || coldItems.length > 0 || ovenItems.length > 0
+              ? 'bg-cyan-500/10 border-cyan-500/20 text-cyan-200'
               : 'bg-surface-card border-border-default text-text-muted opacity-60'
           )}>
             <div className="flex items-center justify-between">
               <span className="font-bold text-[11px] uppercase tracking-wider flex items-center gap-1.5">
-                🍟 Acompanhamentos (Fritadeira)
+                <Layers size={14} className="text-cyan-400" /> Montagem & Frio
               </span>
-              {(totalBatatas > 0 || totalOnions > 0) && (
-                <span className="text-[10px] text-amber-300">
-                  Sem Duplicidade de Combo
-                </span>
-              )}
+              <span className="text-[10px] font-mono text-cyan-300">
+                {assemblyItems.length + coldItems.length + ovenItems.length} componentes
+              </span>
             </div>
-            <div className="mt-2 flex items-center gap-4 flex-wrap text-xs">
-              {totalBatatas > 0 ? (
-                <div className="flex items-center gap-1.5 font-bold text-amber-300">
-                  <span className="font-mono text-base">{totalBatatas}x</span> Porção de Batata
+            <div className="mt-2 space-y-0.5 max-h-24 overflow-y-auto">
+              {assemblyItems.concat(coldItems).concat(ovenItems).map((item, idx) => (
+                <div key={idx} className="text-[11px] text-text-secondary truncate">
+                  • <strong className="text-text-primary">{item.name}</strong>: {Number((item.quantity * simQty).toFixed(3))} {item.unit}
                 </div>
-              ) : (
-                <span className="text-text-muted">Nenhuma batata</span>
-              )}
-
-              {totalOnions > 0 && (
-                <div className="flex items-center gap-1.5 font-bold text-amber-300">
-                  <span className="font-mono text-base">{totalOnions}x</span> Porção de Onions
-                </div>
+              ))}
+              {assemblyItems.length === 0 && coldItems.length === 0 && ovenItems.length === 0 && (
+                <span className="text-xs text-text-muted">Nenhum insumo de montagem</span>
               )}
             </div>
           </div>
         </div>
 
-        {/* Montagem: Insumos que não vão ao fogo (pães, queijos fatiados, molhos, saladas) */}
-        {montagemIngredients.length > 0 && (
-          <div className="p-3 rounded-xl border border-border-default bg-surface-card space-y-2">
-            <div className="flex items-center justify-between text-[11px] font-bold text-text-secondary uppercase">
-              <span className="flex items-center gap-1.5">
-                <Layers size={13} className="text-cyan-400" /> Montagem & Finalização ({montagemIngredients.length} insumos)
-              </span>
-              <span className="text-[10px] text-text-muted lowercase">sem estação quente</span>
-            </div>
+        {/* Não vai à cozinha (Embalagens / Operacional) */}
+        {nonKitchenItems.length > 0 && (
+          <div className="p-2.5 rounded-xl border border-border-default bg-surface-card flex items-center justify-between flex-wrap gap-2 text-[11px]">
+            <span className="flex items-center gap-1.5 font-bold text-text-muted uppercase">
+              <ShoppingBag size={13} /> Não vai à cozinha (Baixa de Estoque):
+            </span>
             <div className="flex flex-wrap gap-1.5">
-              {montagemIngredients.map((ing, idx) => (
-                <span 
-                  key={idx} 
-                  className="px-2 py-1 rounded-md bg-surface-elevated border border-border-default text-[11px] text-text-secondary"
-                >
-                  <strong className="text-text-primary">{ing.name}</strong> ({ing.quantity} {ing.unit})
+              {nonKitchenItems.map((item, idx) => (
+                <span key={idx} className="px-2 py-0.5 rounded bg-surface-elevated text-text-secondary border border-border-default">
+                  {item.name}: {Number((item.quantity * simQty).toFixed(3))} {item.unit}
                 </span>
               ))}
             </div>
           </div>
         )}
 
-        {/* Quadro de Avisos e Inconsistências Detectadas */}
+        {/* Avisos e Pendências de Cadastro */}
         {warnings.length > 0 && (
-          <div className="space-y-2 pt-1">
-            <span className="text-[11px] font-bold text-text-muted uppercase tracking-wider block">
-              Diagnóstico do Validador de Produtos:
+          <div className="space-y-1.5 pt-1">
+            <span className="text-[10px] font-bold text-text-muted uppercase tracking-wider block">
+              Conferência da Ficha Técnica:
             </span>
             {warnings.map((w, idx) => {
               const isDanger = w.severity === 'danger';
@@ -245,7 +266,7 @@ export function KitchenProductPreview({
                 <div 
                   key={idx} 
                   className={cn(
-                    'p-2.5 rounded-xl border flex items-start gap-2.5 text-xs',
+                    'p-2.5 rounded-xl border flex items-start gap-2 text-xs',
                     isDanger && 'bg-rose-500/10 border-rose-500/30 text-rose-200',
                     isWarning && 'bg-amber-500/10 border-amber-500/30 text-amber-200',
                     !isDanger && !isWarning && 'bg-cyan-500/10 border-cyan-500/30 text-cyan-200',

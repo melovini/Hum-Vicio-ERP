@@ -12,18 +12,83 @@ export interface ProductValidationWarning {
 
 export type ProductStatus = 'rascunho' | 'validado' | 'ativo' | 'inativo';
 
+export interface ProductValidationIngredientSummary {
+  ingredientId: string;
+  station: string;
+  kind?: string;
+  name: string;
+  quantity: number;
+  unit: string;
+  portionWeight?: number;
+  portionUnit?: string;
+  portionLabel: string;
+  needsPortionDefinition: boolean;
+}
+
 export interface ProductValidationResult {
   isValid: boolean;
   status: 'rascunho' | 'validado' | 'alerta';
   warnings: ProductValidationWarning[];
   productionPreview: ItemProductionDetails;
   recipeMetrics: RecipeCalculatedMetrics;
-  ingredientsSummary: {
-    station: string;
-    name: string;
-    quantity: number;
-    unit: string;
-  }[];
+  ingredientsSummary: ProductValidationIngredientSummary[];
+}
+
+export function formatDerivedPortionLabel(
+  quantity: number,
+  unit: string,
+  portionWeight?: number,
+  portionUnit?: string,
+  kind?: string
+): { label: string; count?: number; needsPortionDefinition: boolean } {
+  const normUnit = normalizeProductionString(unit);
+
+  if (['un', 'und', 'unidade', 'unidades', 'pc', 'peca'].includes(normUnit)) {
+    const isDisco = kind === 'beef_patty';
+    const unitWord = isDisco ? (quantity === 1 ? 'disco' : 'discos') : (quantity === 1 ? 'unidade' : 'unidades');
+    return {
+      label: `${quantity} ${unitWord}`,
+      count: quantity,
+      needsPortionDefinition: false
+    };
+  }
+
+  let qtyInG = 0;
+  if (['kg', 'kilo', 'quilo', 'kilos', 'quilos'].includes(normUnit)) {
+    qtyInG = quantity * 1000;
+  } else if (['g', 'gr', 'grama', 'gramas'].includes(normUnit)) {
+    qtyInG = quantity;
+  }
+
+  if (qtyInG > 0) {
+    if (portionWeight && portionWeight > 0) {
+      let portionInG = portionWeight;
+      const normPortionUnit = normalizeProductionString(portionUnit || 'g');
+      if (['kg', 'kilo'].includes(normPortionUnit)) portionInG = portionWeight * 1000;
+
+      const rawRatio = qtyInG / portionInG;
+      const rounded = Math.round(rawRatio * 100) / 100;
+      const isDisco = kind === 'beef_patty';
+      const itemWord = isDisco ? (rounded === 1 ? 'disco' : 'discos') : (rounded === 1 ? 'porção' : 'porções');
+      return {
+        label: `${rounded} ${itemWord} de ${portionInG} g`,
+        count: rounded,
+        needsPortionDefinition: false
+      };
+    }
+
+    if (kind === 'beef_patty' || kind === 'fries' || kind === 'onion_rings') {
+      return {
+        label: 'Defina a porção para calcular',
+        needsPortionDefinition: true
+      };
+    }
+  }
+
+  return {
+    label: `${quantity} ${unit}`,
+    needsPortionDefinition: false
+  };
 }
 
 /**
@@ -156,16 +221,10 @@ export function validateProductIntegrity(
       continue;
     }
 
-    if (!r.productionStation || !r.productionKind) {
+    if (!r.productionStation) {
       warnings.push({
         code: 'MISSING_PRODUCTION_CLASSIFICATION',
-        message: `Defina o destino de produção e a regra de contagem de "${inv.name}".`,
-        severity: 'danger'
-      });
-    } else if (r.productionStation !== 'none' && r.productionKind === 'none') {
-      warnings.push({
-        code: 'MISSING_PRODUCTION_COUNTER',
-        message: `Defina o que "${inv.name}" representa no KDS ou marque como “Outro item produzido”.`,
+        message: `Escolha onde "${inv.name}" será preparado.`,
         severity: 'danger'
       });
     }
@@ -201,14 +260,37 @@ export function validateProductIntegrity(
     });
   }
 
-  // 9. Resumo de Insumos por Estação
-  const ingredientsSummary = recipe.map(r => {
+  // 9. Resumo de Insumos por Estação com Rótulos de Porção
+  const ingredientsSummary: ProductValidationIngredientSummary[] = recipe.map(r => {
     const inv = invMap.get(r.ingredientId);
+    const unit = inv?.unit || 'un';
+    const portionInfo = formatDerivedPortionLabel(
+      r.quantity,
+      unit,
+      inv?.portionWeight,
+      inv?.portionUnit,
+      r.productionKind
+    );
+
+    if (portionInfo.needsPortionDefinition) {
+      warnings.push({
+        code: 'MISSING_PORTION_WEIGHT',
+        message: `Insumo "${inv?.name || 'Insumo'}" é controlado por peso (${unit}). Defina o peso da porção no estoque para o cálculo automático de preparo.`,
+        severity: 'info'
+      });
+    }
+
     return {
-      station: r.productionStation || inv?.station || 'não revisado',
+      ingredientId: r.ingredientId,
+      station: r.productionStation || inv?.station || 'none',
+      kind: r.productionKind,
       name: inv?.name || 'Insumo',
       quantity: r.quantity,
-      unit: inv?.unit || 'un'
+      unit,
+      portionWeight: inv?.portionWeight,
+      portionUnit: inv?.portionUnit,
+      portionLabel: portionInfo.label,
+      needsPortionDefinition: portionInfo.needsPortionDefinition
     };
   });
 

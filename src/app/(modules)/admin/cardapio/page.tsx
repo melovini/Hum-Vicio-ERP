@@ -45,24 +45,24 @@ import { useToast } from '@/components/ui/Toast';
 import { cn } from '@/lib/cn';
 
 const PRODUCTION_STATIONS: Array<{ value: RecipeProductionStation; label: string }> = [
-  { value: 'none', label: 'Sem preparo / estoque' },
+  { value: 'none', label: 'Não vai à cozinha (Sem preparo)' },
   { value: 'grill', label: 'Chapa' },
   { value: 'fryer', label: 'Fritadeira' },
   { value: 'oven', label: 'Forno' },
-  { value: 'cold', label: 'Praça fria' },
+  { value: 'cold', label: 'Preparo frio' },
   { value: 'assembly', label: 'Montagem' },
-  { value: 'other', label: 'Outro processo' },
+  { value: 'other', label: 'Outra operação' },
 ];
 
 const PRODUCTION_KINDS: Array<{ value: RecipeProductionKind; label: string }> = [
-  { value: 'none', label: 'Não entra em contador' },
-  { value: 'beef_patty', label: 'Hambúrguer / carne' },
+  { value: 'none', label: 'Não contar (Somente na praça)' },
+  { value: 'beef_patty', label: 'Carne bovina (Hambúrguer)' },
   { value: 'egg', label: 'Ovo' },
   { value: 'bacon', label: 'Bacon' },
   { value: 'breaded_chicken', label: 'Frango empanado' },
   { value: 'breaded_cheese', label: 'Queijo empanado' },
-  { value: 'fries', label: 'Batata' },
-  { value: 'onion_rings', label: 'Anéis de cebola' },
+  { value: 'fries', label: 'Porção de batata' },
+  { value: 'onion_rings', label: 'Porção de anéis de cebola' },
   { value: 'other', label: 'Outro item produzido' },
 ];
 
@@ -149,6 +149,15 @@ export default function CardapioAdminPage() {
   const [showNewSubModal, setShowNewSubModal] = useState(false);
   const [newSubName, setNewSubName] = useState('');
   const [newSubUnit, setNewSubUnit] = useState('kg');
+  const [newSubStation, setNewSubStation] = useState<RecipeProductionStation>('none');
+  const [newSubKind, setNewSubKind] = useState<RecipeProductionKind>('none');
+  const [newSubPortionWeight, setNewSubPortionWeight] = useState('');
+
+  // Active Prep Operational State
+  const [prepStation, setPrepStation] = useState<RecipeProductionStation>('none');
+  const [prepKind, setPrepKind] = useState<RecipeProductionKind>('none');
+  const [prepPortionWeight, setPrepPortionWeight] = useState('');
+  const [isSavingPrepConfig, setIsSavingPrepConfig] = useState(false);
 
   // Modal Rápido de Vínculo para Produtos Existentes
   const [quickLinkProduct, setQuickLinkProduct] = useState<Product | null>(null);
@@ -237,6 +246,19 @@ export default function CardapioAdminPage() {
   const currentSubItems = activePrep 
     ? subRecipes.filter(s => s.parentIngredientId === activePrep.id) 
     : [];
+
+  // Sincronizar estado de classificação operacional com o activePrep selecionado
+  useEffect(() => {
+    if (activePrep) {
+      setPrepStation(activePrep.productionStation || 'none');
+      setPrepKind(activePrep.productionKind || 'none');
+      setPrepPortionWeight(
+        activePrep.portionWeight !== undefined && activePrep.portionWeight !== null
+          ? String(activePrep.portionWeight)
+          : ''
+      );
+    }
+  }, [activePrep?.id, activePrep?.productionStation, activePrep?.productionKind, activePrep?.portionWeight]);
 
   // Subcategorias disponíveis para a categoria sendo editada no formulário
   const availableSubcategoriesForCategory = useMemo(() => {
@@ -581,10 +603,10 @@ export default function CardapioAdminPage() {
 
       if (editingId) {
         await updateProduct(editingId, productData);
-        notify({ title: `Produto "${name}" atualizado com sucesso!`, tone: 'success' });
+        notify({ title: 'Ficha salva e disponível para uso.', tone: 'success' });
       } else {
         await addProduct(productData);
-        notify({ title: `Produto "${name}" criado com sucesso no cardápio!`, tone: 'success' });
+        notify({ title: `Produto "${name}" cadastrado com sucesso!`, tone: 'success' });
       }
 
       // Garantir visibilidade imediata do produto recém-salvo no cardápio
@@ -598,7 +620,10 @@ export default function CardapioAdminPage() {
       resetForm();
     } catch (err: any) {
       console.error('Erro ao salvar produto:', err);
-      notify({ title: `Erro ao salvar produto: ${err.message || 'Falha de comunicação com o banco de dados.'}`, tone: 'danger' });
+      notify({ 
+        title: err.message || 'Não foi possível salvar. A ficha publicada não foi alterada. Seus ajustes continuam nesta tela.', 
+        tone: 'danger' 
+      });
     } finally {
       setIsSavingProduct(false);
     }
@@ -615,7 +640,18 @@ export default function CardapioAdminPage() {
     setCfop(p.cfop || '');
     setCsosn(p.csosn || '');
     setCest(p.cest || '');
-    setRecipe([...p.recipe]);
+    setRecipe(p.recipe.map(r => {
+      const ing = items.find(i => i.id === r.ingredientId);
+      return {
+        ...r,
+        productionStation: r.productionStation && r.productionStation !== 'none'
+          ? r.productionStation
+          : (ing?.productionStation || 'none'),
+        productionKind: r.productionKind && r.productionKind !== 'none'
+          ? r.productionKind
+          : (ing?.productionKind || 'none'),
+      };
+    }));
     setAcceptsAddons(p.acceptsAddons !== false);
     setIsAddon(Boolean(p.isAddon));
     if (p.allowedAddonIds && p.allowedAddonIds.length > 0) {
@@ -640,7 +676,18 @@ export default function CardapioAdminPage() {
     setCfop(p.cfop || '');
     setCsosn(p.csosn || '');
     setCest(p.cest || '');
-    setRecipe(p.recipe.map(r => ({ ...r })));
+    setRecipe(p.recipe.map(r => {
+      const ing = items.find(i => i.id === r.ingredientId);
+      return {
+        ...r,
+        productionStation: r.productionStation && r.productionStation !== 'none'
+          ? r.productionStation
+          : (ing?.productionStation || 'none'),
+        productionKind: r.productionKind && r.productionKind !== 'none'
+          ? r.productionKind
+          : (ing?.productionKind || 'none'),
+      };
+    }));
     setAcceptsAddons(p.acceptsAddons !== false);
     setIsAddon(Boolean(p.isAddon));
     if (p.allowedAddonIds && p.allowedAddonIds.length > 0) {
@@ -682,6 +729,67 @@ export default function CardapioAdminPage() {
     }
   };
 
+  const handleSelectIngredient = (item: InventoryItem) => {
+    setSelectedIngId(item.id);
+    setIngSearch(item.name);
+    setIsIngDropdownOpen(false);
+
+    // 1. Determinar Praça de Produção herdando do item/sub-receita ou heurística
+    let targetStation: RecipeProductionStation = item.productionStation || 'none';
+    if (targetStation === 'none') {
+      const lowerName = item.name.toLowerCase();
+      if (
+        lowerName.includes('burger') ||
+        lowerName.includes('hambúrguer') ||
+        lowerName.includes('carne moída') ||
+        lowerName.includes('bacon') ||
+        lowerName.includes('smash')
+      ) {
+        targetStation = 'grill';
+      } else if (
+        lowerName.includes('batata') ||
+        lowerName.includes('empanado') ||
+        lowerName.includes('nugget') ||
+        lowerName.includes('frito') ||
+        lowerName.includes('frita') ||
+        lowerName.includes('anéis') ||
+        lowerName.includes('onion')
+      ) {
+        targetStation = 'fryer';
+      }
+    }
+    setIngredientProductionStation(targetStation);
+
+    // 2. Determinar Regra de Contagem KDS herdando do item/sub-receita ou heurística
+    let targetKind: RecipeProductionKind = item.productionKind || 'none';
+    if (targetStation !== 'none' && targetKind === 'none') {
+      const lowerName = item.name.toLowerCase();
+      if (lowerName.includes('frango')) {
+        targetKind = 'breaded_chicken';
+      } else if (lowerName.includes('queijo') && (lowerName.includes('empanado') || lowerName.includes('minas'))) {
+        targetKind = 'breaded_cheese';
+      } else if (lowerName.includes('burger') || lowerName.includes('hambúrguer') || lowerName.includes('carne moída') || lowerName.includes('smash')) {
+        targetKind = 'beef_patty';
+      } else if (lowerName.includes('batata')) {
+        targetKind = 'fries';
+      } else if (lowerName.includes('anéis') || lowerName.includes('onion') || lowerName.includes('cebola empanada')) {
+        targetKind = 'onion_rings';
+      } else if (lowerName.includes('bacon')) {
+        targetKind = 'bacon';
+      } else if (lowerName.includes('ovo')) {
+        targetKind = 'egg';
+      }
+    }
+    setIngredientProductionKind(targetStation === 'none' ? 'none' : targetKind);
+
+    // 3. Preencher porção padrão se definida e campo estiver vazio ou padrão
+    if (item.portionWeight !== undefined && item.portionWeight > 0) {
+      if (!ingQuantity || Number(ingQuantity) <= 0 || ingQuantity === '1') {
+        setIngQuantity(String(item.portionWeight));
+      }
+    }
+  };
+
   const addIngredientToRecipe = () => {
     if (selectedIngId && ingQuantity) {
       const qty = Number(ingQuantity);
@@ -689,19 +797,11 @@ export default function CardapioAdminPage() {
         notify({ title: 'Informe uma quantidade válida maior que zero.', tone: 'warning' });
         return;
       }
-      if (ingredientProductionStation !== 'none' && ingredientProductionKind === 'none') {
-        notify({
-          title: 'Informe o que deve ser contabilizado nesse processo.',
-          description: 'Se o ingrediente apenas passa pela estação, escolha “Outro item produzido”.',
-          tone: 'warning',
-        });
-        return;
-      }
       setRecipe([...recipe, {
         ingredientId: selectedIngId,
         quantity: qty,
         productionStation: ingredientProductionStation,
-        productionKind: ingredientProductionKind,
+        productionKind: ingredientProductionStation === 'none' ? 'none' : ingredientProductionKind,
       }]);
       setSelectedIngId('');
       setIngQuantity('');
@@ -751,18 +851,57 @@ export default function CardapioAdminPage() {
     e.preventDefault();
     if (!newSubName.trim()) return;
 
-    await addInventoryItem({
+    const weight = newSubPortionWeight.trim() ? Number(newSubPortionWeight.replace(',', '.')) : undefined;
+
+    const created = await addInventoryItem({
       name: newSubName.trim(),
       category: 'Pré-preparos',
       unit: newSubUnit,
       costPerUnit: 0,
       currentStock: 0,
-      status: 'ok'
+      status: 'ok',
+      productionStation: newSubStation,
+      productionKind: newSubStation === 'none' ? 'none' : newSubKind,
+      portionWeight: weight,
+      portionUnit: newSubUnit,
     });
 
     notify({ title: `Sub-receita "${newSubName}" criada! Adicione os ingredientes da fórmula.`, tone: 'success' });
+    if (created?.id) {
+      setSelectedPrepId(created.id);
+    }
     setNewSubName('');
+    setNewSubStation('none');
+    setNewSubKind('none');
+    setNewSubPortionWeight('');
     setShowNewSubModal(false);
+  };
+
+  const handleSaveActivePrepOperationalConfig = async () => {
+    if (!activePrep) return;
+    setIsSavingPrepConfig(true);
+    try {
+      const weight = prepPortionWeight.trim() ? Number(prepPortionWeight.replace(',', '.')) : undefined;
+      await updateInventoryItem(activePrep.id, {
+        productionStation: prepStation,
+        productionKind: prepStation === 'none' ? 'none' : prepKind,
+        portionWeight: weight,
+        portionUnit: activePrep.unit,
+      });
+      notify({
+        title: 'Configuração operacional da sub-receita salva!',
+        description: `Praça: ${stationLabel(prepStation)} • Contagem: ${kindLabel(prepKind)}${weight ? ` • Porção: ${weight} ${activePrep.unit}` : ''}`,
+        tone: 'success',
+      });
+    } catch (err: any) {
+      notify({
+        title: 'Erro ao salvar classificação da sub-receita.',
+        description: err?.message || 'Tente novamente.',
+        tone: 'danger',
+      });
+    } finally {
+      setIsSavingPrepConfig(false);
+    }
   };
 
   const handleConfirmRemoveSubRecipe = async () => {
@@ -1455,7 +1594,14 @@ export default function CardapioAdminPage() {
                   >
                     <div className="flex-1 pr-2">
                       <p className="font-bold text-sm text-text-primary">{prep.name}</p>
-                      <p className="text-xs text-text-muted">Unidade: {prep.unit}</p>
+                      <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                        <span className="text-xs text-text-muted">Unidade: {prep.unit}</span>
+                        {prep.productionStation && prep.productionStation !== 'none' && (
+                          <span className="text-[10px] font-semibold text-brand-primary bg-brand-primary/10 px-1.5 py-0.5 rounded border border-brand-primary/20">
+                            {stationLabel(prep.productionStation)}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <div className="flex items-center gap-3">
                       <div className="text-right">
@@ -1506,6 +1652,85 @@ export default function CardapioAdminPage() {
                       <span className="text-2xl font-mono font-extrabold text-amber-400 tabular-nums">
                         R$ {getIngredientTrueCost(activePrep.id).toFixed(2)}
                       </span>
+                    </div>
+                  </div>
+
+                  {/* Classificação Operacional de Cozinha & KDS da Sub-Receita */}
+                  <div className="bg-surface-elevated/40 p-4 rounded-xl border border-border-default space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-xs text-text-primary font-bold uppercase tracking-wider flex items-center gap-2">
+                          <ChefHat size={14} className="text-brand-primary" />
+                          Classificação de Cozinha & KDS
+                        </h3>
+                        <p className="text-[11px] text-text-muted">
+                          Defina onde este item é preparado e como ele será contado nos lanches e porções.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {prepStation !== 'none' && (
+                          <span className="rounded-full border border-border-default bg-surface-elevated px-2.5 py-0.5 text-[10px] font-bold text-text-secondary">
+                            {stationLabel(prepStation)} • {kindLabel(prepKind)}
+                          </span>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          onClick={handleSaveActivePrepOperationalConfig}
+                          loading={isSavingPrepConfig}
+                        >
+                          Salvar Classificação
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-semibold text-text-secondary uppercase">
+                          Onde Preparar
+                        </label>
+                        <Select
+                          value={prepStation}
+                          onChange={e => {
+                            const val = e.target.value as RecipeProductionStation;
+                            setPrepStation(val);
+                            if (val === 'none') setPrepKind('none');
+                          }}
+                        >
+                          {PRODUCTION_STATIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </Select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-semibold text-text-secondary uppercase">
+                          O Que Contar (KDS)
+                        </label>
+                        <Select
+                          value={prepKind}
+                          onChange={e => setPrepKind(e.target.value as RecipeProductionKind)}
+                          disabled={prepStation === 'none'}
+                        >
+                          {PRODUCTION_KINDS.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                          ))}
+                        </Select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="block text-[11px] font-semibold text-text-secondary uppercase">
+                          Porção Unitária ({activePrep.unit})
+                        </label>
+                        <input
+                          type="number"
+                          step="0.001"
+                          placeholder={activePrep.unit === 'kg' ? 'Ex: 0.180 (180g)' : 'Ex: 1'}
+                          value={prepPortionWeight}
+                          onChange={e => setPrepPortionWeight(e.target.value)}
+                          className="w-full bg-surface-input border border-border-default rounded-control p-2 text-text-primary font-mono text-xs outline-none focus:border-brand-primary"
+                        />
+                      </div>
                     </div>
                   </div>
 
@@ -1760,9 +1985,7 @@ export default function CardapioAdminPage() {
                           e.preventDefault();
                           if (filteredTypeaheadItems[highlightedIndex]) {
                             const picked = filteredTypeaheadItems[highlightedIndex];
-                            setSelectedIngId(picked.id);
-                            setIngSearch(picked.name);
-                            setIsIngDropdownOpen(false);
+                            handleSelectIngredient(picked);
                           } else if (ingSearch.trim()) {
                             handleCreateIngredientOnTheFly(ingSearch.trim());
                           }
@@ -1808,16 +2031,21 @@ export default function CardapioAdminPage() {
                                 key={item.id}
                                 onMouseEnter={() => setHighlightedIndex(idx)}
                                 onClick={() => {
-                                  setSelectedIngId(item.id);
-                                  setIngSearch(item.name);
-                                  setIsIngDropdownOpen(false);
+                                  handleSelectIngredient(item);
                                 }}
                                 className={cn(
                                   'p-2.5 px-3 flex justify-between items-center cursor-pointer border-b border-border-default/40 last:border-0 text-xs transition-colors',
                                   isHighlighted ? 'bg-brand-primary/20 text-text-primary' : isSelected ? 'bg-surface-elevated text-brand-primary' : 'text-text-secondary hover:bg-surface-elevated',
                                 )}
                               >
-                                <span className="font-bold">{item.name}</span>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="font-bold">{item.name}</span>
+                                  {item.productionStation && item.productionStation !== 'none' && (
+                                    <span className="text-[10px] font-semibold text-brand-primary bg-brand-primary/10 px-1.5 py-0.5 rounded border border-brand-primary/20">
+                                      {stationLabel(item.productionStation)}
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="font-mono text-[11px] text-text-muted">
                                   R$ {cost.toFixed(2)} / {item.unit}
                                 </span>
@@ -1920,8 +2148,19 @@ export default function CardapioAdminPage() {
                               )}
                             </div>
                             <span className="text-[11px] text-text-muted font-mono">
-                              {r.quantity} {ing?.unit} × R$ {unitCost.toFixed(2)}
+                              Consumo: {r.quantity} {ing?.unit} × R$ {unitCost.toFixed(2)}
                             </span>
+                            {(() => {
+                              const summaryItem = validationResult.ingredientsSummary.find(s => s.ingredientId === r.ingredientId);
+                              if (summaryItem?.portionLabel && summaryItem.portionLabel !== `${r.quantity} ${ing?.unit}`) {
+                                return (
+                                  <div className="text-[11px] text-brand-primary font-medium mt-0.5">
+                                    ↳ Preparo: <strong>{summaryItem.portionLabel}</strong>
+                                  </div>
+                                );
+                              }
+                              return null;
+                            })()}
                             <div className="mt-2 flex flex-wrap gap-1.5">
                               <span className="rounded-full border border-border-default bg-surface-elevated px-2 py-0.5 text-[10px] font-bold text-text-secondary">
                                 {stationLabel(r.productionStation)}
@@ -1947,34 +2186,40 @@ export default function CardapioAdminPage() {
                         </div>
 
                         <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 border-t border-border-default/60 pt-2">
-                          <Select
-                            aria-label={`Destino de produção de ${ing?.name || 'ingrediente'}`}
-                            value={r.productionStation || ''}
-                            onChange={event => {
-                              const station = event.target.value as RecipeProductionStation;
-                              setRecipe(current => current.map((item, itemIndex) => itemIndex === idx
-                                ? { ...item, productionStation: station, productionKind: station === 'none' ? 'none' : item.productionKind }
-                                : item));
-                            }}
-                          >
-                            <option value="" disabled>Revisar destino...</option>
-                            {PRODUCTION_STATIONS.map(option => (
-                              <option key={option.value} value={option.value}>{option.label}</option>
-                            ))}
-                          </Select>
-                          <Select
-                            aria-label={`Regra de contagem de ${ing?.name || 'ingrediente'}`}
-                            value={r.productionKind || ''}
-                            onChange={event => setRecipe(current => current.map((item, itemIndex) => itemIndex === idx
-                              ? { ...item, productionKind: event.target.value as RecipeProductionKind }
-                              : item))}
-                            disabled={r.productionStation === 'none'}
-                          >
-                            <option value="" disabled>Revisar contagem...</option>
-                            {PRODUCTION_KINDS.map(option => (
-                              <option key={option.value} value={option.value}>{option.label}</option>
-                            ))}
-                          </Select>
+                          <div>
+                            <span className="block text-[10px] text-text-muted mb-1 font-semibold uppercase">Onde preparar:</span>
+                            <Select
+                              aria-label={`Destino de produção de ${ing?.name || 'ingrediente'}`}
+                              value={r.productionStation || ''}
+                              onChange={event => {
+                                const station = event.target.value as RecipeProductionStation;
+                                setRecipe(current => current.map((item, itemIndex) => itemIndex === idx
+                                  ? { ...item, productionStation: station, productionKind: station === 'none' ? 'none' : item.productionKind }
+                                  : item));
+                              }}
+                            >
+                              <option value="" disabled>Revisar destino...</option>
+                              {PRODUCTION_STATIONS.map(option => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </Select>
+                          </div>
+                          <div>
+                            <span className="block text-[10px] text-text-muted mb-1 font-semibold uppercase">O que contar:</span>
+                            <Select
+                              aria-label={`Regra de contagem de ${ing?.name || 'ingrediente'}`}
+                              value={r.productionKind || ''}
+                              onChange={event => setRecipe(current => current.map((item, itemIndex) => itemIndex === idx
+                                ? { ...item, productionKind: event.target.value as RecipeProductionKind }
+                                : item))}
+                              disabled={r.productionStation === 'none'}
+                            >
+                              <option value="" disabled>Revisar contagem...</option>
+                              {PRODUCTION_KINDS.map(option => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                              ))}
+                            </Select>
+                          </div>
                         </div>
 
                         {/* Edição Rápida de Custo para Insumo com Custo Zerado */}
@@ -2446,6 +2691,58 @@ export default function CardapioAdminPage() {
                 <option value="L">Litro (L)</option>
                 <option value="un">Unidade (un)</option>
               </Select>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-text-secondary">
+                  Praça de Produção (Onde preparar)
+                </label>
+                <Select 
+                  value={newSubStation} 
+                  onChange={e => {
+                    const val = e.target.value as RecipeProductionStation;
+                    setNewSubStation(val);
+                    if (val === 'none') setNewSubKind('none');
+                  }}
+                >
+                  {PRODUCTION_STATIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-xs font-bold text-text-secondary">
+                  Regra de Contagem KDS
+                </label>
+                <Select 
+                  value={newSubKind} 
+                  onChange={e => setNewSubKind(e.target.value as RecipeProductionKind)}
+                  disabled={newSubStation === 'none'}
+                >
+                  {PRODUCTION_KINDS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="block text-xs font-bold text-text-secondary">
+                Peso / Quantidade da Porção Padrão (Opcional)
+              </label>
+              <input 
+                type="number" 
+                step="0.001"
+                placeholder={newSubUnit === 'kg' ? 'Ex: 0.180 para 180g' : 'Ex: 1 ou 0.150'}
+                value={newSubPortionWeight} 
+                onChange={e => setNewSubPortionWeight(e.target.value)}
+                className="w-full bg-surface-input border border-border-default rounded-control p-2.5 text-text-primary font-mono text-sm outline-none focus:border-brand-primary"
+              />
+              <p className="text-[11px] text-text-muted">
+                Ex: Hambúrguer 180g = 0.180 kg; Batata = 0.150 kg. Ao vincular ao produto, preencherá a quantidade e a estação automaticamente.
+              </p>
             </div>
 
             <div className="flex gap-2 pt-2">

@@ -11,12 +11,15 @@ import {
 
 import { 
   StockStatus, KitchenStation, InventoryItem, RecipeIngredient, 
+  RecipeProductionStation, RecipeProductionKind,
   SubRecipeItem, Product, GiftReason, SaleItem, ProductionStatus, 
   DelayReason, Sale, FixedExpensesConfig, DEFAULT_FIXED_EXPENSES, 
   CashMovement, CashClosingDetails, CashSession, AuditAction, 
   AuditLog, WasteRecord, ChecklistTask, DailyChecklist, Supplier, 
   PurchaseRecord, StockAuditItem, StockAudit 
 } from './store/types';
+
+export type { RecipeProductionStation, RecipeProductionKind };
 import { 
   DEFAULT_INGREDIENT_STATIONS, getDefaultStationForIngredient, 
   getSavedStationMap, isValidProductionTransition 
@@ -131,6 +134,31 @@ export function saveStationItem(id: string, station: KitchenStation) {
     const map = getSavedStationMap();
     map[id] = station;
     localStorage.setItem('hum_vicio_ingredient_stations_map', JSON.stringify(map));
+  } catch {}
+}
+
+export interface ItemProductionMeta {
+  productionStation?: RecipeProductionStation;
+  productionKind?: RecipeProductionKind;
+  portionWeight?: number;
+  portionUnit?: string;
+}
+
+export function getSavedItemProductionMetaMap(): Record<string, ItemProductionMeta> {
+  if (typeof window === 'undefined') return {};
+  try {
+    return JSON.parse(localStorage.getItem('hum_vicio_item_production_meta_map') || '{}');
+  } catch {
+    return {};
+  }
+}
+
+export function saveItemProductionMeta(id: string, meta: Partial<ItemProductionMeta>) {
+  if (typeof window === 'undefined') return;
+  try {
+    const map = getSavedItemProductionMetaMap();
+    map[id] = { ...map[id], ...meta };
+    localStorage.setItem('hum_vicio_item_production_meta_map', JSON.stringify(map));
   } catch {}
 }
 
@@ -601,8 +629,10 @@ export async function executeParallelLoadData(
       if (invData) {
         const minStockMap = getSavedMinStockMap();
         const stationMap = getSavedStationMap();
+        const metaMap = getSavedItemProductionMetaMap();
         mappedItems = (invData as any[]).map(i => {
           const customStation = (i.station || stationMap[i.id] || getDefaultStationForIngredient(i.name)) as KitchenStation;
+          const meta = metaMap[i.id] || {};
           return {
             id: i.id, name: i.name, category: i.category, unit: i.unit, 
             costPerUnit: Number(i.cost_per_unit ?? i.costPerUnit) || 0, 
@@ -614,7 +644,11 @@ export async function executeParallelLoadData(
                 : minStockMap[i.id],
             status: i.status,
             isActive: i.is_active !== undefined ? i.is_active : (i.isActive !== undefined ? i.isActive : true),
-            station: customStation
+            station: customStation,
+            productionStation: i.production_station || meta.productionStation,
+            productionKind: i.production_kind || meta.productionKind,
+            portionWeight: i.portion_weight !== undefined ? Number(i.portion_weight) : meta.portionWeight,
+            portionUnit: i.portion_unit || meta.portionUnit || 'g',
           };
         });
         if (typeof window !== 'undefined') {
@@ -1555,7 +1589,18 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
         saveMinStockItem(newId, item.minStock);
       }
       saveStationItem(newId, finalStation);
-      const createdItem = { ...item, id: newId, station: finalStation };
+      saveItemProductionMeta(newId, {
+        productionStation: item.productionStation,
+        productionKind: item.productionKind,
+        portionWeight: item.portionWeight,
+        portionUnit: item.portionUnit || 'g',
+      });
+      const createdItem = { 
+        ...item, 
+        id: newId, 
+        station: finalStation,
+        portionUnit: item.portionUnit || 'g',
+      };
       setItems(prev => [...prev, createdItem]);
       return createdItem;
     } catch (err: any) {
@@ -1580,6 +1625,14 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       saveStationItem(id, updates.station);
       dbUpdates.station = updates.station;
     }
+
+    // Persistir metadados operacionais de preparo e porção
+    saveItemProductionMeta(id, {
+      productionStation: updates.productionStation,
+      productionKind: updates.productionKind,
+      portionWeight: updates.portionWeight,
+      portionUnit: updates.portionUnit,
+    });
 
     try {
       await supabase.from('inventory').update(dbUpdates).eq('id', id);
@@ -1822,122 +1875,35 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
 
   // --- PRODUTOS ACTIONS ---
   const addProduct = async (prod: Omit<Product, 'id'>) => {
-    let pData: any = null;
-    let insertError: any = null;
     const subcategoryToSave = prod.subcategory?.trim() || inferDefaultSubcategory({ ...prod, id: '' } as Product);
     const initialStatus = prod.status || (prod.recipe && prod.recipe.length > 0 ? 'validado' : 'rascunho');
 
-    try {
-      const res = await supabase.from('products').insert({
+    const payload = {
+      product: {
         name: prod.name.trim(),
         category: prod.category,
         subcategory: subcategoryToSave,
-        price_balcao: prod.priceBalcao,
-        price_ifood: prod.priceIfood,
-        status: initialStatus
-      }).select().single();
+        priceBalcao: prod.priceBalcao,
+        priceIfood: prod.priceIfood ?? prod.priceBalcao,
+        status: initialStatus,
+        isActive: prod.isActive !== false,
+      },
+      recipe: prod.recipe || [],
+      clientRequestId: `req_add_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    };
 
-      if (res.error) {
-        insertError = res.error;
-        console.warn('Tentativa com status e subcategoria falhou, testando sem status:', res.error);
-        const fallbackRes = await supabase.from('products').insert({
-          name: prod.name.trim(),
-          category: prod.category,
-          subcategory: subcategoryToSave,
-          price_balcao: prod.priceBalcao,
-          price_ifood: prod.priceIfood
-        }).select().single();
+    const res = await fetch('/api/products/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
 
-        if (fallbackRes.error) {
-          const minimalRes = await supabase.from('products').insert({
-            name: prod.name.trim(),
-            category: prod.category,
-            price_balcao: prod.priceBalcao,
-            price_ifood: prod.priceIfood
-          }).select().single();
-          if (minimalRes.error) {
-            insertError = minimalRes.error;
-          } else {
-            pData = minimalRes.data;
-            insertError = null;
-          }
-        } else {
-          pData = fallbackRes.data;
-          insertError = null;
-        }
-      } else {
-        pData = res.data;
-        insertError = null;
-      }
-    } catch (err: any) {
-      insertError = err;
-      try {
-        const fallbackRes = await supabase.from('products').insert({
-          name: prod.name.trim(),
-          category: prod.category,
-          price_balcao: prod.priceBalcao,
-          price_ifood: prod.priceIfood
-        }).select().single();
-        if (fallbackRes.data) {
-          pData = fallbackRes.data;
-          insertError = null;
-        }
-      } catch {}
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success) {
+      throw new Error(data?.message || 'Não foi possível salvar o produto no banco de dados.');
     }
 
-    let finalId = pData ? pData.id : `prod_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-    // 1.1 Tentar gravação atômica transacional no banco via RPC save_product_transaction (V08)
-    let rpcDone = false;
-    try {
-      const { data: rpcData, error: rpcErr } = await supabase.rpc('save_product_transaction', {
-        p_product: {
-          name: prod.name.trim(),
-          category: prod.category,
-          priceBalcao: prod.priceBalcao,
-          priceIfood: prod.priceIfood ?? prod.priceBalcao,
-          status: initialStatus,
-          isActive: prod.isActive !== false
-        },
-        p_recipe: prod.recipe || [],
-        p_operator: 'Admin'
-      });
-
-      if (!rpcErr && rpcData && rpcData.productId) {
-        finalId = rpcData.productId;
-        rpcDone = true;
-      }
-    } catch {}
-
-    if (!rpcDone) {
-      if (insertError && !pData) {
-        console.error('Falha ao gravar produto no Supabase:', insertError);
-        throw new Error(insertError.message || 'Não foi possível gravar o produto no banco de dados.');
-      }
-
-      // Gravação da Receita no modo direto com Rollback se falhar
-      if (prod.recipe && prod.recipe.length > 0) {
-        try {
-          const recipeInserts = prod.recipe.map(r => ({
-            product_id: finalId,
-            ingredient_id: r.ingredientId,
-            quantity: r.quantity,
-            production_station: r.productionStation || 'none',
-            production_kind: r.productionKind || 'none',
-          }));
-          const { error: rErr } = await supabase.from('recipes').insert(recipeInserts);
-          if (rErr) {
-            console.error('Falha ao gravar receita do novo produto:', rErr);
-            // Rollback: deleta o produto cadastrado para não deixar produto corrompido sem ficha técnica
-            try { await supabase.from('products').delete().eq('id', finalId); } catch {}
-            throw new Error(`Falha ao gravar ficha técnica: ${rErr.message || 'Erro no banco'}. O produto não foi salvo para evitar inconsistências.`);
-          }
-        } catch (rErr: any) {
-          try { await supabase.from('products').delete().eq('id', finalId); } catch {}
-          throw rErr;
-        }
-      }
-    }
+    const finalId = data.productId;
 
     if (subcategoryToSave) {
       saveProductSubcategoryItem(finalId, subcategoryToSave);
@@ -1972,98 +1938,54 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
 
   const updateProduct = async (id: string, updates: Partial<Product>) => {
     const existing = globalStore.products.find(p => p.id === id);
+    if (!existing && !id) {
+      throw new Error('Produto não encontrado para atualização.');
+    }
 
-    const dbPayload: any = {};
-    if (updates.name !== undefined) dbPayload.name = updates.name.trim();
-    if (updates.category !== undefined) dbPayload.category = updates.category;
-    if (updates.subcategory !== undefined) dbPayload.subcategory = updates.subcategory.trim();
-    if (updates.priceBalcao !== undefined) dbPayload.price_balcao = updates.priceBalcao;
-    if (updates.priceIfood !== undefined) dbPayload.price_ifood = updates.priceIfood;
-    if (updates.isActive !== undefined) dbPayload.is_active = updates.isActive;
-    if (updates.status !== undefined) dbPayload.status = updates.status;
+    const subcategoryToSave = updates.subcategory !== undefined
+      ? (updates.subcategory.trim() || undefined)
+      : existing?.subcategory;
 
-    // 1. Tentar gravação atômica transacional no banco via RPC save_product_transaction (V08)
-    let rpcUpdated = false;
-    try {
-      const recipeToPersist = updates.recipe !== undefined ? updates.recipe : (existing?.recipe || []);
-      const { error: rpcErr } = await supabase.rpc('save_product_transaction', {
-        p_product: {
-          id,
-          name: updates.name ? updates.name.trim() : (existing?.name || ''),
-          category: updates.category || existing?.category || 'lanche',
-          priceBalcao: updates.priceBalcao ?? existing?.priceBalcao ?? 0,
-          priceIfood: updates.priceIfood ?? existing?.priceIfood ?? existing?.priceBalcao ?? 0,
-          status: updates.status || existing?.status || 'validado',
-          isActive: updates.isActive !== undefined ? updates.isActive : (existing?.isActive !== false)
-        },
-        p_recipe: recipeToPersist,
-        p_operator: 'Admin'
+    const recipeToPersist = updates.recipe !== undefined
+      ? updates.recipe
+      : (existing?.recipe || []);
+
+    const payload = {
+      product: {
+        id,
+        name: updates.name ? updates.name.trim() : (existing?.name || ''),
+        category: updates.category || existing?.category || 'lanche',
+        subcategory: subcategoryToSave,
+        priceBalcao: updates.priceBalcao ?? existing?.priceBalcao ?? 0,
+        priceIfood: updates.priceIfood ?? existing?.priceIfood ?? existing?.priceBalcao ?? 0,
+        status: updates.status || existing?.status || 'validado',
+        isActive: updates.isActive !== undefined ? updates.isActive : (existing?.isActive !== false),
+      },
+      recipe: recipeToPersist,
+      clientRequestId: `req_upd_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+    };
+
+    const res = await fetch('/api/products/save', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.success) {
+      throw new Error(data?.message || 'Não foi possível atualizar o produto no banco de dados.');
+    }
+
+    if (subcategoryToSave) {
+      saveProductSubcategoryItem(id, subcategoryToSave);
+    }
+
+    if (updates.acceptsAddons !== undefined || updates.allowedAddonIds !== undefined || updates.isAddon !== undefined) {
+      saveProductAddonItem(id, {
+        acceptsAddons: updates.acceptsAddons ?? existing?.acceptsAddons,
+        allowedAddonIds: updates.allowedAddonIds ?? existing?.allowedAddonIds,
+        isAddon: updates.isAddon ?? existing?.isAddon,
       });
-      if (!rpcErr) {
-        rpcUpdated = true;
-      }
-    } catch {}
-
-    if (!rpcUpdated) {
-      if (Object.keys(dbPayload).length > 0) {
-        try {
-          const res = await supabase.from('products').update(dbPayload).eq('id', id);
-          if (res.error) {
-            console.warn('Erro ao atualizar produto com payload completo no Supabase:', res.error);
-            // Fallback progressivo removendo status e subcategory se as colunas não existirem
-            delete dbPayload.status;
-            const fallbackRes = await supabase.from('products').update(dbPayload).eq('id', id);
-            if (fallbackRes.error) {
-              delete dbPayload.subcategory;
-              const minimalRes = await supabase.from('products').update(dbPayload).eq('id', id);
-              if (minimalRes.error) {
-                throw new Error(minimalRes.error.message || 'Falha ao atualizar produto no banco.');
-              }
-            }
-          }
-        } catch (err: any) {
-          console.error('Falha no updateProduct:', err);
-          throw err;
-        }
-      }
-
-      if (updates.recipe !== undefined) {
-        const previousRecipe = existing?.recipe || [];
-        try {
-          const { error: delErr } = await supabase.from('recipes').delete().eq('product_id', id);
-          if (delErr) {
-            throw new Error(`Erro ao limpar receita anterior: ${delErr.message}`);
-          }
-
-          if (updates.recipe.length > 0) {
-            const recipeInserts = updates.recipe.map(r => ({
-              product_id: id,
-              ingredient_id: r.ingredientId,
-              quantity: r.quantity,
-              production_station: r.productionStation || 'none',
-              production_kind: r.productionKind || 'none',
-            }));
-            const { error: insErr } = await supabase.from('recipes').insert(recipeInserts);
-            if (insErr) {
-              console.error('Erro ao inserir nova receita. Restaurando receita anterior...', insErr);
-              if (previousRecipe.length > 0) {
-                const restoreInserts = previousRecipe.map(r => ({
-                  product_id: id,
-                  ingredient_id: r.ingredientId,
-                  quantity: r.quantity,
-                  production_station: r.productionStation || 'none',
-                  production_kind: r.productionKind || 'none',
-                }));
-                try { await supabase.from('recipes').insert(restoreInserts); } catch (resErr) { console.error(resErr); }
-              }
-              throw new Error(`Falha ao gravar a nova ficha técnica: ${insErr.message || 'Erro no banco'}. A receita anterior foi restaurada.`);
-            }
-          }
-        } catch (e: any) {
-          console.error('Erro na transação de atualização de receita:', e);
-          throw e;
-        }
-      }
     }
 
     if (existing && (updates.priceBalcao !== undefined || updates.priceIfood !== undefined)) {

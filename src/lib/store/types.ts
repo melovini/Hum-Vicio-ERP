@@ -20,6 +20,8 @@ export interface InventoryItem {
   status: StockStatus;
   isActive?: boolean;
   station?: KitchenStation;
+  productionStation?: RecipeProductionStation;
+  productionKind?: RecipeProductionKind;
   portionWeight?: number;
   portionUnit?: string;
 }

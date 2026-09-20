@@ -1,7 +1,7 @@
 'use client';
 
 import { useDeferredValue, useState } from 'react';
-import { useInventory, type InventoryItem, type KitchenStation } from '@/lib/store';
+import { useInventory, type InventoryItem, type KitchenStation, type RecipeProductionStation, type RecipeProductionKind } from '@/lib/store';
 import { 
   Plus, Edit2, Trash2, AlertTriangle, RotateCcw, Boxes
 } from 'lucide-react';
@@ -20,6 +20,28 @@ import { Badge } from '@/components/ui/Badge';
 import { useToast } from '@/components/ui/Toast';
 import { filterInventoryItems } from '@/lib/inventory-filters';
 import { cn } from '@/lib/cn';
+
+const PRODUCTION_STATIONS: Array<{ value: RecipeProductionStation; label: string }> = [
+  { value: 'none', label: 'Não vai à cozinha (Sem preparo)' },
+  { value: 'grill', label: 'Chapa' },
+  { value: 'fryer', label: 'Fritadeira' },
+  { value: 'oven', label: 'Forno' },
+  { value: 'cold', label: 'Preparo frio' },
+  { value: 'assembly', label: 'Montagem' },
+  { value: 'other', label: 'Outra operação' },
+];
+
+const PRODUCTION_KINDS: Array<{ value: RecipeProductionKind; label: string }> = [
+  { value: 'none', label: 'Não contar (Somente na praça)' },
+  { value: 'beef_patty', label: 'Carne bovina (Hambúrguer)' },
+  { value: 'egg', label: 'Ovo' },
+  { value: 'bacon', label: 'Bacon' },
+  { value: 'breaded_chicken', label: 'Frango empanado' },
+  { value: 'breaded_cheese', label: 'Queijo empanado' },
+  { value: 'fries', label: 'Porção de batata' },
+  { value: 'onion_rings', label: 'Porção de anéis de cebola' },
+  { value: 'other', label: 'Outro item produzido' },
+];
 
 const stationLabels: Record<KitchenStation, { label: string; icon: string }> = {
   nenhuma: { label: 'Montagem', icon: '🍽️' },
@@ -58,6 +80,9 @@ export default function GestaoInsumosPage() {
   const [stock, setStock] = useState('');
   const [minStock, setMinStock] = useState('');
   const [station, setStation] = useState<KitchenStation>('nenhuma');
+  const [productionStation, setProductionStation] = useState<RecipeProductionStation>('none');
+  const [productionKind, setProductionKind] = useState<RecipeProductionKind>('none');
+  const [portionWeight, setPortionWeight] = useState('');
 
   if (!isLoaded) {
     return (
@@ -84,6 +109,9 @@ export default function GestaoInsumosPage() {
     setStock('');
     setMinStock('');
     setStation('nenhuma');
+    setProductionStation('none');
+    setProductionKind('none');
+    setPortionWeight('');
     setIsModalOpen(true);
   };
 
@@ -97,6 +125,9 @@ export default function GestaoInsumosPage() {
     setStock(item.currentStock.toString());
     setMinStock(item.minStock !== undefined ? item.minStock.toString() : '');
     setStation(item.station || 'nenhuma');
+    setProductionStation(item.productionStation || 'none');
+    setProductionKind(item.productionKind || 'none');
+    setPortionWeight(item.portionWeight !== undefined && item.portionWeight !== null ? item.portionWeight.toString() : '');
     setIsModalOpen(true);
   };
 
@@ -112,6 +143,7 @@ export default function GestaoInsumosPage() {
     const minStockNum = minStock.trim() ? Number(minStock) : undefined;
     const costNum = Number(cost) || 0;
     const stockNum = Number(stock) || 0;
+    const portionWeightNum = portionWeight.trim() ? Number(portionWeight.replace(',', '.')) : undefined;
 
     try {
       if (editingItem) {
@@ -123,6 +155,10 @@ export default function GestaoInsumosPage() {
           currentStock: stockNum,
           minStock: minStockNum,
           station,
+          productionStation,
+          productionKind: productionStation === 'none' ? 'none' : productionKind,
+          portionWeight: portionWeightNum,
+          portionUnit: unit,
         });
         notify({
           title: 'Insumo atualizado',
@@ -139,6 +175,10 @@ export default function GestaoInsumosPage() {
           status: 'ok',
           minStock: minStockNum,
           station,
+          productionStation,
+          productionKind: productionStation === 'none' ? 'none' : productionKind,
+          portionWeight: portionWeightNum,
+          portionUnit: unit,
         });
         notify({
           title: 'Insumo cadastrado',
@@ -380,8 +420,13 @@ export default function GestaoInsumosPage() {
                             </td>
                             <td className="p-4">
                               <Badge variant="neutral">
-                                <span>{stationInfo.icon}</span> {stationInfo.label}
+                                <span>{stationInfo.icon}</span> {item.productionStation && item.productionStation !== 'none' ? (PRODUCTION_STATIONS.find(s => s.value === item.productionStation)?.label || stationInfo.label) : stationInfo.label}
                               </Badge>
+                              {item.portionWeight !== undefined && item.portionWeight > 0 ? (
+                                <span className="block text-[10px] text-brand-primary mt-1 font-mono">
+                                  Porção: {item.portionWeight} {item.unit}
+                                </span>
+                              ) : null}
                             </td>
                             <td className="p-4 text-right font-mono tabular-nums text-text-secondary">
                               R$ {item.costPerUnit.toFixed(2)} / {item.unit}
@@ -501,18 +546,61 @@ export default function GestaoInsumosPage() {
                 />
               </FormField>
 
-              <FormField label="Estação na cozinha (KDS)">
+              <FormField label="Onde preparar (Praça de Produção)">
                 <Select
-                  value={station}
-                  onChange={(e) => setStation(e.target.value as KitchenStation)}
+                  value={productionStation}
+                  onChange={(e) => {
+                    const val = e.target.value as RecipeProductionStation;
+                    setProductionStation(val);
+                    if (val === 'none') setProductionKind('none');
+                    if (val === 'grill') setStation('chapa');
+                    else if (val === 'none') setStation('nenhuma');
+                    else if (val === 'fryer') {
+                      if (productionKind === 'breaded_chicken') setStation('fritadeira_frango');
+                      else if (productionKind === 'breaded_cheese') setStation('fritadeira_queijo');
+                      else if (productionKind === 'onion_rings') setStation('fritadeira_onion');
+                      else setStation('fritadeira_batata');
+                    }
+                  }}
                 >
-                  <option value="nenhuma">🍽️ Montagem / Nenhuma</option>
-                  <option value="chapa">🔥 Chapa (Carnes / Hambúrgueres)</option>
-                  <option value="fritadeira_frango">🍗 Fritadeira - Frango Empanado</option>
-                  <option value="fritadeira_queijo">🧀 Fritadeira - Queijo Empanado</option>
-                  <option value="fritadeira_batata">🍟 Fritadeira - Batatas</option>
-                  <option value="fritadeira_onion">🧅 Fritadeira - Anéis de Cebola</option>
+                  {PRODUCTION_STATIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
                 </Select>
+              </FormField>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="O que contar no KDS">
+                <Select
+                  value={productionKind}
+                  disabled={productionStation === 'none'}
+                  onChange={(e) => {
+                    const val = e.target.value as RecipeProductionKind;
+                    setProductionKind(val);
+                    if (productionStation === 'fryer') {
+                      if (val === 'breaded_chicken') setStation('fritadeira_frango');
+                      else if (val === 'breaded_cheese') setStation('fritadeira_queijo');
+                      else if (val === 'onion_rings') setStation('fritadeira_onion');
+                      else setStation('fritadeira_batata');
+                    }
+                  }}
+                >
+                  {PRODUCTION_KINDS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </Select>
+              </FormField>
+
+              <FormField label={`Porção padrão ao vincular (${unit})`}>
+                <Input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  value={portionWeight}
+                  onChange={(e) => setPortionWeight(e.target.value)}
+                  placeholder={unit === 'kg' ? 'Ex: 0.180 (180g) ou 0.150' : 'Ex: 1'}
+                />
               </FormField>
             </div>
 
