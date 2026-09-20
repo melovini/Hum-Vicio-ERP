@@ -2,6 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useInventory, Sale, SaleItem, DelayReason, InventoryItem, ChecklistTask, DEFAULT_INGREDIENT_STATIONS, KitchenStation } from '@/lib/store';
 import { calculateItemProduction, ItemProductionDetails, getBurgerPrintDetails } from '@/lib/production-calculator';
+import { calculateOrderProductionRequirements, buildKitchenProductionSnapshot } from '@/lib/kitchen-calculator';
 import { 
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
@@ -242,52 +243,96 @@ function KitchenProductionOrderCard({
                   </span>
                 </div>
 
-                {/* Badges de Estação Direta no Item (Chapa / Fritadeira / Pontos) */}
+                {/* Badges de Estação Direta no Item (Componentes de Preparo Estruturados ou Fallback) */}
                 <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
-                  {details.chapaPatties > 0 && (
-                    <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] font-black rounded-lg flex items-center gap-1">
-                      🔥 CHAPA: {details.chapaPatties}x {details.chapaPatties > 1 ? (details.isDouble ? 'Carnes (Duplo)' : 'Carnes') : 'Carne'}
-                    </span>
-                  )}
-                  {details.eggsCount > 0 && (
-                    <span className="px-2 py-0.5 bg-amber-600/30 text-amber-200 border border-amber-500/50 text-[11px] font-black rounded-lg flex items-center gap-1">
-                      🍳 CHAPA: {details.eggsCount}x {details.eggsCount > 1 ? 'Ovos' : 'Ovo'}
-                    </span>
-                  )}
-                  {details.meatPoint && (
-                    <span className="px-2 py-0.5 bg-red-600/30 text-red-200 border border-red-500/50 text-[11px] font-black rounded-lg">
-                      🥩 {details.meatPoint}
-                    </span>
-                  )}
-                  {details.fryerChicken > 0 && (
-                    <span className="px-2 py-0.5 bg-orange-500/20 text-orange-300 border border-orange-500/40 text-[11px] font-black rounded-lg">
-                      🍗 FRITADEIRA: {details.fryerChicken}x Frango Empanado
-                    </span>
-                  )}
-                  {details.fryerCheese > 0 && (
-                    <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
-                      🧀 FRITADEIRA: {details.fryerCheese}x Queijo Empanado
-                    </span>
-                  )}
-                  {details.fryerBatatasCombo > 0 && (
-                    <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
-                      🍟 FRITADEIRA: {details.fryerBatatasCombo}x Batata (Combo)
-                    </span>
-                  )}
-                  {details.fryerBatatasAvulsa > 0 && (
-                    <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
-                      🍟 FRITADEIRA: {details.fryerBatatasAvulsa}x Porção Batata
-                    </span>
-                  )}
-                  {details.fryerOnionsCombo > 0 && (
-                    <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
-                      🧅 FRITADEIRA: {details.fryerOnionsCombo}x Onion (Combo)
-                    </span>
-                  )}
-                  {details.fryerOnionsAvulsa > 0 && (
-                    <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
-                      🧅 FRITADEIRA: {details.fryerOnionsAvulsa}x Porção Onion
-                    </span>
+                  {details.structuredProduction?.components && details.structuredProduction.components.length > 0 ? (
+                    <>
+                      {details.structuredProduction.components.map((comp, cIdx) => {
+                        const count = Math.round(comp.quantity * item.quantity * 100) / 100;
+                        if (count <= 0) return null;
+                        if (comp.station === 'grill') {
+                          if (comp.componentType === 'burger') {
+                            return (
+                              <span key={cIdx} className="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] font-black rounded-lg flex items-center gap-1">
+                                🔥 CHAPA: {count}x {comp.name}
+                              </span>
+                            );
+                          } else {
+                            return (
+                              <span key={cIdx} className="px-2 py-0.5 bg-amber-600/30 text-amber-200 border border-amber-500/50 text-[11px] font-black rounded-lg flex items-center gap-1">
+                                🍳 CHAPA: {count}x {comp.name}
+                              </span>
+                            );
+                          }
+                        } else if (comp.station === 'fryer') {
+                          return (
+                            <span key={cIdx} className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg flex items-center gap-1">
+                              🍟 FRITADEIRA: {count}x {comp.name}
+                            </span>
+                          );
+                        } else if (comp.station !== 'none') {
+                          return (
+                            <span key={cIdx} className="px-2 py-0.5 bg-slate-800 text-slate-300 border border-slate-700 text-[11px] font-black rounded-lg">
+                              📍 {count}x {comp.name}
+                            </span>
+                          );
+                        }
+                        return null;
+                      })}
+                      {details.meatPoint && (
+                        <span className="px-2 py-0.5 bg-red-600/30 text-red-200 border border-red-500/50 text-[11px] font-black rounded-lg">
+                          🥩 {details.meatPoint}
+                        </span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      {details.chapaPatties > 0 && (
+                        <span className="px-2 py-0.5 bg-amber-500/20 text-amber-300 border border-amber-500/40 text-[11px] font-black rounded-lg flex items-center gap-1">
+                          🔥 CHAPA: {details.chapaPatties}x {details.chapaPatties > 1 ? (details.isDouble ? 'Carnes (Duplo)' : 'Carnes') : 'Carne'}
+                        </span>
+                      )}
+                      {details.eggsCount > 0 && (
+                        <span className="px-2 py-0.5 bg-amber-600/30 text-amber-200 border border-amber-500/50 text-[11px] font-black rounded-lg flex items-center gap-1">
+                          🍳 CHAPA: {details.eggsCount}x {details.eggsCount > 1 ? 'Ovos' : 'Ovo'}
+                        </span>
+                      )}
+                      {details.meatPoint && (
+                        <span className="px-2 py-0.5 bg-red-600/30 text-red-200 border border-red-500/50 text-[11px] font-black rounded-lg">
+                          🥩 {details.meatPoint}
+                        </span>
+                      )}
+                      {details.fryerChicken > 0 && (
+                        <span className="px-2 py-0.5 bg-orange-500/20 text-orange-300 border border-orange-500/40 text-[11px] font-black rounded-lg">
+                          🍗 FRITADEIRA: {details.fryerChicken}x Frango Empanado
+                        </span>
+                      )}
+                      {details.fryerCheese > 0 && (
+                        <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
+                          🧀 FRITADEIRA: {details.fryerCheese}x Queijo Empanado
+                        </span>
+                      )}
+                      {details.fryerBatatasCombo > 0 && (
+                        <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
+                          🍟 FRITADEIRA: {details.fryerBatatasCombo}x Batata (Combo)
+                        </span>
+                      )}
+                      {details.fryerBatatasAvulsa > 0 && (
+                        <span className="px-2 py-0.5 bg-yellow-500/20 text-yellow-300 border border-yellow-500/40 text-[11px] font-black rounded-lg">
+                          🍟 FRITADEIRA: {details.fryerBatatasAvulsa}x Porção Batata
+                        </span>
+                      )}
+                      {details.fryerOnionsCombo > 0 && (
+                        <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
+                          🧅 FRITADEIRA: {details.fryerOnionsCombo}x Onion (Combo)
+                        </span>
+                      )}
+                      {details.fryerOnionsAvulsa > 0 && (
+                        <span className="px-2 py-0.5 bg-purple-500/20 text-purple-300 border border-purple-500/40 text-[11px] font-black rounded-lg">
+                          🧅 FRITADEIRA: {details.fryerOnionsAvulsa}x Porção Onion
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -373,7 +418,7 @@ function KitchenProductionOrderCard({
 
 export default function CozinhaKDSPage() {
   const { 
-    sales, items, products, updateStatus, isLoaded, addSale,
+    sales, items, products, kitchenComponents, updateStatus, isLoaded, addSale,
     checklist, toggleChecklistTask, signChecklist,
     targetPrepMinutes, completeOrderProduction, updateOrderProductionStatus, updateBatchProductionStatus,
     acknowledgeOrderModification,
@@ -619,12 +664,32 @@ export default function CozinhaKDSPage() {
 
   // Motor determinístico de produção por estação (Chapa, Fritadeira, Ovos, Pontos e Combos Detalhados)
   const getItemStationDetails = (item: SaleItem) => {
-    return getBurgerPrintDetails(item, products, items).production;
+    const details = getBurgerPrintDetails(item, products, items).production;
+    if (item.productionSnapshot?.structuredProduction) {
+      details.structuredProduction = item.productionSnapshot.structuredProduction;
+    } else if (kitchenComponents && kitchenComponents.length > 0) {
+      const prod = products.find(p => p.id === item.productId);
+      if (prod) {
+        details.structuredProduction = buildKitchenProductionSnapshot(prod, items, kitchenComponents);
+      }
+    }
+    return details;
   };
 
   // Monitor Consolidado Duplo de Estações: Chapa & Fritadeira
   const kitchenStationsSummary = useMemo(() => {
-    let totalChapaPatties = 0;
+    const allActiveSaleItems: SaleItem[] = [];
+    productionOrders.forEach(order => {
+      if (order.items) allActiveSaleItems.push(...order.items);
+    });
+
+    const structuredReqs = calculateOrderProductionRequirements(
+      allActiveSaleItems,
+      products,
+      items,
+      kitchenComponents
+    );
+
     let totalEggs = 0;
     const burgerCounts: Record<string, number> = {};
     const meatPointsMap: Record<string, number> = {};
@@ -644,8 +709,6 @@ export default function CozinhaKDSPage() {
       order.items?.forEach(item => {
         const details = getItemStationDetails(item);
 
-        // Estação Chapa
-        totalChapaPatties += details.chapaPatties;
         totalEggs += details.eggsCount;
         if (details.chapaPatties > 0) {
           const cleanName = item.productName
@@ -686,14 +749,25 @@ export default function CozinhaKDSPage() {
       });
     });
 
+    const totalChapaPatties = structuredReqs.chapa.totalBurgers > 0
+      ? structuredReqs.chapa.totalBurgers
+      : Object.values(burgerCounts).reduce((a, b) => a + b, 0);
+
     return {
+      structured: structuredReqs,
       chapa: {
         totalPatties: totalChapaPatties,
+        burgersBreakdown: structuredReqs.chapa.burgersBreakdown,
+        otherItems: structuredReqs.chapa.otherItems,
+        status: structuredReqs.chapa.status,
         totalEggs,
         burgerList: Object.entries(burgerCounts).map(([name, qty]) => `${qty}x ${name}`),
         points: Object.entries(meatPointsMap).map(([pt, qty]) => `${qty}x ${pt}`)
       },
       fritadeira: {
+        totalPreparos: structuredReqs.fritadeira.totalPreparos,
+        itemsBreakdown: structuredReqs.fritadeira.items,
+        status: structuredReqs.fritadeira.status,
         totalBatatas,
         batatasComboCount,
         batatasAvulsas: Object.entries(batatasAvulsasMap).map(([name, qty]) => `${qty}x ${name}`),
@@ -704,7 +778,7 @@ export default function CozinhaKDSPage() {
         totalCheeseBreaded
       }
     };
-  }, [productionOrders, products, items]);
+  }, [productionOrders, products, items, kitchenComponents]);
 
   // 2. Pedidos em Espera ou Agendados (Previsão de Demanda - Apenas do Turno de Caixa Ativo)
   const queueOrders = useMemo(() => {
@@ -1360,6 +1434,25 @@ export default function CozinhaKDSPage() {
                     </div>
                   )}
 
+                  {/* Detalhamento de Carnes e Gramaturas na Chapa */}
+                  {kitchenStationsSummary.chapa.burgersBreakdown && kitchenStationsSummary.chapa.burgersBreakdown.length > 0 && (
+                    <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-amber-500/20">
+                      <span className="text-[11px] font-black uppercase tracking-wider text-amber-300 mr-1">
+                        Carnes na Chapa:
+                      </span>
+                      {kitchenStationsSummary.chapa.burgersBreakdown.map((b, idx) => (
+                        <span key={idx} className="px-2.5 py-0.5 bg-amber-500/20 border border-amber-500/40 text-amber-200 font-black text-xs rounded-lg">
+                          🔥 {b.count}x {b.label}
+                        </span>
+                      ))}
+                      {kitchenStationsSummary.chapa.otherItems?.map((o, idx) => (
+                        <span key={`other-${idx}`} className="px-2.5 py-0.5 bg-amber-600/20 border border-amber-500/30 text-amber-300 font-bold text-xs rounded-lg">
+                          🍳 {o.count}x {o.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Lista de Lanches na Chapa */}
                   <div className="text-xs text-amber-100/90 font-medium bg-slate-950/70 p-2.5 rounded-2xl border border-amber-500/20">
                     <span className="text-slate-400 font-bold mr-1">Lanches:</span>
@@ -1422,6 +1515,20 @@ export default function CozinhaKDSPage() {
                       </p>
                     </div>
                   </div>
+
+                  {/* Detalhamento de Itens na Fritadeira */}
+                  {kitchenStationsSummary.fritadeira.itemsBreakdown && kitchenStationsSummary.fritadeira.itemsBreakdown.length > 0 && (
+                    <div className="flex items-center gap-1.5 flex-wrap pt-1 border-t border-yellow-500/20">
+                      <span className="text-[11px] font-black uppercase tracking-wider text-yellow-300 mr-1">
+                        Preparo na Fritadeira:
+                      </span>
+                      {kitchenStationsSummary.fritadeira.itemsBreakdown.map((item, idx) => (
+                        <span key={idx} className="px-2.5 py-0.5 bg-yellow-500/20 border border-yellow-500/40 text-yellow-200 font-black text-xs rounded-lg">
+                          🍟 {item.count}x {item.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
                   {/* Empanados de Frango e Queijo em Destaque */}
                   {(kitchenStationsSummary.fritadeira.totalChickenBreaded > 0 || kitchenStationsSummary.fritadeira.totalCheeseBreaded > 0) ? (

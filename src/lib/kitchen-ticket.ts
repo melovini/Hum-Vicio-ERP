@@ -1,4 +1,4 @@
-import { Sale, SaleItem, Product, InventoryItem, KitchenStation, RecipeIngredient } from './store/types';
+import { Sale, SaleItem, Product, InventoryItem, KitchenStation, RecipeIngredient, KitchenComponent } from './store/types';
 import {
   calculateItemProduction,
   inferComponentType,
@@ -8,6 +8,7 @@ import {
   getBurgerPrintDetails,
   BurgerPrintDetails
 } from './production-calculator';
+import { calculateOrderProductionRequirements, DEFAULT_KITCHEN_COMPONENTS } from './kitchen-calculator';
 
 export interface OrderDiff {
   added: SaleItem[];
@@ -84,6 +85,7 @@ export interface BuildKitchenTicketOptions {
   sale: Sale;
   products?: Product[];
   inventoryItems?: InventoryItem[];
+  kitchenComponents?: KitchenComponent[];
   showMontagem?: boolean;
   isReprint?: boolean;
   diff?: OrderDiff;
@@ -285,6 +287,7 @@ export function buildKitchenTicket({
   sale,
   products = [],
   inventoryItems = [],
+  kitchenComponents = DEFAULT_KITCHEN_COMPONENTS,
   showMontagem = false,
   isReprint = false,
   diff,
@@ -339,121 +342,113 @@ export function buildKitchenTicket({
     if (hasUnconfirmed) hasAnyUnconfirmed = true;
   }
 
-  // 3. Resumo de Produção (Chapa e Fritadeira)
-  let totalChapaPatties = 0;
-  const pattiesMap = new Map<string, number>();
-  let totalEggs = 0;
-  const otherChapaMap = new Map<string, number>();
+  // 3. Resumo de Produção (Chapa e Fritadeira com Componentes Estruturados)
+  const structuredReqs = calculateOrderProductionRequirements(
+    itemsToProcess,
+    products,
+    inventoryItems,
+    kitchenComponents || DEFAULT_KITCHEN_COMPONENTS
+  );
 
-  const fryerMap = new Map<string, number>();
-  let totalFryerPreparos = 0;
+  let totalChapaPatties = structuredReqs.chapa.totalBurgers;
+  let pattiesLabel = structuredReqs.chapa.burgersLabel;
+  let pattiesBreakdown = structuredReqs.chapa.burgersBreakdown.map(b => ({ label: b.label, count: b.count }));
+  let otherChapaItems = structuredReqs.chapa.otherItems.map(o => ({ label: o.label, count: o.count }));
 
-  for (let i = 0; i < itemsToProcess.length; i++) {
-    const item = itemsToProcess[i];
-    const details = processedDetails[i];
-    const prod = details.production;
-    const qty = typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1;
+  let totalFryerPreparos = structuredReqs.fritadeira.totalPreparos;
+  let preparosLabel = structuredReqs.fritadeira.preparosLabel;
+  let fryerItems = structuredReqs.fritadeira.items.map(f => ({ label: f.label, count: f.count }));
 
-    // --- CHAPA: Carnes ---
-    if (prod.chapaPatties > 0) {
-      totalChapaPatties += prod.chapaPatties;
-      const { pattyTypeLabel } = resolvePattiesComposition(item, details, inventoryItems);
-      const label = pattyTypeLabel || 'Bovino';
-      pattiesMap.set(label, (pattiesMap.get(label) || 0) + prod.chapaPatties);
+  // Fallback para itens não estruturados se o cálculo estruturado não encontrou nenhum item mas o legado encontrou
+  if (totalChapaPatties === 0 && totalFryerPreparos === 0) {
+    let legacyChapaPatties = 0;
+    const legacyPattiesMap = new Map<string, number>();
+    let legacyEggs = 0;
+    const legacyFryerMap = new Map<string, number>();
+    let legacyFryerCount = 0;
+
+    for (let i = 0; i < itemsToProcess.length; i++) {
+      const item = itemsToProcess[i];
+      const details = processedDetails[i];
+      const prod = details.production;
+      const qty = typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1;
+
+      if (prod.chapaPatties > 0) {
+        legacyChapaPatties += prod.chapaPatties;
+        const { pattyTypeLabel } = resolvePattiesComposition(item, details, inventoryItems);
+        const label = pattyTypeLabel || 'Bovino';
+        legacyPattiesMap.set(label, (legacyPattiesMap.get(label) || 0) + prod.chapaPatties);
+      }
+      if (prod.eggsCount > 0) {
+        legacyEggs += prod.eggsCount;
+      }
+      if (prod.fryerBatatasCombo > 0) {
+        const comboLabel = details.comboDetails?.comboType === 'batata_cheddar_bacon'
+          ? 'Batata cheddar e bacon'
+          : 'Batata pequena';
+        legacyFryerMap.set(comboLabel, (legacyFryerMap.get(comboLabel) || 0) + prod.fryerBatatasCombo);
+        legacyFryerCount += prod.fryerBatatasCombo;
+      }
+      if (prod.fryerBatatasAvulsa > 0) {
+        const count = Math.round(prod.fryerBatatasAvulsa);
+        const avulsaLabel = details.matchedProduct?.name || prod.fryerBatataName || item.productName;
+        legacyFryerMap.set(avulsaLabel, (legacyFryerMap.get(avulsaLabel) || 0) + count);
+        legacyFryerCount += count;
+      }
+      if (prod.fryerOnionsCombo > 0) {
+        legacyFryerMap.set('Anéis de cebola', (legacyFryerMap.get('Anéis de cebola') || 0) + prod.fryerOnionsCombo);
+        legacyFryerCount += prod.fryerOnionsCombo;
+      }
+      if (prod.fryerOnionsAvulsa > 0) {
+        const count = Math.round(prod.fryerOnionsAvulsa);
+        const onionAvulsaLabel = details.matchedProduct?.name || prod.fryerBatataName || item.productName;
+        legacyFryerMap.set(onionAvulsaLabel, (legacyFryerMap.get(onionAvulsaLabel) || 0) + count);
+        legacyFryerCount += count;
+      }
+      if (prod.fryerChicken > 0) {
+        legacyFryerMap.set('Frango empanado', (legacyFryerMap.get('Frango empanado') || 0) + prod.fryerChicken);
+        legacyFryerCount += prod.fryerChicken;
+      }
+      if (prod.fryerCheese > 0) {
+        legacyFryerMap.set('Queijo empanado', (legacyFryerMap.get('Queijo empanado') || 0) + prod.fryerCheese);
+        legacyFryerCount += prod.fryerCheese;
+      }
     }
 
-    // --- CHAPA: Outros (Ovos, bacon) ---
-    if (prod.eggsCount > 0) {
-      totalEggs += prod.eggsCount;
+    if (legacyChapaPatties > 0) {
+      totalChapaPatties = legacyChapaPatties;
+      pattiesLabel = legacyChapaPatties === 1 ? '1 HAMBÚRGUER' : `${legacyChapaPatties} HAMBÚRGUERES`;
+      pattiesBreakdown = [];
+      legacyPattiesMap.forEach((count, label) => {
+        pattiesBreakdown.push({ label: `${count}x ${label}`, count });
+      });
     }
-
-    // --- FRITADEIRA ---
-    // Batata de combo (conta 1 porção por combo)
-    if (prod.fryerBatatasCombo > 0) {
-      const comboLabel = details.comboDetails?.comboType === 'batata_cheddar_bacon'
-        ? 'Batata cheddar e bacon'
-        : 'Batata pequena';
-      fryerMap.set(comboLabel, (fryerMap.get(comboLabel) || 0) + prod.fryerBatatasCombo);
-      totalFryerPreparos += prod.fryerBatatasCombo;
+    if (legacyEggs > 0) {
+      otherChapaItems = [{ label: `${legacyEggs}x ${legacyEggs > 1 ? 'Ovos' : 'Ovo'}`, count: legacyEggs }];
     }
-
-    // Batata avulsa
-    if (prod.fryerBatatasAvulsa > 0) {
-      const isPortionProduct = details.matchedProduct?.category === 'porcao' || normalizeProductionString(item.productName).includes('batata');
-      const count = isPortionProduct ? qty : Math.round(prod.fryerBatatasAvulsa);
-      const avulsaLabel = details.matchedProduct?.name || prod.fryerBatataName || item.productName;
-      fryerMap.set(avulsaLabel, (fryerMap.get(avulsaLabel) || 0) + count);
-      totalFryerPreparos += count;
-    }
-
-    // Onions de combo
-    if (prod.fryerOnionsCombo > 0) {
-      const onionComboLabel = 'Anéis de cebola (combo)';
-      fryerMap.set(onionComboLabel, (fryerMap.get(onionComboLabel) || 0) + prod.fryerOnionsCombo);
-      totalFryerPreparos += prod.fryerOnionsCombo;
-    }
-
-    // Onions avulsas
-    if (prod.fryerOnionsAvulsa > 0) {
-      const isPortionProduct = details.matchedProduct?.category === 'porcao' || normalizeProductionString(item.productName).includes('onion') || normalizeProductionString(item.productName).includes('anel');
-      const count = isPortionProduct ? qty : Math.round(prod.fryerOnionsAvulsa);
-      const onionAvulsaLabel = details.matchedProduct?.name || prod.fryerBatataName || item.productName;
-      fryerMap.set(onionAvulsaLabel, (fryerMap.get(onionAvulsaLabel) || 0) + count);
-      totalFryerPreparos += count;
-    }
-
-    // Frango empanado
-    if (prod.fryerChicken > 0) {
-      const chickenLabel = 'Frango empanado';
-      fryerMap.set(chickenLabel, (fryerMap.get(chickenLabel) || 0) + prod.fryerChicken);
-      totalFryerPreparos += prod.fryerChicken;
-    }
-
-    // Queijo empanado
-    if (prod.fryerCheese > 0) {
-      const cheeseLabel = 'Queijo empanado';
-      fryerMap.set(cheeseLabel, (fryerMap.get(cheeseLabel) || 0) + prod.fryerCheese);
-      totalFryerPreparos += prod.fryerCheese;
+    if (legacyFryerCount > 0) {
+      totalFryerPreparos = legacyFryerCount;
+      preparosLabel = legacyFryerCount === 1 ? '1 PREPARO' : `${legacyFryerCount} PREPAROS`;
+      fryerItems = [];
+      legacyFryerMap.forEach((count, label) => {
+        fryerItems.push({ label: `${count}x ${label}`, count });
+      });
     }
   }
 
-  if (totalEggs > 0) {
-    const eggLabel = totalEggs > 1 ? 'Ovos' : 'Ovo';
-    otherChapaMap.set(eggLabel, totalEggs);
-  }
-
-  // Estruturação do rodapé
-  const pattiesBreakdown: { label: string; count: number }[] = [];
-  pattiesMap.forEach((count, label) => {
-    pattiesBreakdown.push({ label: `${label}: ${count} ${count > 1 ? 'unidades' : 'unidade'}`, count });
-  });
-
-  const otherChapaItems: { label: string; count: number }[] = [];
-  otherChapaMap.forEach((count, label) => {
-    otherChapaItems.push({ label: `${label}: ${count}`, count });
-  });
-
-  const fryerItems: { label: string; count: number }[] = [];
-  fryerMap.forEach((count, label) => {
-    fryerItems.push({ label: `${label}: ${count}`, count });
-  });
-
-  let chapaStatus: 'ok' | 'sem_carnes' | 'a_conferir' = 'ok';
-  if (hasAnyUnconfirmed) {
+  let chapaStatus: 'ok' | 'sem_carnes' | 'a_conferir' = structuredReqs.chapa.status;
+  if (hasAnyUnconfirmed || structuredReqs.pendingReview.length > 0) {
     chapaStatus = 'a_conferir';
   } else if (totalChapaPatties === 0) {
     chapaStatus = 'sem_carnes';
   }
 
-  let fryerStatus: 'ok' | 'sem_itens' | 'a_conferir' = 'ok';
-  if (hasAnyUnconfirmed && totalFryerPreparos === 0) {
+  let fryerStatus: 'ok' | 'sem_itens' | 'a_conferir' = structuredReqs.fritadeira.status;
+  if ((hasAnyUnconfirmed || structuredReqs.pendingReview.length > 0) && totalFryerPreparos === 0) {
     fryerStatus = 'a_conferir';
   } else if (totalFryerPreparos === 0) {
     fryerStatus = 'sem_itens';
   }
-
-  const pattiesLabel = totalChapaPatties === 1 ? '1 CARNE' : `${totalChapaPatties} CARNES`;
-  const preparosLabel = totalFryerPreparos === 1 ? '1 PREPARO' : `${totalFryerPreparos} PREPAROS`;
 
   const productionSummary: KitchenProductionSummary = {
     chapa: {
@@ -469,7 +464,7 @@ export function buildKitchenTicket({
       items: fryerItems,
       status: fryerStatus,
     },
-    isComplete: !hasAnyUnconfirmed,
+    isComplete: !hasAnyUnconfirmed && structuredReqs.isComplete,
   };
 
   // 4. Tratamento da Via Diferencial (se aplicável)
@@ -616,17 +611,20 @@ export function formatKitchenTicketEscPos(ticket: KitchenTicketData): string {
   } else if (productionSummary.chapa.status === 'sem_carnes') {
     out += 'CHAPA: SEM CARNES\n';
   } else {
-    out += `CHAPA: ${productionSummary.chapa.pattiesLabel}\n`;
+    out += `CHAPA — ${productionSummary.chapa.pattiesLabel}\n`;
     for (const p of productionSummary.chapa.pattiesBreakdown) {
-      out += `  ${p.label}\n`;
+      out += `${p.label}\n`;
     }
   }
 
   if (productionSummary.chapa.otherItems.length > 0) {
+    out += '\nOUTROS NA CHAPA\n';
     for (const o of productionSummary.chapa.otherItems) {
-      out += `  Outros: ${o.label}\n`;
+      out += `${o.label}\n`;
     }
   }
+
+  out += '\n';
 
   // Fritadeira
   if (productionSummary.fritadeira.status === 'a_conferir') {
@@ -634,9 +632,9 @@ export function formatKitchenTicketEscPos(ticket: KitchenTicketData): string {
   } else if (productionSummary.fritadeira.status === 'sem_itens') {
     out += 'FRITADEIRA: SEM ITENS\n';
   } else {
-    out += `FRITADEIRA: ${productionSummary.fritadeira.preparosLabel}\n`;
+    out += 'FRITADEIRA\n';
     for (const f of productionSummary.fritadeira.items) {
-      out += `  ${f.label}\n`;
+      out += `${f.label}\n`;
     }
   }
 

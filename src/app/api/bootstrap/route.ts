@@ -35,6 +35,9 @@ export async function GET(request?: Request) {
     if ((isCozinha || isFull) && canAccessData(session.role, 'sub_recipes', 'GET')) {
       queries.subRecipes = db.from('sub_recipes').select('*');
     }
+    if (canAccessData(session.role, 'kitchen_components', 'GET')) {
+      queries.kitchenComponents = db.from('kitchen_components').select('*').order('name', { ascending: true });
+    }
 
     // 3. Vendas (Cozinha precisa de pendentes e recentes; Caixa precisa dos últimos 80)
     if (canAccessData(session.role, 'sales', 'GET')) {

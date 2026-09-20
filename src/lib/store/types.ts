@@ -24,6 +24,30 @@ export interface InventoryItem {
   productionKind?: RecipeProductionKind;
   portionWeight?: number;
   portionUnit?: string;
+  /** Vínculo padrão com o componente central de preparo */
+  kitchenComponentId?: string;
+}
+
+// === COMPONENTES CENTRAIS DE PREPARO (KDS & Impressão) ===
+export type KitchenComponentType = 
+  | 'burger'   // Hambúrguer / disco de carne
+  | 'egg'      // Ovo
+  | 'side'     // Acompanhamento (batata, anéis, etc.)
+  | 'protein'  // Outra proteína (frango, peixe, etc.)
+  | 'other';   // Outros preparos
+
+export interface KitchenComponent {
+  id: string;
+  name: string;
+  componentType: KitchenComponentType;
+  station: RecipeProductionStation;
+  productionUnit: string;
+  portionWeight?: number;
+  portionUnit?: string;
+  showInSummary: boolean;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // === PRODUTOS (Lanches/Combos) ===
@@ -34,6 +58,8 @@ export interface RecipeIngredient {
   productionStation?: RecipeProductionStation;
   /** Tipo contado pelo KDS. `none` envia o item à estação sem somá-lo como proteína/porção. */
   productionKind?: RecipeProductionKind;
+  /** Vínculo com o componente central de preparo (KDS e comanda). */
+  kitchenComponentId?: string;
 }
 
 export type RecipeProductionStation =
@@ -127,6 +153,25 @@ export interface ComboStationDetails {
   summary: string;
 }
 
+export interface StructuredComponentRequirement {
+  componentId: string;
+  name: string;
+  componentType: KitchenComponentType;
+  station: RecipeProductionStation;
+  productionUnit: string;
+  portionWeight?: number;
+  portionUnit?: string;
+  showInSummary: boolean;
+  quantity: number; // quantidade em unidades, discos ou porções
+}
+
+export interface StructuredProductionSnapshot {
+  version: number;
+  calculatedAt: string;
+  components: StructuredComponentRequirement[];
+  pendingReview?: string[];
+}
+
 export interface ItemProductionDetails {
   chapaPatties: number;
   isDouble: boolean;
@@ -142,6 +187,7 @@ export interface ItemProductionDetails {
   fryerOnionsAvulsa: number;
   breakdown: ProductionBreakdown;
   comboDetails?: ComboStationDetails;
+  structuredProduction?: StructuredProductionSnapshot;
 }
 
 export interface SaleItem {

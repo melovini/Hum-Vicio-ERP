@@ -1,5 +1,6 @@
 import { requireSession, requireSameOrigin, readJsonBody, apiError, AccessError } from '@/lib/security/server-session';
 import { createServerDatabase } from '@/lib/supabase-server';
+import { buildKitchenProductionSnapshot } from '@/lib/kitchen-calculator';
 
 interface SaleItemInput {
   productId: string;
@@ -155,7 +156,78 @@ export async function POST(request: Request) {
       }
     }
 
-    // 7. Execução atômica no banco via RPC com service_role
+    // 7. Garantir Snapshot Imutável de Produção da Cozinha para cada Item
+    const itemsNeedingSnapshot = sale.items.filter(
+      i => !i.productionSnapshot?.structuredProduction && i.productId && UUID_REGEX.test(i.productId)
+    );
+
+    if (itemsNeedingSnapshot.length > 0) {
+      try {
+        const recQuery = db.from('recipes').select('*');
+        const [recRes, invRes, compRes] = await Promise.all([
+          typeof (recQuery as any).in === 'function' ? (recQuery as any).in('product_id', productIds) : recQuery,
+          db.from('inventory').select('*'),
+          db.from('kitchen_components').select('*')
+        ]);
+
+        const recipes = recRes.data || [];
+        const inventory = invRes.data || [];
+        const components = compRes.data || [];
+
+        for (const item of sale.items) {
+          if (!item.productionSnapshot?.structuredProduction) {
+            const prodRecipes = recipes.filter((r: any) => r.product_id === item.productId).map((r: any) => ({
+              ingredientId: r.ingredient_id,
+              quantity: Number(r.quantity) || 0,
+              kitchenComponentId: r.kitchen_component_id || undefined,
+              productionStation: r.production_station || undefined,
+              productionKind: r.production_kind || undefined,
+            }));
+
+            const partialProd: any = {
+              id: item.productId,
+              name: item.productName,
+              recipe: prodRecipes,
+            };
+
+            const mappedInv: any = inventory.map((i: any) => ({
+              id: i.id,
+              name: i.name,
+              unit: i.unit,
+              category: i.category,
+              station: i.station,
+              productionStation: i.production_station,
+              productionKind: i.production_kind,
+              portionWeight: i.portion_weight ? Number(i.portion_weight) : undefined,
+              portionUnit: i.portion_unit,
+              kitchenComponentId: i.kitchen_component_id,
+            }));
+
+            const mappedComps: any = components.map((c: any) => ({
+              id: c.id,
+              name: c.name,
+              componentType: c.component_type,
+              station: c.station,
+              productionUnit: c.production_unit,
+              portionWeight: c.portion_weight ? Number(c.portion_weight) : undefined,
+              portionUnit: c.portion_unit,
+              showInSummary: c.show_in_summary !== false,
+              isActive: c.is_active !== false,
+            }));
+
+            const structuredSnap = buildKitchenProductionSnapshot(partialProd, mappedInv, mappedComps.length > 0 ? mappedComps : undefined);
+            item.productionSnapshot = {
+              ...(item.productionSnapshot || {}),
+              structuredProduction: structuredSnap,
+            };
+          }
+        }
+      } catch (err) {
+        console.warn('[Checkout Snapshot Warning]: Não foi possível gerar snapshot adicional no servidor:', err);
+      }
+    }
+
+    // 8. Execução atômica no banco via RPC com service_role
     const { data, error } = await db.rpc('process_sale_checkout', {
       p_idempotency_key: idempotencyKey.trim(),
       p_sale: sale,

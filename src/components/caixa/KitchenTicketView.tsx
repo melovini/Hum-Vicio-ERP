@@ -195,21 +195,22 @@ export default function KitchenTicketView({ ticket, showMontagem = false }: Kitc
           ) : (
             <>
               <p className="font-black uppercase">
-                CHAPA: {productionSummary.chapa.pattiesLabel}
+                CHAPA — {productionSummary.chapa.pattiesLabel}
               </p>
               {productionSummary.chapa.pattiesBreakdown.map((p, pIdx) => (
-                <p key={pIdx} className="pl-2 font-bold text-slate-900">
-                  • {p.label}
+                <p key={pIdx} className="pl-1 font-bold text-slate-900">
+                  {p.label}
                 </p>
               ))}
             </>
           )}
 
           {productionSummary.chapa.otherItems.length > 0 && (
-            <div className="pl-2">
+            <div className="pt-1">
+              <p className="font-black uppercase">OUTROS NA CHAPA</p>
               {productionSummary.chapa.otherItems.map((o, oIdx) => (
-                <p key={oIdx} className="font-bold text-slate-900">
-                  • Outros: {o.label}
+                <p key={oIdx} className="pl-1 font-bold text-slate-900">
+                  {o.label}
                 </p>
               ))}
             </div>
@@ -225,11 +226,11 @@ export default function KitchenTicketView({ ticket, showMontagem = false }: Kitc
           ) : (
             <>
               <p className="font-black uppercase">
-                FRITADEIRA: {productionSummary.fritadeira.preparosLabel}
+                FRITADEIRA
               </p>
               {productionSummary.fritadeira.items.map((f, fIdx) => (
-                <p key={fIdx} className="pl-2 font-bold text-slate-900">
-                  • {f.label}
+                <p key={fIdx} className="pl-1 font-bold text-slate-900">
+                  {f.label}
                 </p>
               ))}
             </>

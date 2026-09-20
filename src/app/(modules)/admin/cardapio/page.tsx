@@ -9,7 +9,11 @@ import {
   ChevronDown, ChevronRight, ExternalLink, Info, FolderKanban,
   ArrowUp, ArrowDown, Pencil, Check
 } from 'lucide-react';
-import { useInventory, type Product, type RecipeIngredient, type InventoryItem, type RecipeProductionStation, type RecipeProductionKind } from '@/lib/store';
+import { 
+  useInventory, type Product, type RecipeIngredient, type InventoryItem, 
+  type RecipeProductionStation, type RecipeProductionKind, 
+  type KitchenComponent, type KitchenComponentType 
+} from '@/lib/store';
 import { FISCAL_CATEGORY_PRESETS } from '@/lib/fiscal';
 import { 
   filterCardapioProducts, 
@@ -77,6 +81,7 @@ const kindLabel = (value?: RecipeProductionKind) =>
 export default function CardapioAdminPage() {
   const { 
     items, products, addProduct, updateProduct, removeProduct, 
+    kitchenComponents, addKitchenComponent, updateKitchenComponent, removeKitchenComponent,
     isLoaded, subRecipes, saveSubRecipe, removeSubRecipe, 
     getIngredientTrueCost, addInventoryItem, updateInventoryItem, batchAddIngredientToProducts,
     batchUpdateProductSubcategory
@@ -90,6 +95,74 @@ export default function CardapioAdminPage() {
   const [showInactive, setShowInactive] = useState(false);
   const [viewMode, setViewMode] = useState<'hierarquico' | 'grade'>('hierarquico');
   const [collapsedSubcategories, setCollapsedSubcategories] = useState<Record<string, boolean>>({});
+
+  // Gestão de Componentes de Preparo (Modal)
+  const [isKitchenModalOpen, setIsKitchenModalOpen] = useState(false);
+  const [editingComponent, setEditingComponent] = useState<Partial<KitchenComponent> | null>(null);
+  const [compName, setCompName] = useState('');
+  const [compType, setCompType] = useState<KitchenComponentType>('burger');
+  const [compStation, setCompStation] = useState<RecipeProductionStation>('grill');
+  const [compUnit, setCompUnit] = useState('disco');
+  const [compWeight, setCompWeight] = useState<string>('180');
+  const [compPortionUnit, setCompPortionUnit] = useState('g');
+  const [compShowInSummary, setCompShowInSummary] = useState(true);
+
+  const handleOpenAddComponent = () => {
+    setEditingComponent({});
+    setCompName('');
+    setCompType('burger');
+    setCompStation('grill');
+    setCompUnit('disco');
+    setCompWeight('180');
+    setCompPortionUnit('g');
+    setCompShowInSummary(true);
+  };
+
+  const handleOpenEditComponent = (comp: KitchenComponent) => {
+    setEditingComponent(comp);
+    setCompName(comp.name);
+    setCompType(comp.componentType);
+    setCompStation(comp.station);
+    setCompUnit(comp.productionUnit);
+    setCompWeight(comp.portionWeight !== undefined ? String(comp.portionWeight) : '');
+    setCompPortionUnit(comp.portionUnit || 'g');
+    setCompShowInSummary(comp.showInSummary !== false);
+  };
+
+  const handleSaveComponent = async () => {
+    if (!compName.trim()) {
+      notify({ title: 'O nome do componente é obrigatório.', tone: 'danger' });
+      return;
+    }
+    const weightNum = compWeight !== '' ? Number(compWeight) : undefined;
+    if (editingComponent && editingComponent.id) {
+      await updateKitchenComponent(editingComponent.id, {
+        name: compName.trim(),
+        componentType: compType,
+        station: compStation,
+        productionUnit: compUnit.trim() || 'unidade',
+        portionWeight: weightNum,
+        portionUnit: compPortionUnit.trim() || 'g',
+        showInSummary: compShowInSummary,
+      });
+      notify({ title: `Componente "${compName.trim()}" atualizado com sucesso!`, tone: 'success' });
+    } else {
+      const generatedId = `cmp-${compName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || Date.now().toString(36)}`;
+      await addKitchenComponent({
+        id: generatedId,
+        name: compName.trim(),
+        componentType: compType,
+        station: compStation,
+        productionUnit: compUnit.trim() || 'unidade',
+        portionWeight: weightNum,
+        portionUnit: compPortionUnit.trim() || 'g',
+        showInSummary: compShowInSummary,
+        isActive: true,
+      });
+      notify({ title: `Componente "${compName.trim()}" criado com sucesso!`, tone: 'success' });
+    }
+    setEditingComponent(null);
+  };
 
   // Form State Produto (Dialog)
   const [isAdding, setIsAdding] = useState(false);
@@ -2189,10 +2262,21 @@ export default function CardapioAdminPage() {
                   </Button>
                 </div>
 
-                <p className="text-[11px] leading-relaxed text-text-muted">
-                  A estação define onde o item será preparado. A regra de contagem define o número exibido no KDS;
-                  nomes como “pão de hambúrguer” nunca serão tratados como carne quando marcados corretamente.
-                </p>
+                <div className="flex items-center justify-between flex-wrap gap-2">
+                  <p className="text-[11px] leading-relaxed text-text-muted">
+                    A estação define onde o item será preparado. Vincule o componente de preparo para diferenciar carnes e gramaturas na cozinha.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingComponent(null);
+                      setIsKitchenModalOpen(true);
+                    }}
+                    className="text-[11px] text-brand-primary hover:underline font-bold flex items-center gap-1 cursor-pointer"
+                  >
+                    <ChefHat size={13} /> Gerenciar Componentes de Preparo
+                  </button>
+                </div>
 
                 {/* Alerta de Custo Zerado & CMV Aproximado */}
                 {activeRecipeMetrics.hasZeroCostIngredient && (
@@ -2212,12 +2296,13 @@ export default function CardapioAdminPage() {
                 )}
 
                 {/* Tabela de Insumos da Receita com Edição Rápida de Custo */}
-                <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+                <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
                   {recipe.map((r, idx) => {
                     const ing = items.find(i => i.id === r.ingredientId);
                     const unitCost = ing ? getIngredientTrueCost(ing.id) : 0;
                     const subtotal = unitCost * r.quantity;
                     const isZeroCost = unitCost <= 0;
+                    const matchedComp = (kitchenComponents || []).find(c => c.id === r.kitchenComponentId);
 
                     return (
                       <div key={idx} className={cn(
@@ -2249,6 +2334,11 @@ export default function CardapioAdminPage() {
                               return null;
                             })()}
                             <div className="mt-2 flex flex-wrap gap-1.5">
+                              {matchedComp && (
+                                <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
+                                  🍽️ {matchedComp.name}
+                                </span>
+                              )}
                               <span className="rounded-full border border-border-default bg-surface-elevated px-2 py-0.5 text-[10px] font-bold text-text-secondary">
                                 {stationLabel(r.productionStation)}
                               </span>
@@ -2272,7 +2362,32 @@ export default function CardapioAdminPage() {
                           </div>
                         </div>
 
-                        <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 border-t border-border-default/60 pt-2">
+                        <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 border-t border-border-default/60 pt-2">
+                          <div>
+                            <span className="block text-[10px] text-text-muted mb-1 font-semibold uppercase">Componente de Preparo:</span>
+                            <Select
+                              aria-label={`Componente de preparo de ${ing?.name || 'ingrediente'}`}
+                              value={r.kitchenComponentId || ''}
+                              onChange={event => {
+                                const compId = event.target.value;
+                                const comp = (kitchenComponents || []).find(c => c.id === compId);
+                                setRecipe(current => current.map((item, itemIndex) => itemIndex === idx
+                                  ? { 
+                                      ...item, 
+                                      kitchenComponentId: compId || undefined,
+                                      productionStation: comp ? comp.station : item.productionStation 
+                                    }
+                                  : item));
+                              }}
+                            >
+                              <option value="">Automático / Padrão</option>
+                              {(kitchenComponents || []).map(option => (
+                                <option key={option.id} value={option.id}>
+                                  {option.name} ({option.station === 'grill' ? 'Chapa' : option.station === 'fryer' ? 'Fritadeira' : option.station})
+                                </option>
+                              ))}
+                            </Select>
+                          </div>
                           <div>
                             <span className="block text-[10px] text-text-muted mb-1 font-semibold uppercase">Onde preparar:</span>
                             <Select
@@ -2605,6 +2720,9 @@ export default function CardapioAdminPage() {
               validationResult={validationResult}
               productName={name}
               category={category}
+              recipe={recipe}
+              inventoryItems={items}
+              kitchenComponents={kitchenComponents}
             />
 
             {/* Seção: Observações Rápidas para a Cozinha / Chapa */}
@@ -3097,6 +3215,263 @@ export default function CardapioAdminPage() {
                             onClick={() => setConfirmDeleteSubcat(sub)}
                             className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-status-danger transition-colors cursor-pointer"
                             title="Excluir subcategoria"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          </div>
+        </Dialog>
+
+        {/* DIALOG 4: GESTÃO DE COMPONENTES DE PREPARO DA COZINHA */}
+        <Dialog
+          open={isKitchenModalOpen}
+          onClose={() => {
+            setIsKitchenModalOpen(false);
+            setEditingComponent(null);
+          }}
+          title="Componentes de Preparo da Cozinha"
+          description="Cadastre e configure carnes, porções e itens de praça para diferenciação precisa no KDS e na comanda impressa."
+          size="lg"
+          footer={
+            <div className="flex justify-between items-center w-full">
+              {!editingComponent ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleOpenAddComponent}
+                  leadingIcon={<Plus size={14} />}
+                >
+                  Novo Componente
+                </Button>
+              ) : (
+                <div />
+              )}
+              <Button onClick={() => {
+                setIsKitchenModalOpen(false);
+                setEditingComponent(null);
+              }}>
+                Concluir
+              </Button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            {editingComponent ? (
+              <div className="bg-surface-elevated/40 p-4 rounded-xl border border-border-default space-y-3">
+                <div className="flex items-center justify-between border-b border-border-default/60 pb-2">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-text-primary flex items-center gap-1.5">
+                    <ChefHat size={14} className="text-amber-400" />
+                    {editingComponent.id ? 'Editar Componente' : 'Novo Componente de Preparo'}
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setEditingComponent(null)}
+                    className="text-xs text-text-muted hover:text-text-primary cursor-pointer"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[11px] font-bold text-text-secondary uppercase mb-1">
+                      Nome de Apresentação (Cozinha & Impressão):
+                    </label>
+                    <input
+                      type="text"
+                      value={compName}
+                      onChange={e => setCompName(e.target.value)}
+                      placeholder="Ex: Bovino 180 g, Costela 180 g, Batata pequena, Anéis de cebola..."
+                      className="w-full bg-surface-input border border-border-default rounded-control p-2 text-xs text-text-primary outline-none focus:border-brand-primary"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <div>
+                      <label className="block text-[10px] font-bold text-text-muted uppercase mb-1">
+                        Tipo de Componente:
+                      </label>
+                      <Select
+                        value={compType}
+                        onChange={e => setCompType(e.target.value as KitchenComponentType)}
+                      >
+                        <option value="burger">Hambúrguer (Carne)</option>
+                        <option value="egg">Ovo</option>
+                        <option value="side">Acompanhamento / Porção</option>
+                        <option value="protein">Proteína</option>
+                        <option value="other">Outro</option>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-text-muted uppercase mb-1">
+                        Estação de Preparo:
+                      </label>
+                      <Select
+                        value={compStation}
+                        onChange={e => setCompStation(e.target.value as RecipeProductionStation)}
+                      >
+                        <option value="grill">Chapa 🔥</option>
+                        <option value="fryer">Fritadeira 🍟</option>
+                        <option value="oven">Forno</option>
+                        <option value="cold">Preparo frio</option>
+                        <option value="assembly">Montagem</option>
+                        <option value="other">Outra</option>
+                      </Select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-text-muted uppercase mb-1">
+                        Unidade de Produção:
+                      </label>
+                      <input
+                        type="text"
+                        value={compUnit}
+                        onChange={e => setCompUnit(e.target.value)}
+                        placeholder="disco, unidade, porcao..."
+                        className="w-full bg-surface-input border border-border-default rounded-control p-2 text-xs text-text-primary outline-none focus:border-brand-primary"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-center">
+                    <div>
+                      <label className="block text-[10px] font-bold text-text-muted uppercase mb-1">
+                        Peso / Gramatura da Porção:
+                      </label>
+                      <input
+                        type="number"
+                        value={compWeight}
+                        onChange={e => setCompWeight(e.target.value)}
+                        placeholder="180, 90, 150..."
+                        className="w-full bg-surface-input border border-border-default rounded-control p-2 text-xs text-text-primary outline-none focus:border-brand-primary"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] font-bold text-text-muted uppercase mb-1">
+                        Unidade do Peso:
+                      </label>
+                      <Select
+                        value={compPortionUnit}
+                        onChange={e => setCompPortionUnit(e.target.value)}
+                      >
+                        <option value="g">Gramas (g)</option>
+                        <option value="kg">Quilos (kg)</option>
+                        <option value="un">Unidade (un)</option>
+                        <option value="ml">Mililitros (ml)</option>
+                      </Select>
+                    </div>
+
+                    <div className="pt-4">
+                      <label className="flex items-center gap-2 cursor-pointer text-xs font-semibold text-text-primary">
+                        <input
+                          type="checkbox"
+                          checked={compShowInSummary}
+                          onChange={e => setCompShowInSummary(e.target.checked)}
+                          className="rounded text-brand-primary focus:ring-brand-primary"
+                        />
+                        <span>Exibir no rodapé da comanda</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2 border-t border-border-default/60">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setEditingComponent(null)}
+                    >
+                      Cancelar
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={handleSaveComponent}
+                    >
+                      Salvar Componente
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {/* Lista de Componentes Cadastrados */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs text-text-muted font-bold uppercase tracking-wider px-1">
+                <span>Componentes ({kitchenComponents.length})</span>
+                <span>Ações</span>
+              </div>
+
+              <div className="max-h-72 overflow-y-auto pr-1 space-y-2">
+                {kitchenComponents.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-text-muted bg-surface-card border border-border-default rounded-xl">
+                    Nenhum componente de preparo configurado.
+                  </div>
+                ) : (
+                  kitchenComponents.map(comp => {
+                    const isGrill = comp.station === 'grill';
+                    const isFryer = comp.station === 'fryer';
+
+                    return (
+                      <div
+                        key={comp.id}
+                        className="p-3 bg-surface-card border border-border-default rounded-xl flex items-center justify-between gap-2 text-xs shadow-xs"
+                      >
+                        <div className="flex items-center gap-2 flex-1 min-w-0 flex-wrap">
+                          <span className="font-bold text-text-primary">{comp.name}</span>
+                          <span className={cn(
+                            'text-[10px] font-bold px-2 py-0.5 rounded-full border',
+                            isGrill ? 'bg-amber-500/10 text-amber-300 border-amber-500/30' :
+                            isFryer ? 'bg-yellow-500/10 text-yellow-300 border-yellow-500/30' :
+                            'bg-surface-elevated text-text-muted border-border-default'
+                          )}>
+                            {isGrill ? '🔥 Chapa' : isFryer ? '🍟 Fritadeira' : comp.station}
+                          </span>
+                          <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-surface-elevated text-text-secondary border border-border-default">
+                            {comp.componentType === 'burger' ? 'Hambúrguer' :
+                             comp.componentType === 'egg' ? 'Ovo' :
+                             comp.componentType === 'side' ? 'Acompanhamento' :
+                             comp.componentType === 'protein' ? 'Proteína' : 'Outro'}
+                          </span>
+                          {comp.portionWeight ? (
+                            <span className="text-[10px] text-text-muted font-mono">
+                              {comp.portionWeight} {comp.portionUnit || 'g'} ({comp.productionUnit})
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-text-muted font-mono">
+                              {comp.productionUnit}
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenEditComponent(comp)}
+                            className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-brand-primary transition-colors cursor-pointer"
+                            title="Editar componente"
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (confirm(`Remover o componente "${comp.name}"?`)) {
+                                await removeKitchenComponent(comp.id);
+                                notify({ title: `Componente "${comp.name}" removido.`, tone: 'info' });
+                              }
+                            }}
+                            className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-status-danger transition-colors cursor-pointer"
+                            title="Excluir componente"
                           >
                             <Trash2 size={14} />
                           </button>

@@ -17,19 +17,33 @@ import {
 } from 'lucide-react';
 import type { ProductValidationResult } from '@/lib/product-validator';
 import { cn } from '@/lib/cn';
+import type { KitchenComponent, RecipeIngredient, InventoryItem } from '@/lib/store/types';
+import { calculateProductKitchenComponents, DEFAULT_KITCHEN_COMPONENTS } from '@/lib/kitchen-calculator';
 
 interface KitchenProductPreviewProps {
   validationResult: ProductValidationResult;
   productName?: string;
   category?: string;
+  recipe?: RecipeIngredient[];
+  inventoryItems?: InventoryItem[];
+  kitchenComponents?: KitchenComponent[];
 }
 
 export function KitchenProductPreview({
   validationResult,
   productName = '',
-  category = 'lanche'
+  category = 'lanche',
+  recipe = [],
+  inventoryItems = [],
+  kitchenComponents = DEFAULT_KITCHEN_COMPONENTS,
 }: KitchenProductPreviewProps) {
   const [simQty, setSimQty] = useState<number>(1);
+
+  const structuredBreakdown = calculateProductKitchenComponents(
+    { name: productName, category: category as any, recipe },
+    inventoryItems,
+    kitchenComponents
+  );
 
   const { productionPreview, warnings, status, ingredientsSummary } = validationResult;
   const { 
@@ -120,6 +134,46 @@ export function KitchenProductPreview({
             )}
           </div>
         </div>
+      </div>
+
+      {/* SEÇÃO: COMO MOSTRAR NA COZINHA (Requisito de Configuração) */}
+      <div className="p-3.5 bg-brand-primary/5 border-b border-border-default space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="font-bold text-xs uppercase tracking-wider text-brand-primary flex items-center gap-1.5">
+            <ChefHat size={15} /> Como mostrar na cozinha
+          </span>
+          <span className="text-[10px] font-mono text-text-muted">
+            Configuração de Componentes de Preparo
+          </span>
+        </div>
+        <p className="text-[11px] font-semibold text-text-secondary">
+          Para 1 unidade deste produto:
+        </p>
+        <div className="flex flex-wrap gap-2 pt-0.5">
+          {structuredBreakdown.items.map((item, idx) => (
+            <div
+              key={idx}
+              className="px-2.5 py-1 rounded-lg bg-surface-card border border-brand-primary/30 flex items-center gap-1.5 text-xs font-bold text-text-primary shadow-xs"
+            >
+              <span className="text-[10px] uppercase px-1.5 py-0.5 rounded bg-brand-primary/20 text-brand-primary font-black">
+                {item.station === 'grill' ? 'Chapa' : item.station === 'fryer' ? 'Fritadeira' : item.station}
+              </span>
+              <span>
+                — {item.quantity} {item.name}
+              </span>
+            </div>
+          ))}
+          {structuredBreakdown.items.length === 0 && (
+            <span className="text-xs text-text-muted italic">
+              Nenhum componente de preparo configurado para este produto.
+            </span>
+          )}
+        </div>
+        {structuredBreakdown.pendingReview.length > 0 && (
+          <div className="text-[11px] text-amber-400 bg-amber-500/10 p-2 rounded-lg border border-amber-500/20">
+            ⚠️ {structuredBreakdown.pendingReview.map(p => p.reason).join(' • ')}
+          </div>
+        )}
       </div>
 
       <div className="p-4 space-y-4">

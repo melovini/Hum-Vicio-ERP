@@ -130,8 +130,10 @@ test('1. 1 simples com 1 ovo -> Chapa: 1 carne; outros: 1 ovo', () => {
   assert.equal(otherEggs.count, 1);
 
   const text = formatKitchenTicketEscPos(ticket);
-  assert.match(text, /CHAPA: 1 CARNE/);
-  assert.match(text, /Outros: Ovo: 1/);
+  assert.match(text, /CHAPA — 1 HAMBÚRGUER/);
+  assert.match(text, /1x Bovino 180 g/);
+  assert.match(text, /OUTROS NA CHAPA/);
+  assert.match(text, /1x Ovo/);
   assert.match(text, /ADICIONAR: 1 Ovo/);
 });
 
@@ -152,7 +154,8 @@ test('2. 2 simples -> Chapa: 2 carnes, sem multiplicação duplicada', () => {
   assert.equal(ticket.items[0].pattiesComposition, '1 carne bovina de 180 g');
 
   const text = formatKitchenTicketEscPos(ticket);
-  assert.match(text, /CHAPA: 2 CARNES/);
+  assert.match(text, /CHAPA — 2 HAMBÚRGUERES/);
+  assert.match(text, /2x Bovino 180 g/);
   assert.match(text, /2x BURGER SIMPLES/);
 });
 
@@ -179,7 +182,8 @@ test('3. 1 duplo + 1 simples -> Chapa: 3 carnes', () => {
   assert.equal(ticket.items[1].pattiesComposition, '1 carne bovina de 180 g');
 
   const text = formatKitchenTicketEscPos(ticket);
-  assert.match(text, /CHAPA: 3 CARNES/);
+  assert.match(text, /CHAPA — 3 HAMBÚRGUERES/);
+  assert.match(text, /3x Bovino 180 g/);
 });
 
 test('4. 1 simples + 2 carnes extras -> Chapa: 3 carnes; adicional identifica 2 unidades', () => {
@@ -199,7 +203,8 @@ test('4. 1 simples + 2 carnes extras -> Chapa: 3 carnes; adicional identifica 2 
   assert.equal(ticket.items[0].additionals[0].label, 'ADICIONAR: 2 Hambúrguer 180g');
 
   const text = formatKitchenTicketEscPos(ticket);
-  assert.match(text, /CHAPA: 3 CARNES/);
+  assert.match(text, /CHAPA — 3 HAMBÚRGUERES/);
+  assert.match(text, /3x Bovino 180 g/);
   assert.match(text, /ADICIONAR: 2 Hambúrguer 180g/);
 });
 
@@ -226,9 +231,9 @@ test('5. Combo com batata + porção avulsa -> Duas porções, sem duplicação'
   assert.equal(ticket.items[0].comboInfo?.label, 'Combo: 1 batata pequena + Coca Zero');
 
   const text = formatKitchenTicketEscPos(ticket);
-  assert.match(text, /FRITADEIRA: 2 PREPAROS/);
-  assert.match(text, /Batata pequena: 1/);
-  assert.match(text, /Batata Grande: 1/);
+  assert.match(text, /FRITADEIRA/);
+  assert.match(text, /1x Batata pequena/);
+  assert.match(text, /1x Batata grande/);
   assert.match(text, /Combo: 1 batata pequena \+ Coca Zero/);
 });
 
@@ -260,10 +265,10 @@ test('6. Frango, queijo empanado e batata -> Cada tipo separado na fritadeira co
   assert.equal(ticket.productionSummary.chapa.status, 'sem_carnes');
 
   const text = formatKitchenTicketEscPos(ticket);
-  assert.match(text, /FRITADEIRA: 3 PREPAROS/);
-  assert.match(text, /Frango empanado: 1/);
-  assert.match(text, /Queijo empanado: 1/);
-  assert.match(text, /Batata Média: 1/);
+  assert.match(text, /FRITADEIRA/);
+  assert.match(text, /1x Frango empanado/);
+  assert.match(text, /1x Queijo empanado/);
+  assert.match(text, /1x Batata pequena/);
   assert.match(text, /CHAPA: SEM CARNES/);
 });
 
@@ -301,7 +306,8 @@ test('7. Mesmo produto com pontos diferentes -> Blocos separados e resumo somado
   assert.match(text, /RETIRAR: cebola/);
   assert.match(text, /Ponto: bem passado/);
   assert.match(text, /OBS: cortar ao meio/);
-  assert.match(text, /CHAPA: 2 CARNES/);
+  assert.match(text, /CHAPA — 2 HAMBÚRGUERES/);
+  assert.match(text, /2x Bovino 180 g/);
 });
 
 test('8. Receita alterada após a venda -> Reimpressão preserva a composição confirmada do snapshot', () => {
@@ -354,7 +360,7 @@ test('8. Receita alterada após a venda -> Reimpressão preserva a composição 
 
   const text = formatKitchenTicketEscPos(ticket);
   assert.match(text, /\*\*\* REIMPRESSÃO — MESMO PEDIDO \*\*\*/);
-  assert.match(text, /CHAPA: 2 CARNES/);
+  assert.match(text, /CHAPA — 2 HAMBÚRGUERES/);
 });
 
 test('9. Composição ausente -> "Quantidade a conferir", sem zero ou número falso', () => {
@@ -538,9 +544,100 @@ test('14. HTML e Texto -> Mesmos dados, quantidades e instruções', () => {
 
   // Totais
   assert.equal(ticket.productionSummary.chapa.totalPatties, 3);
-  assert.match(text, /CHAPA: 3 CARNES/);
+  assert.match(text, /CHAPA — 3 HAMBÚRGUERES/);
+  assert.match(text, /3x Bovino 180 g/);
 
   const eggs = ticket.productionSummary.chapa.otherItems.find(o => o.label.includes('Ovo'));
   assert.equal(eggs?.count, 1);
-  assert.match(text, /Outros: Ovo: 1/);
+  assert.match(text, /OUTROS NA CHAPA/);
+  assert.match(text, /1x Ovo/);
+});
+
+test('15. Exemplo exato do prompt: carnes com tipos e gramaturas diferentes, ovos e fritadeira', () => {
+  const mockInventoryExtended = [
+    ...mockInventory,
+    { id: 'inv-patty-costela-180', name: 'Hambúrguer de Costela 180g', category: 'Carnes', unit: 'un', station: 'chapa', portionWeight: 180, portionUnit: 'g' },
+    { id: 'inv-patty-linguica', name: 'Hambúrguer de Linguiça', category: 'Carnes', unit: 'un', station: 'chapa', portionWeight: 150, portionUnit: 'g' },
+  ];
+
+  const mockComponents = [
+    { id: 'cmp-bovino-180', name: 'Bovino 180 g', componentType: 'burger', station: 'grill', productionUnit: 'disco', portionWeight: 180, portionUnit: 'g', showInSummary: true, isActive: true },
+    { id: 'cmp-costela-180', name: 'Costela 180 g', componentType: 'burger', station: 'grill', productionUnit: 'disco', portionWeight: 180, portionUnit: 'g', showInSummary: true, isActive: true },
+    { id: 'cmp-linguica', name: 'Linguiça', componentType: 'burger', station: 'grill', productionUnit: 'disco', portionWeight: 150, portionUnit: 'g', showInSummary: true, isActive: true },
+    { id: 'cmp-ovo', name: 'Ovo', componentType: 'egg', station: 'grill', productionUnit: 'unidade', portionWeight: 1, portionUnit: 'un', showInSummary: true, isActive: true },
+    { id: 'cmp-batata-peq', name: 'Batata pequena', componentType: 'side', station: 'fryer', productionUnit: 'porcao', portionWeight: 150, portionUnit: 'g', showInSummary: true, isActive: true },
+    { id: 'cmp-aneis-cebola', name: 'Anéis de cebola', componentType: 'side', station: 'fryer', productionUnit: 'porcao', portionWeight: 150, portionUnit: 'g', showInSummary: true, isActive: true },
+  ];
+
+  const mockProductsExtended = [
+    {
+      id: 'prod-bovino-180',
+      name: 'Burger Bovino 180g',
+      category: 'lanche',
+      recipe: [
+        { ingredientId: 'inv-pao', quantity: 1 },
+        { ingredientId: 'inv-patty-180', quantity: 1, kitchenComponentId: 'cmp-bovino-180' },
+      ],
+    },
+    {
+      id: 'prod-costela-180',
+      name: 'Burger Costela 180g',
+      category: 'lanche',
+      recipe: [
+        { ingredientId: 'inv-pao', quantity: 1 },
+        { ingredientId: 'inv-patty-costela-180', quantity: 1, kitchenComponentId: 'cmp-costela-180' },
+      ],
+    },
+    {
+      id: 'prod-linguica',
+      name: 'Burger Linguiça',
+      category: 'lanche',
+      recipe: [
+        { ingredientId: 'inv-pao', quantity: 1 },
+        { ingredientId: 'inv-patty-linguica', quantity: 1, kitchenComponentId: 'cmp-linguica' },
+      ],
+    },
+    {
+      id: 'prod-batata-peq',
+      name: 'Batata Pequena',
+      category: 'porcao',
+      recipe: [
+        { ingredientId: 'inv-batata', quantity: 0.15, kitchenComponentId: 'cmp-batata-peq' },
+      ],
+    },
+    {
+      id: 'prod-aneis-cebola',
+      name: 'Anéis de Cebola',
+      category: 'porcao',
+      recipe: [
+        { ingredientId: 'inv-onion', quantity: 0.15, kitchenComponentId: 'cmp-aneis-cebola' },
+      ],
+    },
+  ];
+
+  const sale = makeBaseSale([
+    { productId: 'prod-bovino-180', productName: 'Burger Bovino 180g', quantity: 1, unitPrice: 35, additionals: [{ name: 'Ovo', quantity: 2, price: 6 }] },
+    { productId: 'prod-bovino-180', productName: 'Burger Bovino 180g', quantity: 2, unitPrice: 35 },
+    { productId: 'prod-costela-180', productName: 'Burger Costela 180g', quantity: 2, unitPrice: 38 },
+    { productId: 'prod-linguica', productName: 'Burger Linguiça', quantity: 1, unitPrice: 32 },
+    { productId: 'prod-batata-peq', productName: 'Batata Pequena', quantity: 2, unitPrice: 15 },
+    { productId: 'prod-aneis-cebola', productName: 'Anéis de Cebola', quantity: 1, unitPrice: 18 },
+  ]);
+
+  const ticket = buildKitchenTicket({
+    sale,
+    products: mockProductsExtended,
+    inventoryItems: mockInventoryExtended,
+    kitchenComponents: mockComponents,
+  });
+
+  const text = formatKitchenTicketEscPos(ticket);
+
+  assert.equal(ticket.productionSummary.chapa.totalPatties, 6);
+  assert.equal(ticket.productionSummary.fritadeira.totalPreparos, 3);
+
+  // Validação do rodapé exato:
+  assert.match(text, /CHAPA — 6 HAMBÚRGUERES\n3x Bovino 180 g\n2x Costela 180 g\n1x Linguiça/);
+  assert.match(text, /OUTROS NA CHAPA\n2x Ovo/);
+  assert.match(text, /FRITADEIRA\n2x Batata pequena\n1x Anéis de cebola/);
 });

@@ -238,6 +238,7 @@ test('checkout transacional valida permissões, integridade matemática e idempo
       return {
         select() { return this; },
         eq() { return this; },
+        in() { return this; },
         async single() {
           return {
             data: table === 'app_sessions' ? fixture.state.session : fixture.state.person,

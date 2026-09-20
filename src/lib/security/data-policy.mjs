@@ -1,8 +1,8 @@
 const tables = new Set(['inventory', 'products', 'recipes', 'sales', 'sale_items', 'cash_sessions',
   'cash_movements', 'waste_records', 'kitchen_checklists', 'suppliers', 'purchase_records', 'stock_audits',
-  'sub_recipes', 'audit_logs', 'layout_template', 'layout_template_item', 'sessao_caixa_salao',
+  'sub_recipes', 'kitchen_components', 'audit_logs', 'layout_template', 'layout_template_item', 'sessao_caixa_salao',
   'salao_mesa_instancia', 'audit_log_salao', 'collaborator_diarias', 'imported_customers']);
-const kitchenRead = new Set(['inventory', 'products', 'recipes', 'sales', 'sale_items', 'waste_records', 'kitchen_checklists', 'sub_recipes']);
+const kitchenRead = new Set(['inventory', 'products', 'recipes', 'sales', 'sale_items', 'waste_records', 'kitchen_checklists', 'sub_recipes', 'kitchen_components']);
 const cashierRead = new Set([...kitchenRead, 'cash_sessions', 'cash_movements', 'layout_template',
   'layout_template_item', 'sessao_caixa_salao', 'salao_mesa_instancia', 'imported_customers']);
 const productionFields = ['production_status', 'production_started_at', 'production_completed_at',

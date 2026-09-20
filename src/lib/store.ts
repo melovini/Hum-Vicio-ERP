@@ -16,8 +16,9 @@ import {
   DelayReason, Sale, FixedExpensesConfig, DEFAULT_FIXED_EXPENSES, 
   CashMovement, CashClosingDetails, CashSession, AuditAction, 
   AuditLog, WasteRecord, ChecklistTask, DailyChecklist, Supplier, 
-  PurchaseRecord, StockAuditItem, StockAudit 
+  PurchaseRecord, StockAuditItem, StockAudit, KitchenComponent 
 } from './store/types';
+import { DEFAULT_KITCHEN_COMPONENTS } from './kitchen-calculator';
 
 export type { RecipeProductionStation, RecipeProductionKind };
 import { 
@@ -143,6 +144,7 @@ export interface ItemProductionMeta {
   productionKind?: RecipeProductionKind;
   portionWeight?: number;
   portionUnit?: string;
+  kitchenComponentId?: string;
 }
 
 export function getSavedItemProductionMetaMap(): Record<string, ItemProductionMeta> {
@@ -385,6 +387,7 @@ export type ConnectionStatus = 'connected' | 'server_unreachable' | 'offline';
 export interface GlobalStoreState {
   items: InventoryItem[];
   products: Product[];
+  kitchenComponents: KitchenComponent[];
   isLoaded: boolean;
   fixedExpensesConfig: FixedExpensesConfig;
   isOpen: boolean;
@@ -413,6 +416,7 @@ export interface GlobalStoreState {
 const serverInitialState: GlobalStoreState = {
   items: [],
   products: [],
+  kitchenComponents: DEFAULT_KITCHEN_COMPONENTS,
   isLoaded: false,
   fixedExpensesConfig: DEFAULT_FIXED_EXPENSES,
   isOpen: false,
@@ -446,9 +450,17 @@ export function getInitialGlobalState(): GlobalStoreState {
   let activeSession: CashSession | null = null;
   let cachedLogs: AuditLog[] = [];
   let lastSync: string | null = null;
+  let cachedComponents: KitchenComponent[] = DEFAULT_KITCHEN_COMPONENTS;
   let hasCache = false;
 
   if (typeof window !== 'undefined') {
+    try {
+      const sComps = localStorage.getItem('hum_vicio_cached_kitchen_components');
+      if (sComps) {
+        const parsed = JSON.parse(sComps);
+        if (Array.isArray(parsed) && parsed.length > 0) cachedComponents = parsed;
+      }
+    } catch {}
     try {
       const sItems = localStorage.getItem('hum_vicio_cached_inventory');
       if (sItems) {
@@ -500,6 +512,7 @@ export function getInitialGlobalState(): GlobalStoreState {
   return {
     items: cachedItems,
     products: cachedProducts,
+    kitchenComponents: cachedComponents,
     isLoaded: hasCache,
     fixedExpensesConfig: getSavedFixedExpensesConfig(),
     isOpen: !!activeSession,
@@ -571,6 +584,7 @@ export async function executeParallelLoadData(
       let auditData: any = null;
       let subData: any = null;
       let logsData: any = null;
+      let compsData: any = null;
 
       // 1. Tentar bootstrap unificado ultrarrápido com escopo específico por módulo
       let bootstrapLoaded = false;
@@ -592,6 +606,7 @@ export async function executeParallelLoadData(
           auditData = bData.stockAudits || [];
           subData = bData.subRecipes || [];
           logsData = bData.auditLogs || [];
+          compsData = bData.kitchenComponents || [];
           bootstrapLoaded = true;
         }
       } catch {}
@@ -605,7 +620,8 @@ export async function executeParallelLoadData(
           recRes,
           salesRes,
           saleItemsRes,
-          checksRes
+          checksRes,
+          compsRes
         ] = await Promise.all([
           supabaseClient.from('cash_sessions').select('*').is('deleted_at', null).order('opened_at', { ascending: false }).catch(() => ({ data: null })),
           supabaseClient.from('inventory').select('*').catch(() => ({ data: null })),
@@ -613,7 +629,8 @@ export async function executeParallelLoadData(
           supabaseClient.from('recipes').select('*').catch(() => ({ data: null })),
           supabaseClient.from('sales').select('*').is('deleted_at', null).order('created_at', { ascending: false }).limit(80).catch(() => ({ data: null })),
           supabaseClient.from('sale_items').select('*').not('sale_id', 'is', null).catch(() => ({ data: null })),
-          supabaseClient.from('kitchen_checklists').select('*').order('date', { ascending: false }).catch(() => ({ data: null }))
+          supabaseClient.from('kitchen_checklists').select('*').order('date', { ascending: false }).catch(() => ({ data: null })),
+          supabaseClient.from('kitchen_components').select('*').order('name', { ascending: true }).catch(() => ({ data: null }))
         ]);
 
         allSessData = allSessRes?.data;
@@ -623,6 +640,7 @@ export async function executeParallelLoadData(
         salesData = salesRes?.data;
         saleItemsData = saleItemsRes?.data;
         allChecks = checksRes?.data;
+        compsData = compsRes?.data;
       }
 
       // 1. Processar Insumos
@@ -650,6 +668,7 @@ export async function executeParallelLoadData(
             productionKind: i.production_kind || meta.productionKind,
             portionWeight: i.portion_weight !== undefined ? Number(i.portion_weight) : meta.portionWeight,
             portionUnit: i.portion_unit || meta.portionUnit || 'g',
+            kitchenComponentId: i.kitchen_component_id || meta.kitchenComponentId || undefined,
           };
         });
         if (typeof window !== 'undefined') {
@@ -681,6 +700,7 @@ export async function executeParallelLoadData(
             recipe: recipesList.filter(r => r.product_id === p.id).map(r => ({
               ingredientId: r.ingredient_id,
               quantity: Number(r.quantity) || 0,
+              kitchenComponentId: r.kitchen_component_id || undefined,
               productionStation: r.production_station || undefined,
               productionKind: r.production_kind || undefined,
             }))
@@ -699,6 +719,25 @@ export async function executeParallelLoadData(
 
         if (typeof window !== 'undefined') {
           try { localStorage.setItem('hum_vicio_cached_products', JSON.stringify(mappedProducts)); } catch {}
+        }
+      }
+
+      // 2.1 Processar Componentes de Preparo
+      let mappedComponents = globalStore.kitchenComponents || DEFAULT_KITCHEN_COMPONENTS;
+      if (compsData && Array.isArray(compsData) && compsData.length > 0) {
+        mappedComponents = (compsData as any[]).map(c => ({
+          id: c.id,
+          name: c.name,
+          componentType: c.component_type || c.componentType,
+          station: c.station,
+          productionUnit: c.production_unit || c.productionUnit || 'unidade',
+          portionWeight: c.portion_weight !== undefined && c.portion_weight !== null ? Number(c.portion_weight) : c.portionWeight,
+          portionUnit: c.portion_unit || c.portionUnit || 'g',
+          showInSummary: c.show_in_summary !== undefined ? c.show_in_summary : (c.showInSummary !== false),
+          isActive: c.is_active !== undefined ? c.is_active : (c.isActive !== false),
+        }));
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem('hum_vicio_cached_kitchen_components', JSON.stringify(mappedComponents)); } catch {}
         }
       }
 
@@ -978,6 +1017,7 @@ export async function executeParallelLoadData(
       updateGlobalStore({
         items: mappedItems,
         products: mappedProducts,
+        kitchenComponents: mappedComponents,
         sales: mappedSales,
         allCashSessions: mappedSessions,
         activeCashSession: openSession,
@@ -1191,6 +1231,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   const {
     items,
     products,
+    kitchenComponents,
     isLoaded,
     fixedExpensesConfig,
     isOpen,
@@ -1229,6 +1270,71 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     updateGlobalStore({ products: next });
     if (typeof window !== 'undefined') {
       try { localStorage.setItem('hum_vicio_cached_products', JSON.stringify(next)); } catch {}
+    }
+  };
+
+  const setKitchenComponents = (value: KitchenComponent[] | ((prev: KitchenComponent[]) => KitchenComponent[])) => {
+    const next = typeof value === 'function' ? value(globalStore.kitchenComponents) : value;
+    updateGlobalStore({ kitchenComponents: next });
+    if (typeof window !== 'undefined') {
+      try { localStorage.setItem('hum_vicio_cached_kitchen_components', JSON.stringify(next)); } catch {}
+    }
+  };
+
+  const addKitchenComponent = async (comp: Omit<KitchenComponent, 'id'> & { id?: string }) => {
+    const newId = comp.id || `cmp-${Date.now().toString(36)}`;
+    const newComp: KitchenComponent = {
+      ...comp,
+      id: newId,
+      showInSummary: comp.showInSummary !== false,
+      isActive: comp.isActive !== false,
+    };
+    setKitchenComponents(prev => [...prev.filter(c => c.id !== newId), newComp]);
+
+    try {
+      await supabase.from('kitchen_components').upsert({
+        id: newComp.id,
+        name: newComp.name,
+        component_type: newComp.componentType,
+        station: newComp.station,
+        production_unit: newComp.productionUnit,
+        portion_weight: newComp.portionWeight,
+        portion_unit: newComp.portionUnit,
+        show_in_summary: newComp.showInSummary,
+        is_active: newComp.isActive,
+      });
+    } catch (err) {
+      console.warn('Erro ao salvar componente de preparo:', err);
+    }
+    return newComp;
+  };
+
+  const updateKitchenComponent = async (id: string, updates: Partial<KitchenComponent>) => {
+    setKitchenComponents(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
+
+    try {
+      const payload: any = {};
+      if (updates.name !== undefined) payload.name = updates.name;
+      if (updates.componentType !== undefined) payload.component_type = updates.componentType;
+      if (updates.station !== undefined) payload.station = updates.station;
+      if (updates.productionUnit !== undefined) payload.production_unit = updates.productionUnit;
+      if (updates.portionWeight !== undefined) payload.portion_weight = updates.portionWeight;
+      if (updates.portionUnit !== undefined) payload.portion_unit = updates.portionUnit;
+      if (updates.showInSummary !== undefined) payload.show_in_summary = updates.showInSummary;
+      if (updates.isActive !== undefined) payload.is_active = updates.isActive;
+
+      await supabase.from('kitchen_components').update(payload).eq('id', id);
+    } catch (err) {
+      console.warn('Erro ao atualizar componente de preparo:', err);
+    }
+  };
+
+  const removeKitchenComponent = async (id: string) => {
+    setKitchenComponents(prev => prev.filter(c => c.id !== id));
+    try {
+      await supabase.from('kitchen_components').delete().eq('id', id);
+    } catch (err) {
+      console.warn('Erro ao remover componente de preparo:', err);
     }
   };
 
@@ -3767,6 +3873,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   return { 
     items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
     products, addProduct, updateProduct, removeProduct, getProductCmv, getRealSalesCmv, setProducts,
+    kitchenComponents, setKitchenComponents, addKitchenComponent, updateKitchenComponent, removeKitchenComponent,
     batchAddIngredientToProducts, batchUpdateProductSubcategory,
     isLoaded, isOpen, activeCashSession, allCashSessions, openCaixa, closeCaixa, toggleCaixa, deleteCashSession, deleteTestSales,
     sales, addSale, cancelSale, reopenOrderForEdit, updateReopenedOrder, acknowledgeOrderModification,

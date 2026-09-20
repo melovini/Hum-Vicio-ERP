@@ -67,10 +67,11 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
       sale,
       products: allProducts,
       inventoryItems: allInventoryItems,
+      kitchenComponents: inventory.kitchenComponents,
       showMontagem,
       diff: activeDiff,
     });
-  }, [sale, allProducts, allInventoryItems, showMontagem, activeDiff]);
+  }, [sale, allProducts, allInventoryItems, inventory.kitchenComponents, showMontagem, activeDiff]);
 
   // Gerador de Texto RAW ESC/POS (40 colunas contínuas para impressoras seriais, bluetooth e drivers diretos)
   const generateRawEscPosText = () => {

@@ -26,6 +26,7 @@ interface SaveProductPayload {
   recipe?: Array<{
     ingredientId: string;
     quantity: number;
+    kitchenComponentId?: string;
     productionStation?: string;
     productionKind?: string;
   }>;
@@ -110,9 +111,14 @@ export async function POST(request: Request) {
         kind = 'none';
       }
 
+      const kCompId = item.kitchenComponentId && typeof item.kitchenComponentId === 'string' && item.kitchenComponentId.trim()
+        ? item.kitchenComponentId.trim()
+        : undefined;
+
       return {
         ingredientId: ingId,
         quantity: qty,
+        kitchenComponentId: kCompId,
         productionStation: station,
         productionKind: kind,
       };
@@ -203,6 +209,7 @@ export async function POST(request: Request) {
             product_id: prodId,
             ingredient_id: r.ingredientId,
             quantity: r.quantity,
+            kitchen_component_id: r.kitchenComponentId || null,
             production_station: r.productionStation || 'none',
             production_kind: r.productionKind || 'none',
           }));
