@@ -30,6 +30,8 @@ import {
   renameSubcategory,
   deleteSubcategory,
   moveSubcategory,
+  purgeUnusedSubcategories,
+  getFallbackSubcategoryForCategory,
   type CustomSubcategoriesMap,
 } from '@/lib/subcategory-store';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -105,7 +107,8 @@ export default function CardapioAdminPage() {
   // Subcategorias Customizadas & Modal de Gestão
   const [customSubcategoriesMap, setCustomSubcategoriesMap] = useState<CustomSubcategoriesMap>({});
   const [isSubcategoryModalOpen, setIsSubcategoryModalOpen] = useState(false);
-  const [selectedCatForSubMgmt, setSelectedCatForSubMgmt] = useState<'lanche' | 'porcao' | 'bebida' | 'combo'>('lanche');
+  const [selectedCatForSubMgmt, setSelectedCatForSubMgmt] = useState<'todas' | 'lanche' | 'porcao' | 'bebida' | 'combo'>('todas');
+  const [targetCatForAdd, setTargetCatForAdd] = useState<'lanche' | 'porcao' | 'bebida' | 'combo'>('lanche');
   const [newSubcategoryInput, setNewSubcategoryInput] = useState('');
   const [editingSubcat, setEditingSubcat] = useState<{ oldName: string; newName: string } | null>(null);
   const [confirmDeleteSubcat, setConfirmDeleteSubcat] = useState<string | null>(null);
@@ -265,8 +268,9 @@ export default function CardapioAdminPage() {
     return getSubcategoriesForCategory(category, products);
   }, [category, products, customSubcategoriesMap]);
 
-  // Subcategorias para filtros no topo
+  // Subcategorias para filtros no topo (exibe apenas subcategorias com produtos ou a atualmente ativa)
   const filterSubcategories = useMemo(() => {
+    let rawSubs: string[] = [];
     if (categoryFilter === 'todos') {
       const allSubcats = new Set<string>();
       (['lanche', 'porcao', 'bebida', 'combo'] as const).forEach(cat => {
@@ -276,10 +280,21 @@ export default function CardapioAdminPage() {
         const s = p.subcategory || inferDefaultSubcategory(p);
         if (s) allSubcats.add(s);
       });
-      return Array.from(allSubcats);
+      rawSubs = Array.from(allSubcats);
+    } else {
+      rawSubs = getSubcategoriesForCategory(categoryFilter, products);
     }
-    return getSubcategoriesForCategory(categoryFilter, products);
-  }, [products, categoryFilter, customSubcategoriesMap]);
+
+    return rawSubs.filter(sub => {
+      if (subcategoryFilter === sub) return true;
+      const count = products.filter(p => 
+        (categoryFilter === 'todos' || p.category === categoryFilter) &&
+        (showInactive || p.isActive !== false) &&
+        (p.subcategory || inferDefaultSubcategory(p)) === sub
+      ).length;
+      return count > 0;
+    });
+  }, [products, categoryFilter, subcategoryFilter, showInactive, customSubcategoriesMap]);
 
   // Ordem hierárquica configurada para exibição em grupos
   const currentSubcategoryOrder = useMemo(() => {
@@ -429,19 +444,20 @@ export default function CardapioAdminPage() {
   }, [recipe, items]);
 
   // Gestão de Subcategorias - Ações
-  const handleAddCustomSubcategory = (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', subName: string) => {
+  const handleAddCustomSubcategory = (cat: 'todas' | 'lanche' | 'porcao' | 'bebida' | 'combo', subName: string) => {
     const trimmed = subName.trim();
     if (!trimmed) {
       notify({ title: 'Informe o nome da subcategoria.', tone: 'warning' });
       return;
     }
-    const updatedMap = addSubcategory(cat, trimmed);
+    const targetCat = cat === 'todas' ? targetCatForAdd : cat;
+    const updatedMap = addSubcategory(targetCat, trimmed);
     setCustomSubcategoriesMap(updatedMap);
     setNewSubcategoryInput('');
     notify({ title: `Subcategoria "${trimmed}" adicionada!`, tone: 'success' });
   };
 
-  const handleRenameCustomSubcategory = async (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', oldName: string, newName: string) => {
+  const handleRenameCustomSubcategory = async (cat: 'todas' | 'lanche' | 'porcao' | 'bebida' | 'combo', oldName: string, newName: string) => {
     const trimmed = newName.trim();
     if (!trimmed || trimmed === oldName) {
       setEditingSubcat(null);
@@ -449,6 +465,10 @@ export default function CardapioAdminPage() {
     }
     const updatedMap = renameSubcategory(cat, oldName, trimmed);
     setCustomSubcategoriesMap(updatedMap);
+
+    if (subcategoryFilter === oldName) {
+      setSubcategoryFilter(trimmed);
+    }
 
     // Atualização funcional atômica no estado, cache e Supabase
     await batchUpdateProductSubcategory(cat, oldName, trimmed);
@@ -460,21 +480,44 @@ export default function CardapioAdminPage() {
     });
   };
 
-  const handleDeleteCustomSubcategory = async (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', subName: string) => {
+  const handleDeleteCustomSubcategory = async (cat: 'todas' | 'lanche' | 'porcao' | 'bebida' | 'combo', subName: string) => {
     const updatedMap = deleteSubcategory(cat, subName);
     setCustomSubcategoriesMap(updatedMap);
     setConfirmDeleteSubcat(null);
 
-    const remainingSubs = updatedMap[cat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] || [];
-    const fallbackSub = remainingSubs[0] || 'Geral';
+    if (subcategoryFilter === subName) {
+      setSubcategoryFilter('todas');
+    }
+
+    const fallbackSub = cat !== 'todas' ? getFallbackSubcategoryForCategory(cat) : undefined;
 
     await batchUpdateProductSubcategory(cat, subName, fallbackSub);
-    notify({ title: `Subcategoria "${subName}" excluída. Itens associados movidos para "${fallbackSub}".`, tone: 'info' });
+    notify({ 
+      title: `Subcategoria "${subName}" excluída.`, 
+      description: 'Itens associados foram reatribuídos para a subcategoria padrão.',
+      tone: 'info' 
+    });
   };
 
   const handleMoveCustomSubcategory = (cat: 'lanche' | 'porcao' | 'bebida' | 'combo', index: number, direction: 'up' | 'down') => {
     const updatedMap = moveSubcategory(cat, index, direction);
     setCustomSubcategoriesMap(updatedMap);
+  };
+
+  const handlePurgeUnusedSubcategories = () => {
+    const { countPurged, updatedMap } = purgeUnusedSubcategories(products);
+    setCustomSubcategoriesMap(updatedMap);
+    if (countPurged > 0) {
+      notify({
+        title: `${countPurged} subcategorias vazias foram removidas!`,
+        tone: 'success',
+      });
+    } else {
+      notify({
+        title: 'Nenhuma subcategoria vazia encontrada para remoção.',
+        tone: 'info',
+      });
+    }
   };
 
   const resetForm = () => {
@@ -1349,12 +1392,27 @@ export default function CardapioAdminPage() {
               </div>
             </FilterBar>
 
-            {/* Subcategorias Chips de Filtragem Rápida */}
-            {filterSubcategories.length > 0 && (
+            {/* Subcategorias Chips de Filtragem Rápida e Gestão Direta */}
+            {products.length > 0 && (
               <div className="flex flex-wrap gap-2 items-center pt-1">
-                <span className="text-xs font-bold text-text-muted uppercase tracking-wider mr-1 flex items-center gap-1">
-                  <FolderTree size={13} className="text-brand-primary" /> Subcategorias:
-                </span>
+                <div className="flex items-center gap-1 mr-1">
+                  <span className="text-xs font-bold text-text-muted uppercase tracking-wider flex items-center gap-1">
+                    <FolderTree size={13} className="text-brand-primary" /> Subcategorias:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedCatForSubMgmt(categoryFilter === 'todos' ? 'todas' : categoryFilter);
+                      setIsSubcategoryModalOpen(true);
+                    }}
+                    className="text-xs text-brand-primary hover:text-brand-primary/80 font-semibold flex items-center gap-1 px-2 py-0.5 rounded hover:bg-brand-primary/10 transition-colors cursor-pointer"
+                    title="Gerenciar, renomear, reordenar ou excluir subcategorias"
+                  >
+                    <FolderKanban size={13} />
+                    <span>Gerenciar</span>
+                  </button>
+                </div>
+
                 <button
                   type="button"
                   onClick={() => setSubcategoryFilter('todas')}
@@ -1367,6 +1425,7 @@ export default function CardapioAdminPage() {
                 >
                   Todas ({products.filter(p => (categoryFilter === 'todos' || p.category === categoryFilter) && (showInactive || p.isActive !== false)).length})
                 </button>
+
                 {filterSubcategories.map(sub => {
                   const count = products.filter(p => 
                     (categoryFilter === 'todos' || p.category === categoryFilter) &&
@@ -1395,6 +1454,34 @@ export default function CardapioAdminPage() {
                     </button>
                   );
                 })}
+
+                {/* Ações Rápidas da Subcategoria Selecionada */}
+                {subcategoryFilter !== 'todas' && (
+                  <div className="flex items-center gap-1 ml-1 pl-2 border-l border-border-default">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCatForSubMgmt(categoryFilter === 'todos' ? 'todas' : categoryFilter);
+                        setEditingSubcat({ oldName: subcategoryFilter, newName: subcategoryFilter });
+                        setIsSubcategoryModalOpen(true);
+                      }}
+                      className="p-1 text-text-muted hover:text-brand-primary hover:bg-surface-elevated rounded transition-colors cursor-pointer text-xs flex items-center gap-1"
+                      title={`Renomear subcategoria "${subcategoryFilter}"`}
+                    >
+                      <Pencil size={12} />
+                      <span className="text-[11px]">Renomear</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteSubcat(subcategoryFilter)}
+                      className="p-1 text-text-muted hover:text-status-danger hover:bg-status-danger/10 rounded transition-colors cursor-pointer text-xs flex items-center gap-1"
+                      title={`Excluir subcategoria "${subcategoryFilter}"`}
+                    >
+                      <Trash2 size={12} />
+                      <span className="text-[11px]">Excluir</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -2765,23 +2852,43 @@ export default function CardapioAdminPage() {
             setNewSubcategoryInput('');
           }}
           title="Gestão de Subcategorias do Cardápio"
-          description="Organize a ordem de exibição (subir/descer), crie novas subcategorias ou renomeie/exclua as existentes para adaptar à sua operação."
+          description="Organize a ordem de exibição, crie novas subcategorias ou renomeie/exclua as existentes para adaptar à sua operação."
           size="lg"
           footer={
-            <div className="flex justify-end w-full">
+            <div className="flex flex-col-reverse sm:flex-row justify-between items-center w-full gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={handlePurgeUnusedSubcategories}
+                leadingIcon={<Sparkles size={14} className="text-brand-primary" />}
+                title="Remove subcategorias sem nenhum produto associado em qualquer categoria"
+              >
+                Limpar subcategorias vazias (0 itens)
+              </Button>
               <Button onClick={() => setIsSubcategoryModalOpen(false)}>
                 Concluir
               </Button>
             </div>
           }
         >
-          <div className="space-y-6">
-            {/* Seletor de Categoria Pai */}
+          <div className="space-y-5">
+            {/* Seletor de Categoria Pai incluindo TODAS */}
             <div className="flex border-b border-border-default pb-2 gap-2 overflow-x-auto">
-              {(['lanche', 'porcao', 'bebida', 'combo'] as const).map(cat => {
-                const label = cat === 'lanche' ? 'Hambúrgueres' : cat === 'porcao' ? 'Porções' : cat === 'bebida' ? 'Bebidas' : 'Combos';
+              {(['todas', 'lanche', 'porcao', 'bebida', 'combo'] as const).map(cat => {
+                const label = cat === 'todas' 
+                  ? 'Todas as Subcategorias'
+                  : cat === 'lanche' 
+                    ? 'Hambúrgueres' 
+                    : cat === 'porcao' 
+                      ? 'Porções' 
+                      : cat === 'bebida' 
+                        ? 'Bebidas' 
+                        : 'Combos';
                 const isSelected = selectedCatForSubMgmt === cat;
-                const count = (customSubcategoriesMap[cat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] || []).length;
+                const count = cat === 'todas'
+                  ? getSubcategoriesForCategory('todas', products).length
+                  : getSubcategoriesForCategory(cat, products).length;
                 return (
                   <button
                     key={cat}
@@ -2813,9 +2920,21 @@ export default function CardapioAdminPage() {
             {/* Adicionar Nova Subcategoria */}
             <div className="bg-surface-elevated/40 p-3.5 rounded-xl border border-border-default space-y-2">
               <label htmlFor="add-subcat-input" className="block text-xs font-bold text-text-secondary uppercase tracking-wider">
-                Adicionar Subcategoria em {selectedCatForSubMgmt === 'lanche' ? 'Hambúrgueres' : selectedCatForSubMgmt === 'porcao' ? 'Porções' : selectedCatForSubMgmt === 'bebida' ? 'Bebidas' : 'Combos'}:
+                Adicionar Subcategoria {selectedCatForSubMgmt !== 'todas' ? `em ${selectedCatForSubMgmt === 'lanche' ? 'Hambúrgueres' : selectedCatForSubMgmt === 'porcao' ? 'Porções' : selectedCatForSubMgmt === 'bebida' ? 'Bebidas' : 'Combos'}` : ''}:
               </label>
-              <div className="flex gap-2">
+              <div className="flex flex-col sm:flex-row gap-2">
+                {selectedCatForSubMgmt === 'todas' && (
+                  <select
+                    value={targetCatForAdd}
+                    onChange={(e) => setTargetCatForAdd(e.target.value as any)}
+                    className="bg-surface-input border border-border-default rounded-control p-2 text-xs text-text-primary outline-none focus:border-brand-primary"
+                  >
+                    <option value="lanche">Hambúrgueres</option>
+                    <option value="porcao">Porções</option>
+                    <option value="bebida">Bebidas</option>
+                    <option value="combo">Combos</option>
+                  </select>
+                )}
                 <input
                   id="add-subcat-input"
                   type="text"
@@ -2844,115 +2963,148 @@ export default function CardapioAdminPage() {
             {/* Lista Ordenável de Subcategorias com Subir/Descer, Renomear e Excluir */}
             <div className="space-y-2">
               <div className="flex items-center justify-between text-xs text-text-muted font-bold uppercase tracking-wider px-1">
-                <span>Subcategorias e Ordem de Exibição</span>
+                <span>Subcategorias ({getSubcategoriesForCategory(selectedCatForSubMgmt, products).length})</span>
                 <span>Ações</span>
               </div>
 
-              <div className="max-h-72 overflow-y-auto pr-1 space-y-2">
-                {getSubcategoriesForCategory(selectedCatForSubMgmt, products).map((sub, idx, arr) => {
-                  const isEditing = editingSubcat?.oldName === sub;
-                  const prodsCount = products.filter(p => p.category === selectedCatForSubMgmt && (p.subcategory || inferDefaultSubcategory(p)) === sub).length;
+              <div className="max-h-80 overflow-y-auto pr-1 space-y-2">
+                {getSubcategoriesForCategory(selectedCatForSubMgmt, products).length === 0 ? (
+                  <div className="p-4 text-center text-xs text-text-muted bg-surface-card border border-border-default rounded-xl">
+                    Nenhuma subcategoria cadastrada nesta categoria.
+                  </div>
+                ) : (
+                  getSubcategoriesForCategory(selectedCatForSubMgmt, products).map((sub, idx, arr) => {
+                    const isEditing = editingSubcat?.oldName === sub;
+                    const prodsCount = products.filter(p => 
+                      (selectedCatForSubMgmt === 'todas' || p.category === selectedCatForSubMgmt) && 
+                      (p.subcategory || inferDefaultSubcategory(p)) === sub
+                    ).length;
 
-                  return (
-                    <div
-                      key={sub}
-                      className="p-3 bg-surface-card border border-border-default rounded-xl flex items-center justify-between gap-2 text-xs shadow-xs"
-                    >
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <span className="font-mono text-[11px] text-text-muted w-5 shrink-0 text-center">
-                          {idx + 1}.
-                        </span>
+                    const associatedCategories = Array.from(new Set(
+                      products
+                        .filter(p => (p.subcategory || inferDefaultSubcategory(p)) === sub)
+                        .map(p => p.category)
+                    ));
 
-                        {isEditing ? (
-                          <div className="flex items-center gap-1.5 flex-1">
-                            <input
-                              type="text"
-                              value={editingSubcat.newName}
-                              onChange={(e) => setEditingSubcat({ oldName: sub, newName: e.target.value })}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  e.preventDefault();
-                                  handleRenameCustomSubcategory(selectedCatForSubMgmt, sub, editingSubcat.newName);
-                                } else if (e.key === 'Escape') {
-                                  setEditingSubcat(null);
-                                }
-                              }}
-                              autoFocus
-                              className="flex-1 bg-surface-input border border-brand-primary rounded p-1 text-xs text-text-primary outline-none"
-                            />
+                    return (
+                      <div
+                        key={sub}
+                        className="p-3 bg-surface-card border border-border-default rounded-xl flex items-center justify-between gap-2 text-xs shadow-xs"
+                      >
+                        <div className="flex items-center gap-2 flex-1 min-w-0">
+                          <span className="font-mono text-[11px] text-text-muted w-5 shrink-0 text-center">
+                            {idx + 1}.
+                          </span>
+
+                          {isEditing ? (
+                            <div className="flex items-center gap-1.5 flex-1">
+                              <input
+                                type="text"
+                                value={editingSubcat.newName}
+                                onChange={(e) => setEditingSubcat({ oldName: sub, newName: e.target.value })}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    handleRenameCustomSubcategory(selectedCatForSubMgmt, sub, editingSubcat.newName);
+                                  } else if (e.key === 'Escape') {
+                                    setEditingSubcat(null);
+                                  }
+                                }}
+                                autoFocus
+                                className="flex-1 bg-surface-input border border-brand-primary rounded p-1 text-xs text-text-primary outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleRenameCustomSubcategory(selectedCatForSubMgmt, sub, editingSubcat.newName)}
+                                className="p-1 rounded bg-brand-primary text-white hover:bg-brand-primary/80 transition-colors cursor-pointer"
+                                title="Salvar novo nome"
+                              >
+                                <Check size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setEditingSubcat(null)}
+                                className="p-1 rounded bg-surface-elevated text-text-muted hover:text-text-primary transition-colors cursor-pointer"
+                                title="Cancelar edição"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex items-center gap-2 flex-wrap min-w-0">
+                              <span className="font-bold text-text-primary">{sub}</span>
+                              <span className={cn(
+                                'text-[10px] font-mono px-2 py-0.5 rounded-full shrink-0',
+                                prodsCount > 0 
+                                  ? 'bg-surface-elevated text-text-muted' 
+                                  : 'bg-status-warning/15 text-status-warning font-bold'
+                              )}>
+                                {prodsCount} {prodsCount === 1 ? 'item' : 'itens'}
+                              </span>
+                              {selectedCatForSubMgmt === 'todas' && associatedCategories.length > 0 && (
+                                <div className="flex gap-1">
+                                  {associatedCategories.map(c => (
+                                    <span key={c} className="text-[9px] bg-brand-primary/10 text-brand-primary font-medium px-1.5 py-0.2 rounded">
+                                      {c === 'lanche' ? 'Hambúrguer' : c === 'porcao' ? 'Porção' : c === 'bebida' ? 'Bebida' : 'Combo'}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          {/* Botões de Ordem (Subir / Descer) apenas quando categoria específica */}
+                          {selectedCatForSubMgmt !== 'todas' && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={idx === 0}
+                                onClick={() => handleMoveCustomSubcategory(selectedCatForSubMgmt, idx, 'up')}
+                                className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-text-primary disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                                title="Subir posição"
+                              >
+                                <ArrowUp size={14} />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === arr.length - 1}
+                                onClick={() => handleMoveCustomSubcategory(selectedCatForSubMgmt, idx, 'down')}
+                                className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-text-primary disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
+                                title="Descer posição"
+                              >
+                                <ArrowDown size={14} />
+                              </button>
+                            </>
+                          )}
+
+                          {/* Botão Renomear */}
+                          {!isEditing && (
                             <button
                               type="button"
-                              onClick={() => handleRenameCustomSubcategory(selectedCatForSubMgmt, sub, editingSubcat.newName)}
-                              className="p-1 rounded bg-brand-primary text-white hover:bg-brand-primary/80 transition-colors cursor-pointer"
-                              title="Salvar novo nome"
+                              onClick={() => setEditingSubcat({ oldName: sub, newName: sub })}
+                              className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-brand-primary transition-colors cursor-pointer"
+                              title="Renomear subcategoria"
                             >
-                              <Check size={14} />
+                              <Pencil size={14} />
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => setEditingSubcat(null)}
-                              className="p-1 rounded bg-surface-elevated text-text-muted hover:text-text-primary transition-colors cursor-pointer"
-                              title="Cancelar edição"
-                            >
-                              <X size={14} />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2 truncate">
-                            <span className="font-bold text-text-primary truncate">{sub}</span>
-                            <span className="text-[10px] text-text-muted font-mono bg-surface-elevated px-2 py-0.5 rounded-full shrink-0">
-                              {prodsCount} {prodsCount === 1 ? 'item' : 'itens'}
-                            </span>
-                          </div>
-                        )}
-                      </div>
+                          )}
 
-                      <div className="flex items-center gap-1 shrink-0">
-                        {/* Botões de Ordem (Subir / Descer) */}
-                        <button
-                          type="button"
-                          disabled={idx === 0}
-                          onClick={() => handleMoveCustomSubcategory(selectedCatForSubMgmt, idx, 'up')}
-                          className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-text-primary disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-                          title="Subir posição"
-                        >
-                          <ArrowUp size={14} />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={idx === arr.length - 1}
-                          onClick={() => handleMoveCustomSubcategory(selectedCatForSubMgmt, idx, 'down')}
-                          className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-text-primary disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
-                          title="Descer posição"
-                        >
-                          <ArrowDown size={14} />
-                        </button>
-
-                        {/* Botão Renomear */}
-                        {!isEditing && (
+                          {/* Botão Excluir */}
                           <button
                             type="button"
-                            onClick={() => setEditingSubcat({ oldName: sub, newName: sub })}
-                            className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-brand-primary transition-colors cursor-pointer"
-                            title="Renomear subcategoria"
+                            onClick={() => setConfirmDeleteSubcat(sub)}
+                            className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-status-danger transition-colors cursor-pointer"
+                            title="Excluir subcategoria"
                           >
-                            <Pencil size={14} />
+                            <Trash2 size={14} />
                           </button>
-                        )}
-
-                        {/* Botão Excluir */}
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteSubcat(sub)}
-                          className="p-1.5 rounded hover:bg-surface-elevated text-text-muted hover:text-status-danger transition-colors cursor-pointer"
-                          title="Excluir subcategoria"
-                        >
-                          <Trash2 size={14} />
-                        </button>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
             </div>
           </div>
@@ -2963,7 +3115,7 @@ export default function CardapioAdminPage() {
           open={Boolean(confirmDeleteSubcat)}
           onClose={() => setConfirmDeleteSubcat(null)}
           title={`Excluir subcategoria "${confirmDeleteSubcat}"?`}
-          description="A subcategoria será removida da lista da sua operação. Os produtos vinculados manterão sua receita e poderão ser reatribuídos."
+          description="A subcategoria será removida da lista da sua operação. Os produtos vinculados manterão sua receita e poderão ser reatribuídos para a subcategoria padrão."
           confirmLabel="Excluir Subcategoria"
           tone="danger"
           onConfirm={() => {

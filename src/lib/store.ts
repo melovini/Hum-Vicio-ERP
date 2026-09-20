@@ -29,6 +29,7 @@ import {
   computeCashClosingVariances 
 } from './store/cash-operations';
 import { inferDefaultSubcategory } from './recipe-helpers';
+import { getFallbackSubcategoryForCategory } from './subcategory-store';
 import { calculateItemProduction } from './production-calculator';
 import { getActiveCentralConfig, publishCentralConfig } from './central-config';
 
@@ -2017,29 +2018,35 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     );
   };
 
-  const batchUpdateProductSubcategory = async (category: string, oldSub: string, newSub: string) => {
-    const trimmed = newSub.trim();
+  const batchUpdateProductSubcategory = async (category: string | undefined, oldSub: string, newSub?: string) => {
+    const trimmed = newSub?.trim();
+    const matchCategory = (prodCat: string) => !category || category === 'todas' || prodCat === category;
+
     // 1. Atualização funcional atômica no estado
     setProducts(prev => prev.map(p => {
-      if (p.category === category && (p.subcategory === oldSub || inferDefaultSubcategory(p) === oldSub)) {
-        return { ...p, subcategory: trimmed };
+      if (matchCategory(p.category) && (p.subcategory === oldSub || inferDefaultSubcategory(p) === oldSub)) {
+        const targetSub = trimmed || getFallbackSubcategoryForCategory(p.category);
+        return { ...p, subcategory: targetSub };
       }
       return p;
     }));
 
     // 2. Atualizar mapa no localStorage
-    const affected = globalStore.products.filter(p => p.category === category && (p.subcategory === oldSub || inferDefaultSubcategory(p) === oldSub));
+    const affected = globalStore.products.filter(p => matchCategory(p.category) && (p.subcategory === oldSub || inferDefaultSubcategory(p) === oldSub));
     if (affected.length > 0) {
       const subcatMap = getSavedProductSubcategoriesMap();
-      affected.forEach(p => { subcatMap[p.id] = trimmed; });
+      affected.forEach(p => { 
+        const targetSub = trimmed || getFallbackSubcategoryForCategory(p.category);
+        subcatMap[p.id] = targetSub; 
+      });
       try { localStorage.setItem('hum_vicio_product_subcategories_map', JSON.stringify(subcatMap)); } catch {}
     }
 
     // 3. Persistir no Supabase
     try {
-      await supabase.from('products').update({ subcategory: trimmed }).eq('category', category).eq('subcategory', oldSub);
       for (const p of affected) {
-        void supabase.from('products').update({ subcategory: trimmed }).eq('id', p.id);
+        const targetSub = trimmed || getFallbackSubcategoryForCategory(p.category);
+        void supabase.from('products').update({ subcategory: targetSub }).eq('id', p.id);
       }
     } catch (err) {
       console.warn('Erro ao atualizar subcategoria em lote no banco:', err);

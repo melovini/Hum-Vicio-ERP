@@ -17,6 +17,7 @@ const {
   renameSubcategory,
   deleteSubcategory,
   moveSubcategory,
+  purgeUnusedSubcategories,
 } = createLoader()('src/lib/subcategory-store.ts');
 
 const mockProducts = [
@@ -281,5 +282,37 @@ test('calculateRecipeMetrics calcula corretamente mesmo com preços em formato b
   assert.equal(mVirgula.totalCost, 10);
   assert.equal(mVirgula.cmvBalcao, 33.3);
   assert.equal(mVirgula.cmvIfood, 25.0);
+});
+
+test('deleteSubcategory com "todas" remove a subcategoria de qualquer categoria', () => {
+  addSubcategory('lanche', 'Subcat Fantasma Global');
+  addSubcategory('porcao', 'Subcat Fantasma Global');
+
+  const beforeTodas = getSubcategoriesForCategory('todas');
+  assert.ok(beforeTodas.includes('Subcat Fantasma Global'));
+
+  deleteSubcategory('todas', 'Subcat Fantasma Global');
+
+  const afterTodas = getSubcategoriesForCategory('todas');
+  assert.ok(!afterTodas.includes('Subcat Fantasma Global'));
+  assert.ok(!getSubcategoriesForCategory('lanche').includes('Subcat Fantasma Global'));
+  assert.ok(!getSubcategoriesForCategory('porcao').includes('Subcat Fantasma Global'));
+});
+
+test('purgeUnusedSubcategories remove subcategorias não utilizadas mantendo apenas as ativas', () => {
+  addSubcategory('lanche', 'Vazia 1');
+  addSubcategory('porcao', 'Vazia 2');
+  addSubcategory('lanche', 'Com Produto 1');
+
+  const prods = [
+    { category: 'lanche', subcategory: 'Com Produto 1' },
+    { category: 'lanche', subcategory: 'Smash Burgers' },
+  ];
+
+  const result = purgeUnusedSubcategories(prods);
+  assert.ok(result.countPurged >= 2);
+  assert.ok(!result.updatedMap.lanche.includes('Vazia 1'));
+  assert.ok(!result.updatedMap.porcao.includes('Vazia 2'));
+  assert.ok(result.updatedMap.lanche.includes('Com Produto 1'));
 });
 

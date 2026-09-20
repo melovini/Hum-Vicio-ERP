@@ -48,6 +48,23 @@ export function saveCustomSubcategories(data: CustomSubcategoriesMap): void {
 
 export function getSubcategoriesForCategory(category: string, products?: { category: string; subcategory?: string }[]): string[] {
   const all = getCustomSubcategories();
+
+  if (category === 'todas') {
+    const set = new Set<string>();
+    (['lanche', 'porcao', 'bebida', 'combo'] as const).forEach(cat => {
+      const list = all[cat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] || [];
+      list.forEach(s => set.add(s));
+    });
+    if (products) {
+      products.forEach(p => {
+        if (p.subcategory && p.subcategory.trim()) {
+          set.add(p.subcategory.trim());
+        }
+      });
+    }
+    return Array.from(set);
+  }
+
   const base = [...(all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [])];
   if (!products || products.length === 0) return base;
 
@@ -67,9 +84,10 @@ export function addSubcategory(category: string, name: string): CustomSubcategor
   const trimmed = name.trim();
   const all = getCustomSubcategories();
   if (!trimmed) return all;
-  const current = all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [];
+  const targetCat = category === 'todas' ? 'lanche' : category;
+  const current = all[targetCat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[targetCat] || [];
   if (current.includes(trimmed)) return all;
-  all[category] = [...current, trimmed];
+  all[targetCat] = [...current, trimmed];
   saveCustomSubcategories(all);
   return all;
 }
@@ -78,18 +96,63 @@ export function renameSubcategory(category: string, oldName: string, newName: st
   const trimmedNew = newName.trim();
   const all = getCustomSubcategories();
   if (!trimmedNew || oldName === trimmedNew) return all;
-  const current = all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [];
-  all[category] = current.map(item => item === oldName ? trimmedNew : item);
+
+  if (category === 'todas') {
+    (['lanche', 'porcao', 'bebida', 'combo'] as const).forEach(cat => {
+      const current = all[cat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] || [];
+      all[cat] = current.map(item => item === oldName ? trimmedNew : item);
+    });
+  } else {
+    const current = all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [];
+    all[category] = current.map(item => item === oldName ? trimmedNew : item);
+  }
+
   saveCustomSubcategories(all);
   return all;
 }
 
 export function deleteSubcategory(category: string, name: string): CustomSubcategoriesMap {
   const all = getCustomSubcategories();
-  const current = all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [];
-  all[category] = current.filter(item => item !== name);
+
+  if (category === 'todas') {
+    (['lanche', 'porcao', 'bebida', 'combo'] as const).forEach(cat => {
+      const current = all[cat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] || [];
+      all[cat] = current.filter(item => item !== name);
+    });
+  } else {
+    const current = all[category] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[category] || [];
+    all[category] = current.filter(item => item !== name);
+  }
+
   saveCustomSubcategories(all);
   return all;
+}
+
+export function getFallbackSubcategoryForCategory(cat: string): string {
+  const all = getCustomSubcategories();
+  const list = all[cat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] || [];
+  return list[0] || 'Geral';
+}
+
+export function purgeUnusedSubcategories(products: { category: string; subcategory?: string }[]): { countPurged: number; updatedMap: CustomSubcategoriesMap } {
+  const all = getCustomSubcategories();
+  const used = new Set<string>();
+  products.forEach(p => {
+    if (p.subcategory && p.subcategory.trim()) {
+      used.add(p.subcategory.trim());
+    }
+  });
+
+  let countPurged = 0;
+  (['lanche', 'porcao', 'bebida', 'combo'] as const).forEach(cat => {
+    const current = all[cat] || DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] || [];
+    const filtered = current.filter(item => used.has(item));
+    countPurged += Math.max(0, current.length - filtered.length);
+    all[cat] = filtered.length > 0 ? filtered : (DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat] ? [DEFAULT_SUBCATEGORIES_BY_CATEGORY[cat][0]] : []);
+  });
+
+  saveCustomSubcategories(all);
+  return { countPurged, updatedMap: all };
 }
 
 export function moveSubcategory(category: string, fromIndex: number, toIndexOrDirection: number | 'up' | 'down'): CustomSubcategoriesMap {
