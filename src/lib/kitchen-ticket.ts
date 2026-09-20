@@ -92,76 +92,6 @@ export interface BuildKitchenTicketOptions {
 }
 
 /**
- * Extrai a composição confirmada de carne bovina de um item (ex: "1 carne bovina de 180 g")
- */
-function resolvePattiesComposition(
-  item: SaleItem,
-  details: BurgerPrintDetails,
-  inventoryItems: InventoryItem[]
-): { compositionText?: string; pattyTypeLabel?: string; countPerBurger: number; hasUnconfirmed: boolean } {
-  const breakdown = details.production?.breakdown;
-  const totalPattiesPerBurger = breakdown?.totalPattiesPerBurger ?? 0;
-
-  if (totalPattiesPerBurger <= 0) {
-    return { countPerBurger: 0, hasUnconfirmed: false };
-  }
-
-  // Verificar se veio de receita confirmada ou snapshot
-  const isResolved = breakdown?.resolvedFromRecipe || Boolean(item.productionSnapshot);
-  const matchedProduct = details.matchedProduct;
-
-  let pattyWeight = 0;
-  let pattyUnit = 'g';
-  let pattyName = 'carne bovina';
-
-  if (matchedProduct && Array.isArray(matchedProduct.recipe)) {
-    for (const r of matchedProduct.recipe) {
-      const inv = inventoryItems.find(i => i.id === r.ingredientId);
-      const compType = resolveRecipeComponentType(r, inv);
-      if (compType === 'carne_bovina') {
-        const weightInfo = inferPortionWeightFromInventory(inv);
-        if (weightInfo) {
-          pattyWeight = weightInfo.weight;
-          pattyUnit = weightInfo.unit;
-        }
-        if (inv?.name) {
-          const normInv = normalizeProductionString(inv.name);
-          if (normInv.includes('costela')) pattyName = 'carne bovina (costela)';
-          else if (normInv.includes('smash')) pattyName = 'carne bovina (smash)';
-          else if (normInv.includes('linguica')) pattyName = 'carne de linguiça';
-        }
-        break;
-      }
-    }
-  }
-
-  // Se não encontrou insumo, mas temos o peso no nome do produto
-  if (pattyWeight === 0 && matchedProduct?.name) {
-    const match = matchedProduct.name.match(/(\d{2,3})\s*(g|gr)\b/i);
-    if (match) {
-      pattyWeight = parseInt(match[1], 10);
-    }
-  }
-
-  // Se não estiver resolvido de receita/snapshot confirmados
-  if (!isResolved && pattyWeight === 0) {
-    return { countPerBurger: totalPattiesPerBurger, hasUnconfirmed: true };
-  }
-
-  const weightStr = pattyWeight > 0 ? ` de ${pattyWeight} ${pattyUnit}` : '';
-  const pluralMeat = totalPattiesPerBurger > 1 ? 'carnes bovinas' : 'carne bovina';
-  const compositionText = `${totalPattiesPerBurger} ${pluralMeat}${weightStr}`;
-  const pattyTypeLabel = pattyWeight > 0 ? `Bovino ${pattyWeight} ${pattyUnit}` : 'Bovino';
-
-  return {
-    compositionText,
-    pattyTypeLabel,
-    countPerBurger: totalPattiesPerBurger,
-    hasUnconfirmed: false,
-  };
-}
-
-/**
  * Constrói a linha limpa de combo sem duplicações
  */
 function resolveCleanComboLine(details: BurgerPrintDetails): {
@@ -214,12 +144,15 @@ function processKitchenItem(
   item: SaleItem,
   products: Product[],
   inventoryItems: InventoryItem[],
-  showMontagem: boolean
+  showMontagem: boolean,
+  kitchenComponents: KitchenComponent[] = DEFAULT_KITCHEN_COMPONENTS
 ): { ticketItem: KitchenTicketItem; details: BurgerPrintDetails; hasUnconfirmed: boolean } {
   const details = getBurgerPrintDetails(item, products, inventoryItems);
   const qty = typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1;
 
-  const { compositionText, hasUnconfirmed: pattiesUnconfirmed } = resolvePattiesComposition(item, details, inventoryItems);
+  const lineSummary = calculateOrderProductionRequirements([{ ...item, quantity: 1 }], products, inventoryItems, kitchenComponents);
+  const compositionText = lineSummary.chapa.burgersBreakdown.map(row => row.label).join(' + ') || undefined;
+  const pattiesUnconfirmed = !lineSummary.isComplete;
   const comboInfo = resolveCleanComboLine(details);
 
   // Adicionais com quantidade numérica e indicação clara se é por lanche
@@ -336,7 +269,7 @@ export function buildKitchenTicket({
   const processedDetails: BurgerPrintDetails[] = [];
 
   for (const item of itemsToProcess) {
-    const { ticketItem, details, hasUnconfirmed } = processKitchenItem(item, products, inventoryItems, showMontagem);
+    const { ticketItem, details, hasUnconfirmed } = processKitchenItem(item, products, inventoryItems, showMontagem, kitchenComponents);
     processedItems.push(ticketItem);
     processedDetails.push(details);
     if (hasUnconfirmed) hasAnyUnconfirmed = true;
@@ -358,83 +291,6 @@ export function buildKitchenTicket({
   let totalFryerPreparos = structuredReqs.fritadeira.totalPreparos;
   let preparosLabel = structuredReqs.fritadeira.preparosLabel;
   let fryerItems = structuredReqs.fritadeira.items.map(f => ({ label: f.label, count: f.count }));
-
-  // Fallback para itens não estruturados se o cálculo estruturado não encontrou nenhum item mas o legado encontrou
-  if (totalChapaPatties === 0 && totalFryerPreparos === 0) {
-    let legacyChapaPatties = 0;
-    const legacyPattiesMap = new Map<string, number>();
-    let legacyEggs = 0;
-    const legacyFryerMap = new Map<string, number>();
-    let legacyFryerCount = 0;
-
-    for (let i = 0; i < itemsToProcess.length; i++) {
-      const item = itemsToProcess[i];
-      const details = processedDetails[i];
-      const prod = details.production;
-      const qty = typeof item.quantity === 'number' && item.quantity > 0 ? item.quantity : 1;
-
-      if (prod.chapaPatties > 0) {
-        legacyChapaPatties += prod.chapaPatties;
-        const { pattyTypeLabel } = resolvePattiesComposition(item, details, inventoryItems);
-        const label = pattyTypeLabel || 'Bovino';
-        legacyPattiesMap.set(label, (legacyPattiesMap.get(label) || 0) + prod.chapaPatties);
-      }
-      if (prod.eggsCount > 0) {
-        legacyEggs += prod.eggsCount;
-      }
-      if (prod.fryerBatatasCombo > 0) {
-        const comboLabel = details.comboDetails?.comboType === 'batata_cheddar_bacon'
-          ? 'Batata cheddar e bacon'
-          : 'Batata pequena';
-        legacyFryerMap.set(comboLabel, (legacyFryerMap.get(comboLabel) || 0) + prod.fryerBatatasCombo);
-        legacyFryerCount += prod.fryerBatatasCombo;
-      }
-      if (prod.fryerBatatasAvulsa > 0) {
-        const count = Math.round(prod.fryerBatatasAvulsa);
-        const avulsaLabel = details.matchedProduct?.name || prod.fryerBatataName || item.productName;
-        legacyFryerMap.set(avulsaLabel, (legacyFryerMap.get(avulsaLabel) || 0) + count);
-        legacyFryerCount += count;
-      }
-      if (prod.fryerOnionsCombo > 0) {
-        legacyFryerMap.set('Anéis de cebola', (legacyFryerMap.get('Anéis de cebola') || 0) + prod.fryerOnionsCombo);
-        legacyFryerCount += prod.fryerOnionsCombo;
-      }
-      if (prod.fryerOnionsAvulsa > 0) {
-        const count = Math.round(prod.fryerOnionsAvulsa);
-        const onionAvulsaLabel = details.matchedProduct?.name || prod.fryerBatataName || item.productName;
-        legacyFryerMap.set(onionAvulsaLabel, (legacyFryerMap.get(onionAvulsaLabel) || 0) + count);
-        legacyFryerCount += count;
-      }
-      if (prod.fryerChicken > 0) {
-        legacyFryerMap.set('Frango empanado', (legacyFryerMap.get('Frango empanado') || 0) + prod.fryerChicken);
-        legacyFryerCount += prod.fryerChicken;
-      }
-      if (prod.fryerCheese > 0) {
-        legacyFryerMap.set('Queijo empanado', (legacyFryerMap.get('Queijo empanado') || 0) + prod.fryerCheese);
-        legacyFryerCount += prod.fryerCheese;
-      }
-    }
-
-    if (legacyChapaPatties > 0) {
-      totalChapaPatties = legacyChapaPatties;
-      pattiesLabel = legacyChapaPatties === 1 ? '1 HAMBÚRGUER' : `${legacyChapaPatties} HAMBÚRGUERES`;
-      pattiesBreakdown = [];
-      legacyPattiesMap.forEach((count, label) => {
-        pattiesBreakdown.push({ label: `${count}x ${label}`, count });
-      });
-    }
-    if (legacyEggs > 0) {
-      otherChapaItems = [{ label: `${legacyEggs}x ${legacyEggs > 1 ? 'Ovos' : 'Ovo'}`, count: legacyEggs }];
-    }
-    if (legacyFryerCount > 0) {
-      totalFryerPreparos = legacyFryerCount;
-      preparosLabel = legacyFryerCount === 1 ? '1 PREPARO' : `${legacyFryerCount} PREPAROS`;
-      fryerItems = [];
-      legacyFryerMap.forEach((count, label) => {
-        fryerItems.push({ label: `${count}x ${label}`, count });
-      });
-    }
-  }
 
   let chapaStatus: 'ok' | 'sem_carnes' | 'a_conferir' = structuredReqs.chapa.status;
   if (hasAnyUnconfirmed || structuredReqs.pendingReview.length > 0) {
@@ -471,7 +327,7 @@ export function buildKitchenTicket({
   let diffData: KitchenTicketData['diff'] = undefined;
   if (activeDiff) {
     const diffAdded = (activeDiff.added || []).map(item => {
-      const { ticketItem } = processKitchenItem(item, products, inventoryItems, showMontagem);
+      const { ticketItem } = processKitchenItem(item, products, inventoryItems, showMontagem, kitchenComponents);
       return ticketItem;
     });
 

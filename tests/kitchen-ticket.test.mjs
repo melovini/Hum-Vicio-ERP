@@ -3,14 +3,108 @@ import assert from 'node:assert/strict';
 import { createLoader } from './load-typescript.mjs';
 
 const { buildKitchenTicket, formatKitchenTicketEscPos } = createLoader()('src/lib/kitchen-ticket.ts');
+const { buildSaleItemKitchenSnapshot, calculateOrderProductionRequirements, DEFAULT_KITCHEN_COMPONENTS } = createLoader()('src/lib/kitchen-calculator.ts');
+
+test('Checkout recompõe no servidor mesmo quando o cliente envia uma composição falsa', async () => {
+  const productId = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+  let saved;
+  const tables = {
+    products: [{ id: productId, name: 'Argentina', category: 'lanche', price_balcao: 30, status: 'ativo' }],
+    recipes: [{ product_id: productId, ingredient_id: 'costela', quantity: 1, kitchen_component_id: 'cmp-costela-180' }],
+    inventory: [{ id: 'costela', name: 'Costela 180g', unit: 'un' }],
+    kitchen_components: DEFAULT_KITCHEN_COMPONENTS.map(c => ({ id: c.id, name: c.name, component_type: c.componentType, station: c.station, production_unit: c.productionUnit, portion_weight: c.portionWeight, portion_unit: c.portionUnit })),
+  };
+  const db = {
+    from(table) { const result = Promise.resolve({ data: tables[table] || [] }); result.in = () => result; return { select: () => result }; },
+    async rpc(name, args) { saved = args.p_sale; return { data: { success: true } }; },
+  };
+  class AccessError extends Error { constructor(status, message) { super(message); this.status = status; } }
+  const load = createLoader({
+    '@/lib/supabase-server': { createServerDatabase: () => db },
+    '@/lib/security/server-session': {
+      requireSession: async () => ({ role: 'caixa', userName: 'Teste', collaboratorId: 'op' }), requireSameOrigin() {},
+      readJsonBody: request => request.json(), AccessError,
+      apiError: error => Response.json({ message: error.message }, { status: error.status || 500 }),
+    },
+  });
+  const { POST } = load('src/app/api/sales/checkout/route.ts');
+  const response = await POST(new Request('https://erp.test/api/sales/checkout', { method: 'POST', body: JSON.stringify({
+    idempotencyKey: 'snapshot-regression', sale: { id: productId, channel: 'balcao', total: 30, items: [{ productId, productName: 'Argentina', quantity: 1, unitPrice: 30,
+      productionSnapshot: { structuredProduction: { version: 3, components: [] } } }] },
+  }) }));
+  assert.equal(response.status, 200);
+  const snapshot = saved.items[0].productionSnapshot.structuredProduction;
+  assert.equal(snapshot.version, 3);
+  assert.equal(snapshot.components[0].componentId, 'cmp-costela-180');
+  assert.equal(snapshot.components[0].quantity, 1);
+});
+
+test('Argentina: costela separada, queijo não vira carne, adicionais e combo sobrevivem ao snapshot', () => {
+  const inventory = [
+    { id: 'costela', name: 'Hambúrguer bovino recheado de costela 180g', category: 'Carnes', unit: 'un', kitchenComponentId: 'cmp-costela-180' },
+    { id: 'bovino', name: 'Bovino', unit: 'un', kitchenComponentId: 'cmp-bovino-180' },
+    { id: 'queijo', name: 'Queijo Mozarela', category: 'Carnes', unit: 'kg', station: 'chapa' },
+    { id: 'frango', name: 'Frango empanado', unit: 'un', kitchenComponentId: 'cmp-frango-emp' },
+    { id: 'batata', name: 'Batata', unit: 'kg' },
+  ];
+  const products = [
+    { id: 'arg', name: 'Argentina', category: 'lanche', recipe: [{ ingredientId: 'costela', quantity: 1 }] },
+    { id: 'arg2', name: 'Argentina duplo', category: 'lanche', recipe: [{ ingredientId: 'costela', quantity: 2 }] },
+    { id: 'normal', name: 'Normal', category: 'lanche', recipe: [{ ingredientId: 'bovino', quantity: 1 }] },
+    { id: 'extra-cheese', name: 'Queijo Mozarela', category: 'porcao', recipe: [{ ingredientId: 'queijo', quantity: 0.06 }] },
+    { id: 'extra-chicken', name: 'Hamb. Frango Empanado', category: 'porcao', recipe: [{ ingredientId: 'frango', quantity: 1 }] },
+    { id: 'combo', name: 'Acompanhamento da casa', category: 'combo', recipe: [{ ingredientId: 'batata', quantity: 0.15, kitchenComponentId: 'cmp-batata-peq' }] },
+  ];
+  const items = [
+    { productId: 'arg2', productName: 'Argentina duplo', quantity: 1, comboId: 'combo', additionals: [{ id: 'extra-cheese', name: 'Queijo Mozarela', quantity: 1 }, { id: 'extra-chicken', name: 'Hamb. Frango Empanado', quantity: 1 }] },
+    { productId: 'arg', productName: 'Argentina', quantity: 1, comboId: 'combo' },
+    { productId: 'normal', productName: 'Normal', quantity: 1 },
+  ].map(item => ({ ...item, productionSnapshot: { structuredProduction: buildSaleItemKitchenSnapshot(item, products, inventory) } }));
+  // Reload without a catalog must preserve the complete confirmed composition.
+  const ticket = buildKitchenTicket({ sale: makeBaseSale(items), products: [], inventoryItems: [] });
+  assert.equal(ticket.productionSummary.chapa.totalPatties, 4);
+  assert.deepEqual(ticket.productionSummary.chapa.pattiesBreakdown.map(r => r.label), ['3x Costela 180 g', '1x Bovino 180 g']);
+  assert.equal(ticket.productionSummary.fritadeira.totalPreparos, 3);
+  assert.match(ticket.items[0].pattiesComposition, /2x Costela/);
+  assert.equal(ticket.productionSummary.isComplete, true);
+  assert.doesNotMatch(formatKitchenTicketEscPos(ticket), /3\.34/);
+});
+
+test('Composição fracionária é sinalizada, nunca arredondada como hambúrguer', () => {
+  const result = calculateOrderProductionRequirements([{ productId: 'p', productName: 'Teste', quantity: 1 }],
+    [{ id: 'p', recipe: [{ ingredientId: 'i', quantity: 0.06, kitchenComponentId: 'cmp-bovino-180' }] }],
+    [{ id: 'i', name: 'Ingrediente mal vinculado', unit: 'kg' }]);
+  assert.equal(result.chapa.totalBurgers, 0);
+  assert.equal(result.isComplete, false);
+  assert.match(result.pendingReview.join(' '), /porção/);
+});
+
+test('Snapshot preserva tipo, nome e porção apesar de alterações no catálogo', () => {
+  const snapshot = { version: 3, components: [{ componentId: 'cmp-costela-180', name: 'Costela original 180 g', station: 'grill', componentType: 'burger', productionUnit: 'disco', portionWeight: 180, portionUnit: 'g', quantity: 2, showInSummary: true }] };
+  const result = calculateOrderProductionRequirements([{ quantity: 2, productionSnapshot: { structuredProduction: snapshot } }], [], [],
+    DEFAULT_KITCHEN_COMPONENTS.map(c => ({ ...c, name: 'Renomeado', portionWeight: 90 })));
+  assert.equal(result.chapa.totalBurgers, 4);
+  assert.equal(result.chapa.burgersBreakdown[0].label, '4x Costela original 180 g');
+});
+
+test('Snapshot antigo ou corrompido exige conferência sem inventar tipo de carne', () => {
+  for (const productionSnapshot of [
+    { chapaPatties: 3.34 },
+    { structuredProduction: { version: 3, components: [{ componentId: 'bad', name: 'Bovino', station: 'grill', componentType: 'burger', quantity: 3.34 }] } },
+  ]) {
+    const result = calculateOrderProductionRequirements([{ productName: 'Argentina', quantity: 1, productionSnapshot }]);
+    assert.equal(result.chapa.status, 'a_conferir');
+    assert.equal(result.chapa.totalBurgers, 0);
+  }
+});
 
 // Massa de Insumos mockados
 const mockInventory = [
   { id: 'inv-pao', name: 'Pão de Brioche', category: 'Padaria', unit: 'un', station: 'nenhuma' },
-  { id: 'inv-patty-180', name: 'Hambúrguer Bovino 180g', category: 'Carnes', unit: 'un', station: 'chapa', portionWeight: 180, portionUnit: 'g' },
-  { id: 'inv-patty-90', name: 'Hambúrguer Bovino Smash 90g', category: 'Carnes', unit: 'un', station: 'chapa', portionWeight: 90, portionUnit: 'g' },
-  { id: 'inv-frango', name: 'Filé de Frango Empanado', category: 'Carnes', unit: 'un', station: 'fritadeira_frango' },
-  { id: 'inv-queijo-emp', name: 'Queijo Minas Empanado', category: 'Laticínios', unit: 'un', station: 'fritadeira_queijo' },
+  { id: 'inv-patty-180', name: 'Hambúrguer Bovino 180g', category: 'Carnes', unit: 'un', station: 'chapa', portionWeight: 180, portionUnit: 'g', kitchenComponentId: 'cmp-bovino-180' },
+  { id: 'inv-patty-90', name: 'Hambúrguer Bovino Smash 90g', category: 'Carnes', unit: 'un', station: 'chapa', portionWeight: 90, portionUnit: 'g', kitchenComponentId: 'cmp-bovino-90' },
+  { id: 'inv-frango', kitchenComponentId: 'cmp-frango-emp', name: 'Filé de Frango Empanado', category: 'Carnes', unit: 'un', station: 'fritadeira_frango' },
+  { id: 'inv-queijo-emp', kitchenComponentId: 'cmp-queijo-emp', name: 'Queijo Minas Empanado', category: 'Laticínios', unit: 'un', station: 'fritadeira_queijo' },
   { id: 'inv-ovo', name: 'Ovo', category: 'Laticínios', unit: 'un', station: 'chapa' },
   { id: 'inv-bacon', name: 'Bacon Fatiado', category: 'Carnes', unit: 'kg', station: 'chapa' },
   { id: 'inv-batata', name: 'Batata Palito Congelada', category: 'Porções', unit: 'kg', station: 'fritadeira_batata' },
@@ -83,7 +177,7 @@ const mockProducts = [
     category: 'porcao',
     priceBalcao: 18,
     priceIfood: 22,
-    recipe: [{ ingredientId: 'inv-batata', quantity: 0.2 }],
+    recipe: [{ ingredientId: 'inv-batata', quantity: 0.15, kitchenComponentId: 'cmp-batata-peq' }],
   },
   {
     id: 'prod-batata-grande',
@@ -91,7 +185,7 @@ const mockProducts = [
     category: 'porcao',
     priceBalcao: 25,
     priceIfood: 30,
-    recipe: [{ ingredientId: 'inv-batata', quantity: 0.35 }],
+    recipe: [{ ingredientId: 'inv-batata', quantity: 0.3, kitchenComponentId: 'cmp-batata-gde' }],
   },
 ];
 
@@ -151,7 +245,7 @@ test('2. 2 simples -> Chapa: 2 carnes, sem multiplicação duplicada', () => {
 
   assert.equal(ticket.productionSummary.chapa.totalPatties, 2);
   assert.equal(ticket.items[0].quantity, 2);
-  assert.equal(ticket.items[0].pattiesComposition, '1 carne bovina de 180 g');
+  assert.equal(ticket.items[0].pattiesComposition, '1x Bovino 180 g');
 
   const text = formatKitchenTicketEscPos(ticket);
   assert.match(text, /CHAPA — 2 HAMBÚRGUERES/);
@@ -178,8 +272,8 @@ test('3. 1 duplo + 1 simples -> Chapa: 3 carnes', () => {
   const ticket = buildKitchenTicket({ sale, products: mockProducts, inventoryItems: mockInventory });
 
   assert.equal(ticket.productionSummary.chapa.totalPatties, 3);
-  assert.equal(ticket.items[0].pattiesComposition, '2 carnes bovinas de 180 g');
-  assert.equal(ticket.items[1].pattiesComposition, '1 carne bovina de 180 g');
+  assert.equal(ticket.items[0].pattiesComposition, '2x Bovino 180 g');
+  assert.equal(ticket.items[1].pattiesComposition, '1x Bovino 180 g');
 
   const text = formatKitchenTicketEscPos(ticket);
   assert.match(text, /CHAPA — 3 HAMBÚRGUERES/);
@@ -193,7 +287,7 @@ test('4. 1 simples + 2 carnes extras -> Chapa: 3 carnes; adicional identifica 2 
       productName: 'Burger Simples',
       quantity: 1,
       unitPrice: 30,
-      additionals: [{ name: 'Hambúrguer 180g', quantity: 2, price: 16 }],
+      additionals: [{ id: 'inv-patty-180', name: 'Hambúrguer 180g', quantity: 2, price: 16 }],
     },
   ]);
 
@@ -312,6 +406,7 @@ test('7. Mesmo produto com pontos diferentes -> Blocos separados e resumo somado
 
 test('8. Receita alterada após a venda -> Reimpressão preserva a composição confirmada do snapshot', () => {
   const historicalSnapshot = {
+    structuredProduction: { version: 3, components: [{ componentId: 'cmp-bovino-180', name: 'Bovino 180 g', componentType: 'burger', station: 'grill', productionUnit: 'disco', portionWeight: 180, portionUnit: 'g', quantity: 2, showInSummary: true }] },
     chapaPatties: 2,
     isDouble: true,
     eggsCount: 0,

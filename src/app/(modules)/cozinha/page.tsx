@@ -2,7 +2,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useInventory, Sale, SaleItem, DelayReason, InventoryItem, ChecklistTask, DEFAULT_INGREDIENT_STATIONS, KitchenStation } from '@/lib/store';
 import { calculateItemProduction, ItemProductionDetails, getBurgerPrintDetails } from '@/lib/production-calculator';
-import { calculateOrderProductionRequirements, buildKitchenProductionSnapshot } from '@/lib/kitchen-calculator';
+import { calculateOrderProductionRequirements, buildSaleItemKitchenSnapshot } from '@/lib/kitchen-calculator';
 import { 
   ChefHat, AlertTriangle, CheckCircle, Trash2, 
   Flame, Clock, Calendar, AlertOctagon,
@@ -670,7 +670,7 @@ export default function CozinhaKDSPage() {
     } else if (kitchenComponents && kitchenComponents.length > 0) {
       const prod = products.find(p => p.id === item.productId);
       if (prod) {
-        details.structuredProduction = buildKitchenProductionSnapshot(prod, items, kitchenComponents);
+        details.structuredProduction = buildSaleItemKitchenSnapshot(item, products, items, kitchenComponents);
       }
     }
     return details;

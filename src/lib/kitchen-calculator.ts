@@ -1,3 +1,4 @@
+import { inferComponentType, inferPortionWeightFromInventory } from './production-calculator';
 import { 
   KitchenComponent, 
   KitchenComponentType, 
@@ -8,6 +9,8 @@ import {
   StructuredComponentRequirement,
   StructuredProductionSnapshot
 } from './store/types';
+
+function componentKey(c: KitchenComponent): string { return JSON.stringify([c.id, c.station, c.componentType, c.productionUnit, c.portionWeight, c.portionUnit]); }
 
 export const DEFAULT_KITCHEN_COMPONENTS: KitchenComponent[] = [
   {
@@ -148,8 +151,8 @@ export function convertPortionRatio(
   portionWeight?: number,
   portionUnit?: string
 ): { units: number; needsPortionDefinition: boolean } {
-  if (typeof consumptionQty !== 'number' || isNaN(consumptionQty) || consumptionQty <= 0) {
-    return { units: 0, needsPortionDefinition: false };
+  if (typeof consumptionQty !== 'number' || !Number.isFinite(consumptionQty) || consumptionQty <= 0) {
+    return { units: 0, needsPortionDefinition: true };
   }
 
   const cUnitNorm = normalizeUnit(consumptionUnit);
@@ -164,7 +167,7 @@ export function convertPortionRatio(
   if (cUnitNorm === 'kg' || cUnitNorm === 'g') {
     const consumptionInG = cUnitNorm === 'kg' ? consumptionQty * 1000 : consumptionQty;
 
-    if (!portionWeight || portionWeight <= 0) {
+    if (!portionWeight || !Number.isFinite(portionWeight) || portionWeight <= 0 || !['kg', 'g'].includes(pUnitNorm)) {
       return { units: 0, needsPortionDefinition: true };
     }
 
@@ -174,12 +177,11 @@ export function convertPortionRatio(
     }
 
     const ratio = consumptionInG / portionInG;
-    const rounded = Math.round(ratio * 100) / 100;
-    return { units: rounded, needsPortionDefinition: false };
+    return { units: ratio, needsPortionDefinition: false };
   }
 
   // Outras unidades sem conversão de peso
-  return { units: consumptionQty, needsPortionDefinition: false };
+  return { units: 0, needsPortionDefinition: true };
 }
 
 /**
@@ -194,12 +196,14 @@ export function resolveKitchenComponentForRecipeLine(
   if (recipeItem.kitchenComponentId) {
     const comp = allComponents.find(c => c.id === recipeItem.kitchenComponentId && c.isActive !== false);
     if (comp) return { component: comp, needsConfiguration: false, isNonKitchen: false };
+    return { needsConfiguration: true, isNonKitchen: false };
   }
 
   // 2. Vínculo padrão herdado do insumo no estoque
   if (inventoryItem?.kitchenComponentId) {
     const comp = allComponents.find(c => c.id === inventoryItem.kitchenComponentId && c.isActive !== false);
     if (comp) return { component: comp, needsConfiguration: false, isNonKitchen: false };
+    return { needsConfiguration: true, isNonKitchen: false };
   }
 
   // 3. Se explicitamente marcado como 'none' (não vai à cozinha, ex: embalagens, gás)
@@ -208,65 +212,35 @@ export function resolveKitchenComponentForRecipeLine(
     return { component: undefined, needsConfiguration: false, isNonKitchen: true };
   }
 
-  // 4. Mapeamento inequívoco de compatibilidade para cadastros legados
+  // Legacy recipes retain ingredient identity instead of selecting the first burger
+  // with the same weight. Explicit links always take precedence.
   if (inventoryItem) {
-    const nameNorm = (inventoryItem.name || '').toLowerCase();
-    const catNorm = (inventoryItem.category || '').toLowerCase();
-
-    // Se é embalagem ou utilidade
-    if (catNorm.includes('embalag') || catNorm.includes('limpeza') || catNorm.includes('operacional') || nameNorm.includes('embalagem') || nameNorm.includes('sacola')) {
-      return { component: undefined, needsConfiguration: false, isNonKitchen: true };
+    const type = inferComponentType(inventoryItem.name, '');
+    const kind = recipeItem.productionKind || inventoryItem.productionKind;
+    const types: Record<string, [KitchenComponentType, RecipeProductionStation]> = {
+      carne_bovina: ['burger', 'grill'], ovo: ['egg', 'grill'],
+      frango_empanado: ['protein', 'fryer'], queijo_empanado: ['side', 'fryer'],
+      batata: ['side', 'fryer'], onion: ['side', 'fryer'],
+      beef_patty: ['burger', 'grill'], egg: ['egg', 'grill'],
+      breaded_chicken: ['protein', 'fryer'], breaded_cheese: ['side', 'fryer'],
+      fries: ['side', 'fryer'], onion_rings: ['side', 'fryer'],
+    };
+    const resolved = types[kind || type];
+    if (!resolved && ['pao', 'laticinio', 'molho', 'hortifruti', 'nao_alimentar', 'bacon'].includes(type)) {
+      return { needsConfiguration: false, isNonKitchen: true };
     }
-
-    // Inequívoco: Ovo
-    if (nameNorm === 'ovo' || nameNorm === 'ovos' || recipeItem.productionKind === 'egg' || inventoryItem.productionKind === 'egg') {
-      const eggComp = allComponents.find(c => c.componentType === 'egg' || c.id === 'cmp-ovo');
-      if (eggComp) return { component: eggComp, needsConfiguration: false, isNonKitchen: false };
-    }
-
-    // Inequívoco: Frango empanado
-    if (nameNorm.includes('frango empanado') || nameNorm.includes('file de frango') || recipeItem.productionKind === 'breaded_chicken' || inventoryItem.productionKind === 'breaded_chicken') {
-      const chickenComp = allComponents.find(c => c.id === 'cmp-frango-emp' || c.name.toLowerCase().includes('frango'));
-      if (chickenComp) return { component: chickenComp, needsConfiguration: false, isNonKitchen: false };
-    }
-
-    // Inequívoco: Queijo empanado
-    if (nameNorm.includes('queijo empanado') || (nameNorm.includes('queijo') && nameNorm.includes('minas') && (inventoryItem.station?.includes('fritadeira') || recipeItem.productionStation === 'fryer')) || recipeItem.productionKind === 'breaded_cheese' || inventoryItem.productionKind === 'breaded_cheese') {
-      const cheeseComp = allComponents.find(c => c.id === 'cmp-queijo-emp' || c.name.toLowerCase().includes('queijo empanado'));
-      if (cheeseComp) return { component: cheeseComp, needsConfiguration: false, isNonKitchen: false };
-    }
-
-    // Inequívoco: Anéis de cebola
-    if (nameNorm.includes('onion') || nameNorm.includes('anel') || nameNorm.includes('aneis') || nameNorm.includes('cebola congelad') || recipeItem.productionKind === 'onion_rings' || inventoryItem.productionKind === 'onion_rings') {
-      const onionComp = allComponents.find(c => c.id === 'cmp-aneis-cebola' || c.name.toLowerCase().includes('cebola') || c.name.toLowerCase().includes('onion'));
-      if (onionComp) return { component: onionComp, needsConfiguration: false, isNonKitchen: false };
-    }
-
-    // Inequívoco: Batata
-    if (nameNorm.includes('batata palito') || nameNorm.includes('batata congelada') || nameNorm.includes('batata rústica') || nameNorm.includes('batata rustica') || recipeItem.productionKind === 'fries') {
-      const pw = inventoryItem.portionWeight || (recipeItem.quantity > 0.25 ? 300 : 150);
-      if (pw) {
-        const matchingFries = allComponents.find(c => c.station === 'fryer' && c.portionWeight === pw);
-        if (matchingFries) return { component: matchingFries, needsConfiguration: false, isNonKitchen: false };
-      }
-      const defaultFries = allComponents.find(c => c.station === 'fryer' && c.name.toLowerCase().includes('batata'));
-      if (defaultFries) return { component: defaultFries, needsConfiguration: false, isNonKitchen: false };
-    }
-
-    // Inequívoco: Hambúrguer com gramatura explícita ou padrão
-    if (recipeItem.productionKind === 'beef_patty' || inventoryItem.productionKind === 'beef_patty' || catNorm.includes('carnes') || nameNorm.includes('hamburguer') || nameNorm.includes('hamb')) {
-      const pw = inventoryItem.portionWeight;
-      if (pw) {
-        const matchingPatty = allComponents.find(c => c.componentType === 'burger' && c.station === 'grill' && c.portionWeight === pw);
-        if (matchingPatty) return { component: matchingPatty, needsConfiguration: false, isNonKitchen: false };
-      }
-      const defaultPatty = allComponents.find(c => c.componentType === 'burger' && c.station === 'grill');
-      if (defaultPatty) return { component: defaultPatty, needsConfiguration: false, isNonKitchen: false };
+    if (resolved) {
+      const portion = inferPortionWeightFromInventory(inventoryItem);
+      return { needsConfiguration: false, isNonKitchen: false, component: {
+        id: `ingredient:${inventoryItem.id}`, name: inventoryItem.name,
+        componentType: resolved[0], station: resolved[1],
+        productionUnit: resolved[0] === 'burger' ? 'disco' : 'unidade',
+        portionWeight: portion?.weight, portionUnit: portion?.unit,
+        showInSummary: true, isActive: true,
+      } };
     }
   }
-
-  // Falta configuração explícita e não é item de não-preparo
-  return { component: undefined, needsConfiguration: true, isNonKitchen: false };
+  return { needsConfiguration: true, isNonKitchen: false };
 }
 
 export interface ProductKitchenItemDetail {
@@ -340,9 +314,11 @@ export function calculateProductKitchenComponents(
       continue;
     }
 
-    let finalUnits = units;
-    if (product.category === 'porcao' && (component.productionUnit === 'porcao' || component.productionUnit === 'unidade')) {
-      finalUnits = 1;
+    const finalUnits = Math.round(units);
+    if (!Number.isFinite(units) || units <= 0 || Math.abs(units - finalUnits) > 0.000001) {
+      pendingReview.push({ ingredientId: r.ingredientId, ingredientName: inv?.name || component.name,
+        reason: `Revise a porção de ${inv?.name || component.name}: o consumo não corresponde a unidades inteiras de preparo.` });
+      continue;
     }
 
     if (finalUnits > 0) {
@@ -432,7 +408,11 @@ export function calculateOrderProductionRequirements(
     if (item.productionSnapshot?.structuredProduction?.components) {
       const snapComponents = item.productionSnapshot.structuredProduction.components;
       for (const sc of snapComponents) {
-        const comp = compMap.get(sc.componentId) || {
+        if (!Number.isFinite(sc.quantity) || sc.quantity <= 0 || !Number.isInteger(sc.quantity)) {
+          pendingReviewSet.add(`Composição salva de ${item.productName} contém quantidade inválida. Revise o pedido.`);
+          continue;
+        }
+        const comp = {
           id: sc.componentId,
           name: sc.name,
           componentType: sc.componentType,
@@ -448,145 +428,42 @@ export function calculateOrderProductionRequirements(
 
         if (comp.station === 'grill') {
           if (comp.componentType === 'burger') {
-            const current = chapaBurgersMap.get(comp.id) || { comp, count: 0 };
-            chapaBurgersMap.set(comp.id, { comp, count: current.count + totalComponentCount });
+            const current = chapaBurgersMap.get(componentKey(comp)) || { comp, count: 0 };
+            chapaBurgersMap.set(componentKey(comp), { comp, count: current.count + totalComponentCount });
           } else {
-            const current = chapaOthersMap.get(comp.id) || { comp, count: 0 };
-            chapaOthersMap.set(comp.id, { comp, count: current.count + totalComponentCount });
+            const current = chapaOthersMap.get(componentKey(comp)) || { comp, count: 0 };
+            chapaOthersMap.set(componentKey(comp), { comp, count: current.count + totalComponentCount });
           }
         } else if (comp.station === 'fryer') {
-          const current = fryerMap.get(comp.id) || { comp, count: 0 };
-          fryerMap.set(comp.id, { comp, count: current.count + totalComponentCount });
+          const current = fryerMap.get(componentKey(comp)) || { comp, count: 0 };
+          fryerMap.set(componentKey(comp), { comp, count: current.count + totalComponentCount });
         } else if (comp.station !== 'none') {
           if (!otherStationsMap.has(comp.station)) {
             otherStationsMap.set(comp.station, new Map());
           }
           const stMap = otherStationsMap.get(comp.station)!;
-          const current = stMap.get(comp.id) || { comp, count: 0 };
-          stMap.set(comp.id, { comp, count: current.count + totalComponentCount });
+          const current = stMap.get(componentKey(comp)) || { comp, count: 0 };
+          stMap.set(componentKey(comp), { comp, count: current.count + totalComponentCount });
         }
       }
 
       if (Array.isArray(item.productionSnapshot.structuredProduction.pendingReview)) {
         item.productionSnapshot.structuredProduction.pendingReview.forEach(p => pendingReviewSet.add(p));
       }
-      continue;
+      if (item.productionSnapshot.structuredProduction.version >= 3) continue;
     }
 
-    // Se o item possui snapshot legado (versão 1) com chapaPatties etc.
-    if (item.productionSnapshot && item.productionSnapshot.chapaPatties !== undefined && !item.productionSnapshot.structuredProduction?.components) {
-      const snap = item.productionSnapshot;
-      if (snap.chapaPatties > 0) {
-        const burgerComp = kitchenComponents.find(c => c.componentType === 'burger' && c.station === 'grill') || {
-          id: 'cmp-bovino-180',
-          name: 'Bovino 180 g',
-          componentType: 'burger' as const,
-          station: 'grill' as const,
-          productionUnit: 'disco',
-          portionWeight: 180,
-          portionUnit: 'g',
-          showInSummary: true,
-          isActive: true
-        };
-        const current = chapaBurgersMap.get(burgerComp.id) || { comp: burgerComp, count: 0 };
-        chapaBurgersMap.set(burgerComp.id, { comp: burgerComp, count: current.count + snap.chapaPatties });
-      }
-      if (snap.eggsCount && snap.eggsCount > 0) {
-        const eggComp = kitchenComponents.find(c => c.componentType === 'egg' || c.id === 'cmp-ovo') || {
-          id: 'cmp-ovo',
-          name: 'Ovo',
-          componentType: 'egg' as const,
-          station: 'grill' as const,
-          productionUnit: 'unidade',
-          portionWeight: 1,
-          portionUnit: 'un',
-          showInSummary: true,
-          isActive: true
-        };
-        const current = chapaOthersMap.get(eggComp.id) || { comp: eggComp, count: 0 };
-        chapaOthersMap.set(eggComp.id, { comp: eggComp, count: current.count + snap.eggsCount });
-      }
-      if (snap.fryerChicken && snap.fryerChicken > 0) {
-        const chickenComp = kitchenComponents.find(c => c.id === 'cmp-frango-emp') || {
-          id: 'cmp-frango-emp',
-          name: 'Frango empanado',
-          componentType: 'protein' as const,
-          station: 'fryer' as const,
-          productionUnit: 'unidade',
-          portionWeight: 1,
-          portionUnit: 'un',
-          showInSummary: true,
-          isActive: true
-        };
-        const current = fryerMap.get(chickenComp.id) || { comp: chickenComp, count: 0 };
-        fryerMap.set(chickenComp.id, { comp: chickenComp, count: current.count + snap.fryerChicken });
-      }
-      if (snap.fryerCheese && snap.fryerCheese > 0) {
-        const cheeseComp = kitchenComponents.find(c => c.id === 'cmp-queijo-emp') || {
-          id: 'cmp-queijo-emp',
-          name: 'Queijo empanado',
-          componentType: 'side' as const,
-          station: 'fryer' as const,
-          productionUnit: 'unidade',
-          portionWeight: 1,
-          portionUnit: 'un',
-          showInSummary: true,
-          isActive: true
-        };
-        const current = fryerMap.get(cheeseComp.id) || { comp: cheeseComp, count: 0 };
-        fryerMap.set(cheeseComp.id, { comp: cheeseComp, count: current.count + snap.fryerCheese });
-      }
-      const totalBatatas = (snap.fryerBatatasCombo || 0) + (snap.fryerBatatasAvulsa || 0);
-      if (totalBatatas > 0) {
-        const friesComp = kitchenComponents.find(c => c.id === 'cmp-batata-peq' || c.name.toLowerCase().includes('batata')) || {
-          id: 'cmp-batata-peq',
-          name: 'Batata pequena',
-          componentType: 'side' as const,
-          station: 'fryer' as const,
-          productionUnit: 'porcao',
-          portionWeight: 150,
-          portionUnit: 'g',
-          showInSummary: true,
-          isActive: true
-        };
-        const current = fryerMap.get(friesComp.id) || { comp: friesComp, count: 0 };
-        fryerMap.set(friesComp.id, { comp: friesComp, count: current.count + totalBatatas });
-      }
-      const totalOnions = (snap.fryerOnionsCombo || 0) + (snap.fryerOnionsAvulsa || 0);
-      if (totalOnions > 0) {
-        const onionComp = kitchenComponents.find(c => c.id === 'cmp-aneis-cebola' || c.name.toLowerCase().includes('cebola')) || {
-          id: 'cmp-aneis-cebola',
-          name: 'Anéis de cebola',
-          componentType: 'side' as const,
-          station: 'fryer' as const,
-          productionUnit: 'porcao',
-          portionWeight: 150,
-          portionUnit: 'g',
-          showInSummary: true,
-          isActive: true
-        };
-        const current = fryerMap.get(onionComp.id) || { comp: onionComp, count: 0 };
-        fryerMap.set(onionComp.id, { comp: onionComp, count: current.count + totalOnions });
-      }
+    if (item.productionSnapshot && !item.productionSnapshot.structuredProduction) {
+      pendingReviewSet.add(`Pedido ${item.productName} possui composição antiga sem identificação dos componentes. Confira a ficha antes de reemitir.`);
       continue;
     }
-
-    // Caso contrário, calcula dinamicamente com base na ficha técnica do produto
     const product = prodMap.get(item.productId);
-    if (!product) {
-      // Se não encontrou o produto no catálogo e não há snapshot
-      pendingReviewSet.add(`Produto "${item.productName}" não localizado no cardápio ativo.`);
-      continue;
-    }
-
-    const { items: baseComponents, pendingReview: basePending } = calculateProductKitchenComponents(
-      product,
-      inventoryItems,
-      kitchenComponents
-    );
-
+    const storedBase = item.productionSnapshot?.structuredProduction;
+    const { items: baseComponents, pendingReview: basePending } = storedBase
+      ? { items: [], pendingReview: [] }
+      : product ? calculateProductKitchenComponents(product, inventoryItems, kitchenComponents)
+      : { items: [], pendingReview: [{ reason: `Produto "${item.productName}" sem composição identificada.` }] };
     basePending.forEach(p => pendingReviewSet.add(`${item.productName}: ${p.reason}`));
-
     // Aplicar retiradas (removals)
     const activeRemovals = (item.removals || []).map(r => r.toLowerCase().trim());
     
@@ -599,7 +476,7 @@ export function calculateOrderProductionRequirements(
       );
       if (isRemoved) continue;
 
-      const comp = compMap.get(bc.componentId) || {
+      const comp = {
         id: bc.componentId,
         name: bc.name,
         componentType: bc.componentType,
@@ -615,22 +492,22 @@ export function calculateOrderProductionRequirements(
 
       if (comp.station === 'grill') {
         if (comp.componentType === 'burger') {
-          const cur = chapaBurgersMap.get(comp.id) || { comp, count: 0 };
-          chapaBurgersMap.set(comp.id, { comp, count: cur.count + totalCount });
+          const cur = chapaBurgersMap.get(componentKey(comp)) || { comp, count: 0 };
+          chapaBurgersMap.set(componentKey(comp), { comp, count: cur.count + totalCount });
         } else {
-          const cur = chapaOthersMap.get(comp.id) || { comp, count: 0 };
-          chapaOthersMap.set(comp.id, { comp, count: cur.count + totalCount });
+          const cur = chapaOthersMap.get(componentKey(comp)) || { comp, count: 0 };
+          chapaOthersMap.set(componentKey(comp), { comp, count: cur.count + totalCount });
         }
       } else if (comp.station === 'fryer') {
-        const cur = fryerMap.get(comp.id) || { comp, count: 0 };
-        fryerMap.set(comp.id, { comp, count: cur.count + totalCount });
+        const cur = fryerMap.get(componentKey(comp)) || { comp, count: 0 };
+        fryerMap.set(componentKey(comp), { comp, count: cur.count + totalCount });
       } else if (comp.station !== 'none') {
         if (!otherStationsMap.has(comp.station)) {
           otherStationsMap.set(comp.station, new Map());
         }
         const stMap = otherStationsMap.get(comp.station)!;
-        const cur = stMap.get(comp.id) || { comp, count: 0 };
-        stMap.set(comp.id, { comp, count: cur.count + totalCount });
+        const cur = stMap.get(componentKey(comp)) || { comp, count: 0 };
+        stMap.set(componentKey(comp), { comp, count: cur.count + totalCount });
       }
     }
 
@@ -644,77 +521,76 @@ export function calculateOrderProductionRequirements(
         let matchedComp: KitchenComponent | undefined = undefined;
 
         // Se o adicional veio com productId ou ingredientId
-        const addProduct = add.id ? prodMap.get(add.id) : undefined;
+        const addProduct = prodMap.get(add.id || '') || products.find(p => p.name === add.name || p.name === `Adicional: ${add.name}`);
         if (addProduct) {
           const addBreakdown = calculateProductKitchenComponents(addProduct, inventoryItems, kitchenComponents);
+          addBreakdown.pendingReview.forEach(p => pendingReviewSet.add(`${add.name}: ${p.reason}`));
           for (const ac of addBreakdown.items) {
-            const c = compMap.get(ac.componentId);
+            const c: KitchenComponent = { ...ac, id: ac.componentId, isActive: true };
             if (c) {
               const cTotal = ac.quantity * totalAddCount;
               if (c.station === 'grill') {
                 if (c.componentType === 'burger') {
-                  const cur = chapaBurgersMap.get(c.id) || { comp: c, count: 0 };
-                  chapaBurgersMap.set(c.id, { comp: c, count: cur.count + cTotal });
+                  const cur = chapaBurgersMap.get(componentKey(c)) || { comp: c, count: 0 };
+                  chapaBurgersMap.set(componentKey(c), { comp: c, count: cur.count + cTotal });
                 } else {
-                  const cur = chapaOthersMap.get(c.id) || { comp: c, count: 0 };
-                  chapaOthersMap.set(c.id, { comp: c, count: cur.count + cTotal });
+                  const cur = chapaOthersMap.get(componentKey(c)) || { comp: c, count: 0 };
+                  chapaOthersMap.set(componentKey(c), { comp: c, count: cur.count + cTotal });
                 }
               } else if (c.station === 'fryer') {
-                const cur = fryerMap.get(c.id) || { comp: c, count: 0 };
-                fryerMap.set(c.id, { comp: c, count: cur.count + cTotal });
+                const cur = fryerMap.get(componentKey(c)) || { comp: c, count: 0 };
+                fryerMap.set(componentKey(c), { comp: c, count: cur.count + cTotal });
+              } else if (c.station !== 'none') {
+                if (!otherStationsMap.has(c.station)) otherStationsMap.set(c.station, new Map());
+                const st = otherStationsMap.get(c.station)!;
+                const cur = st.get(componentKey(c)) || { comp: c, count: 0 };
+                st.set(componentKey(c), { comp: c, count: cur.count + cTotal });
               }
             }
           }
           continue;
         }
 
-        // Se o adicional é um insumo (ex: Bacon, Ovo, Hambúrguer extra)
-        const addNorm = (add.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        if (addNorm.includes('ovo')) {
-          matchedComp = compMap.get('cmp-ovo') || Array.from(compMap.values()).find(c => c.componentType === 'egg');
-        } else if (addNorm.includes('carne') || addNorm.includes('burger') || addNorm.includes('hamburguer') || addNorm.includes('patty') || addNorm.includes('costela') || addNorm.includes('linguica')) {
-          matchedComp = compMap.get('cmp-bovino-180') || Array.from(compMap.values()).find(c => c.componentType === 'burger');
-        } else if (addNorm.includes('batata') || addNorm.includes('frita')) {
-          matchedComp = compMap.get('cmp-batata-peq') || Array.from(compMap.values()).find(c => c.station === 'fryer' && c.name.toLowerCase().includes('batata'));
-        } else if (addNorm.includes('onion') || addNorm.includes('anel') || addNorm.includes('cebola')) {
-          matchedComp = compMap.get('cmp-aneis-cebola') || Array.from(compMap.values()).find(c => c.station === 'fryer' && c.name.toLowerCase().includes('cebola'));
+        const inv = invMap.get(add.id || '') || inventoryItems.find(i => i.name.toLowerCase() === add.name.toLowerCase());
+        if (inv) {
+          const resolved = resolveKitchenComponentForRecipeLine({ ingredientId: inv.id, quantity: 1 }, inv, kitchenComponents);
+          matchedComp = resolved.component;
+          if (resolved.isNonKitchen) continue;
         }
-
-        if (matchedComp) {
-          if (matchedComp.station === 'grill') {
-            if (matchedComp.componentType === 'burger') {
-              const cur = chapaBurgersMap.get(matchedComp.id) || { comp: matchedComp, count: 0 };
-              chapaBurgersMap.set(matchedComp.id, { comp: matchedComp, count: cur.count + totalAddCount });
-            } else {
-              const cur = chapaOthersMap.get(matchedComp.id) || { comp: matchedComp, count: 0 };
-              chapaOthersMap.set(matchedComp.id, { comp: matchedComp, count: cur.count + totalAddCount });
-            }
-          } else if (matchedComp.station === 'fryer') {
-            const cur = fryerMap.get(matchedComp.id) || { comp: matchedComp, count: 0 };
-            fryerMap.set(matchedComp.id, { comp: matchedComp, count: cur.count + totalAddCount });
-          }
+        if (!matchedComp) {
+          pendingReviewSet.add(`Adicional ${add.name}: vincule ao produto ou componente de preparo.`);
+          continue;
         }
+        if (normalizeUnit(inv?.unit || '') !== 'un') {
+          pendingReviewSet.add(`Adicional ${add.name}: cadastre uma ficha com a quantidade consumida.`);
+          continue;
+        }
+        const target = matchedComp.station === 'fryer' ? fryerMap : matchedComp.componentType === 'burger' ? chapaBurgersMap : chapaOthersMap;
+        const key = componentKey(matchedComp);
+        const current = target.get(key) || { comp: matchedComp, count: 0 };
+        target.set(key, { comp: matchedComp, count: current.count + totalAddCount });
       }
     }
 
     // Contabilizar Combo (se o item vem com combo de batata, onion, etc.)
-    const comboProduct = item.comboId ? prodMap.get(item.comboId) : undefined;
+    const comboProduct = item.comboId ? prodMap.get(item.comboId) : products.find(p => p.category === 'combo' && p.name === item.combo);
     if (comboProduct) {
       const comboBreakdown = calculateProductKitchenComponents(comboProduct, inventoryItems, kitchenComponents);
+      comboBreakdown.pendingReview.forEach(p => pendingReviewSet.add(`${comboProduct.name}: ${p.reason}`));
       for (const cb of comboBreakdown.items) {
-        const c = compMap.get(cb.componentId);
+        const c: KitchenComponent = { ...cb, id: cb.componentId, isActive: true };
         if (c) {
           const cTotal = cb.quantity * qty;
           if (c.station === 'fryer') {
-            const cur = fryerMap.get(c.id) || { comp: c, count: 0 };
-            fryerMap.set(c.id, { comp: c, count: cur.count + cTotal });
+            const cur = fryerMap.get(componentKey(c)) || { comp: c, count: 0 };
+            fryerMap.set(componentKey(c), { comp: c, count: cur.count + cTotal });
           } else if (c.station === 'grill') {
             if (c.componentType === 'burger') {
-              const cur = chapaBurgersMap.get(c.id) || { comp: c, count: 0 };
-              chapaBurgersMap.set(c.id, { comp: c, count: cur.count + cTotal });
+              const cur = chapaBurgersMap.get(componentKey(c)) || { comp: c, count: 0 };
+              chapaBurgersMap.set(componentKey(c), { comp: c, count: cur.count + cTotal });
             } else {
-              const cur = chapaOthersMap.get(c.id) || { comp: c, count: 0 };
-              chapaOthersMap.set(c.id, { comp: c, count: cur.count + cTotal });
+              const cur = chapaOthersMap.get(componentKey(c)) || { comp: c, count: 0 };
+              chapaOthersMap.set(componentKey(c), { comp: c, count: cur.count + cTotal });
             }
           }
         }
@@ -808,7 +684,7 @@ export function calculateOrderProductionRequirements(
 
   const hasPending = pendingReviewSet.size > 0;
   const chapaStatus = hasPending ? 'a_conferir' : (totalBurgers === 0 ? 'sem_carnes' : 'ok');
-  const fryerStatus = hasPending && totalFryer === 0 ? 'a_conferir' : (totalFryer === 0 ? 'sem_itens' : 'ok');
+  const fryerStatus = hasPending ? 'a_conferir' : (totalFryer === 0 ? 'sem_itens' : 'ok');
 
   return {
     chapa: {
@@ -855,4 +731,18 @@ export function buildKitchenProductionSnapshot(
     })),
     pendingReview: pendingReview.map(p => p.reason),
   };
+}
+
+/** Full composition per ONE sold unit, including choices. Never trust a client snapshot. */
+export function buildSaleItemKitchenSnapshot(item: SaleItem, products: Product[], inventory: InventoryItem[], components: KitchenComponent[] = DEFAULT_KITCHEN_COMPONENTS): StructuredProductionSnapshot {
+  const summary = calculateOrderProductionRequirements([{ ...item, quantity: 1, productionSnapshot: undefined }], products, inventory, components);
+  const rows = [...summary.chapa.burgersBreakdown, ...summary.chapa.otherItems, ...summary.fritadeira.items,
+    ...Object.values(summary.otherStations).flat()];
+  return { version: 3, calculatedAt: new Date().toISOString(), pendingReview: summary.pendingReview,
+    components: rows.map(row => ({
+      componentId: row.componentId, name: row.name, quantity: row.count,
+      componentType: summary.chapa.burgersBreakdown.includes(row) ? 'burger' : (components.find(c => c.id === row.componentId)?.componentType || 'other'),
+      station: summary.chapa.burgersBreakdown.includes(row) || summary.chapa.otherItems.includes(row) ? 'grill' : summary.fritadeira.items.includes(row) ? 'fryer' : Object.keys(summary.otherStations).find(key => summary.otherStations[key].includes(row)) as RecipeProductionStation,
+      productionUnit: row.unit, portionWeight: row.portionWeight, portionUnit: row.portionUnit, showInSummary: true,
+    })) };
 }

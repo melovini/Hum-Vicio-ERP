@@ -1289,10 +1289,9 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       showInSummary: comp.showInSummary !== false,
       isActive: comp.isActive !== false,
     };
-    setKitchenComponents(prev => [...prev.filter(c => c.id !== newId), newComp]);
 
     try {
-      await supabase.from('kitchen_components').upsert({
+      const { error } = await supabase.from('kitchen_components').insert({
         id: newComp.id,
         name: newComp.name,
         component_type: newComp.componentType,
@@ -1303,14 +1302,15 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
         show_in_summary: newComp.showInSummary,
         is_active: newComp.isActive,
       });
+      if (error) throw new Error('Não foi possível salvar o componente. Seus ajustes foram mantidos.');
+      setKitchenComponents(prev => [...prev.filter(c => c.id !== newId), newComp]);
     } catch (err) {
-      console.warn('Erro ao salvar componente de preparo:', err);
+      throw err;
     }
     return newComp;
   };
 
   const updateKitchenComponent = async (id: string, updates: Partial<KitchenComponent>) => {
-    setKitchenComponents(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
 
     try {
       const payload: any = {};
@@ -1323,9 +1323,11 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       if (updates.showInSummary !== undefined) payload.show_in_summary = updates.showInSummary;
       if (updates.isActive !== undefined) payload.is_active = updates.isActive;
 
-      await supabase.from('kitchen_components').update(payload).eq('id', id);
+      const { error } = await supabase.from('kitchen_components').update(payload).eq('id', id);
+      if (error) throw new Error('Não foi possível atualizar o componente. Seus ajustes foram mantidos.');
+      setKitchenComponents(prev => prev.map(c => c.id === id ? { ...c, ...updates } : c));
     } catch (err) {
-      console.warn('Erro ao atualizar componente de preparo:', err);
+      throw err;
     }
   };
 

@@ -135,6 +135,10 @@ export default function CardapioAdminPage() {
       return;
     }
     const weightNum = compWeight !== '' ? Number(compWeight) : undefined;
+    if (weightNum !== undefined && (!Number.isFinite(weightNum) || weightNum <= 0)) {
+      notify({ title: 'Informe uma porção maior que zero.', tone: 'danger' }); return;
+    }
+    try {
     if (editingComponent && editingComponent.id) {
       await updateKitchenComponent(editingComponent.id, {
         name: compName.trim(),
@@ -147,7 +151,7 @@ export default function CardapioAdminPage() {
       });
       notify({ title: `Componente "${compName.trim()}" atualizado com sucesso!`, tone: 'success' });
     } else {
-      const generatedId = `cmp-${compName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || Date.now().toString(36)}`;
+      const generatedId = `cmp-${crypto.randomUUID()}`;
       await addKitchenComponent({
         id: generatedId,
         name: compName.trim(),
@@ -162,6 +166,9 @@ export default function CardapioAdminPage() {
       notify({ title: `Componente "${compName.trim()}" criado com sucesso!`, tone: 'success' });
     }
     setEditingComponent(null);
+    } catch (error) {
+      notify({ title: error instanceof Error ? error.message : 'Não foi possível salvar o componente.', tone: 'danger' });
+    }
   };
 
   // Form State Produto (Dialog)
@@ -2364,7 +2371,7 @@ export default function CardapioAdminPage() {
 
                         <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 border-t border-border-default/60 pt-2">
                           <div>
-                            <span className="block text-[10px] text-text-muted mb-1 font-semibold uppercase">Componente de Preparo:</span>
+                            <span className="block text-[10px] text-text-muted mb-1 font-semibold uppercase">Como identificar na cozinha:</span>
                             <Select
                               aria-label={`Componente de preparo de ${ing?.name || 'ingrediente'}`}
                               value={r.kitchenComponentId || ''}
@@ -2375,18 +2382,20 @@ export default function CardapioAdminPage() {
                                   ? { 
                                       ...item, 
                                       kitchenComponentId: compId || undefined,
-                                      productionStation: comp ? comp.station : item.productionStation 
+                                      productionStation: comp ? comp.station : item.productionStation,
+                                      productionKind: comp ? (comp.componentType === 'burger' ? 'beef_patty' : comp.componentType === 'egg' ? 'egg' : 'other') : item.productionKind
                                     }
                                   : item));
                               }}
                             >
-                              <option value="">Automático / Padrão</option>
-                              {(kitchenComponents || []).map(option => (
+                              <option value="">Usar identificação do insumo (legado)</option>
+                              {(kitchenComponents || []).filter(option => option.isActive !== false).map(option => (
                                 <option key={option.id} value={option.id}>
                                   {option.name} ({option.station === 'grill' ? 'Chapa' : option.station === 'fryer' ? 'Fritadeira' : option.station})
                                 </option>
                               ))}
                             </Select>
+                            <p className="mt-1 text-xs text-text-muted">Escolha o tipo e a porção exatos: costela, bovino e linguiça ficam separados na comanda. Confira o resultado na prévia abaixo.</p>
                           </div>
                           <div>
                             <span className="block text-[10px] text-text-muted mb-1 font-semibold uppercase">Onde preparar:</span>
