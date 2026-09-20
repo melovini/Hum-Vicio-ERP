@@ -54,10 +54,13 @@ const PRINT_ENGINE_CSS = `
       height: auto !important;
       min-height: 0 !important;
       overflow: visible !important;
+      page-break-inside: auto !important;
+      break-inside: auto !important;
+    }
+
+    #thermal-print-mount .break-inside-avoid {
       page-break-inside: avoid !important;
       break-inside: avoid !important;
-      page-break-after: avoid !important;
-      break-after: avoid !important;
     }
 
     #thermal-print-mount * {

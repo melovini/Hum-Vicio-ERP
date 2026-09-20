@@ -1,9 +1,11 @@
 'use client';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { Sale, SaleItem, useInventory, Product, InventoryItem } from '@/lib/store';
 import { Printer, X, ChefHat, Receipt, CheckCircle, Copy, AlertTriangle, GitCompare } from 'lucide-react';
 import { printThermalElement } from '@/lib/thermal-printer';
 import { getBurgerPrintDetails } from '@/lib/production-calculator';
+import { buildKitchenTicket, formatKitchenTicketEscPos } from '@/lib/kitchen-ticket';
+import KitchenTicketView from '@/components/caixa/KitchenTicketView';
 
 export interface OrderDiff {
   added: SaleItem[];
@@ -60,8 +62,22 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
   const formattedDate = new Date(sale.date).toLocaleDateString('pt-BR');
   const formattedTime = new Date(sale.date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+  const kitchenTicket = useMemo(() => {
+    return buildKitchenTicket({
+      sale,
+      products: allProducts,
+      inventoryItems: allInventoryItems,
+      showMontagem,
+      diff: activeDiff,
+    });
+  }, [sale, allProducts, allInventoryItems, showMontagem, activeDiff]);
+
   // Gerador de Texto RAW ESC/POS (40 colunas contínuas para impressoras seriais, bluetooth e drivers diretos)
   const generateRawEscPosText = () => {
+    if (type === 'cozinha' || (type === 'diferencial' && activeDiff)) {
+      return formatKitchenTicketEscPos(kitchenTicket);
+    }
+
     const divider = '========================================\n';
     const subDivider = '----------------------------------------\n';
     let text = '';
@@ -69,157 +85,46 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
     text += '          HUM VICIO HAMBURGUERIA        \n';
     text += '           CNPJ: 32.588.610/0001-44     \n';
     text += divider;
-
-    if (type === 'diferencial' && activeDiff) {
-      text += '*** ALTERACAO / ADICAO DE ITENS ***\n';
-      text += `PEDIDO #${sale.id.slice(0, 6).toUpperCase()} • ${sale.channel.toUpperCase()}\n`;
-      if (sale.customerName) text += `CLIENTE: ${sale.customerName.toUpperCase()}\n`;
-      text += `DATA/HORA: ${formattedDate} ${formattedTime}\n`;
-      text += subDivider;
-      text += 'ITENS DIFERENCIAIS:\n';
-      activeDiff.added.forEach(item => {
-        const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
-        text += `[+] ${item.quantity}x ${item.productName} (ADICIONADO)\n`;
-        if (showMontagem && details.recipeIngredients.length > 0) {
-          text += `    MONTAGEM: ${details.recipeIngredients.join(', ')}\n`;
-        }
-        if (details.chapaItems.length > 0) {
-          text += `    * CHAPA: ${details.chapaItems.join(' + ')}\n`;
-        }
-        if (details.fryerItems.length > 0) {
-          text += `    * FRITADEIRA: ${details.fryerItems.join(' + ')}\n`;
-        }
-        if (details.comboDetails) {
-          text += `    ------------------------------------\n`;
-          text += `    >> ${details.comboDetails.title} <<\n`;
-          text += `    * FRITADEIRA: ${details.comboDetails.fryerItem.toUpperCase()}\n`;
-          if (details.comboDetails.chapaItem) {
-            text += `    * CHAPA/MONTAGEM: ${details.comboDetails.chapaItem.toUpperCase()}\n`;
-          }
-          if (details.comboDetails.drinkItem) {
-            text += `    * BEBIDA: ${details.comboDetails.drinkItem.toUpperCase()}\n`;
-          }
-          text += `    ------------------------------------\n`;
-        } else if (item.combo) {
-          text += `    + COMBO: ${item.combo.toUpperCase()}\n`;
-        }
-        if (item.additionals && item.additionals.length > 0) {
-          text += `    + ADICIONAIS: ${item.additionals.map(a => a.name).join(', ')}\n`;
-        }
-        if (item.removals && item.removals.length > 0) {
-          text += `    *** 🚫 ATENCAO RETIRAR: ${item.removals.join(', ').toUpperCase()} ***\n`;
-        }
-        if (item.notes) text += `    *** OBS: ${item.notes.toUpperCase()} ***\n`;
-      });
-      activeDiff.removed.forEach(item => {
-        text += `[-] ${item.quantity}x ${item.productName} (CANCELADO)\n`;
-      });
-      activeDiff.modified.forEach(m => {
-        text += `[*] ${m.item.quantity}x ${m.item.productName} (MODIFICADO)\n`;
-        text += `    DE: ${(m.oldNotes || 'Sem obs').toUpperCase()}\n`;
-        text += `    PARA: ${(m.newNotes || 'Sem obs').toUpperCase()}\n`;
-      });
-      text += divider;
-      text += '*** ATENCAO CHAPA / PRODUCAO ***\n';
-      return text;
-    }
-
-    if (type === 'cozinha') {
-      text += '       VIA DE PRODUCAO (CHAPA)          \n';
-      text += `PEDIDO #${sale.id.slice(0, 6).toUpperCase()} • ${sale.channel.toUpperCase()}\n`;
-      if (sale.orderType) text += `MODALIDADE: [${sale.orderType.toUpperCase()}]\n`;
-      if (sale.customerName) text += `CLIENTE: ${sale.customerName.toUpperCase()}\n`;
-      text += `HORA: ${formattedDate} - ${formattedTime}\n`;
-      if (sale.paymentStatus === 'pendente_retirada') {
-        text += '****************************************\n';
-        text += '*** ATENCAO: PAGAR NA RETIRADA       ***\n';
-        text += `*** COBRAR DO CLIENTE: R$ ${sale.total.toFixed(2)} ***\n`;
-        text += '****************************************\n';
+    text += '    CUPOM NAO FISCAL DE CONFERENCIA     \n';
+    text += `PEDIDO #${sale.id.slice(0, 6).toUpperCase()} • ${sale.channel.toUpperCase()}\n`;
+    if (sale.customerName) text += `CLIENTE: ${sale.customerName}\n`;
+    text += `DATA/HORA: ${formattedDate} ${formattedTime}\n`;
+    text += subDivider;
+    text += 'ITEM                            QTD  R$ TOTAL\n';
+    sale.items.forEach(item => {
+      const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
+      const itemTot = ((item.unitPrice || 0) * item.quantity).toFixed(2);
+      const namePad = item.productName.slice(0, 26).padEnd(28, ' ');
+      text += `${namePad} ${item.quantity}x ${itemTot}\n`;
+      if (details.comboDetails) {
+        text += `  + ${details.comboDetails.title}\n`;
+        text += `    (Acomp: ${details.comboDetails.fryerItem} + ${details.comboDetails.drinkItem})\n`;
+      } else if (item.combo) {
+        text += `  + ${item.combo.toUpperCase()}\n`;
       }
-      text += subDivider;
-      text += 'ITENS PARA PREPARO:\n';
-      sale.items.forEach(item => {
-        const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
-        text += `[${item.quantity}x] ${item.productName}\n`;
-        if (showMontagem && details.recipeIngredients.length > 0) {
-          text += `    MONTAGEM: ${details.recipeIngredients.join(', ')}\n`;
-        }
-        if (details.chapaItems.length > 0) {
-          text += `    * CHAPA: ${details.chapaItems.join(' + ')}\n`;
-        }
-        if (details.fryerItems.length > 0) {
-          text += `    * FRITADEIRA: ${details.fryerItems.join(' + ')}\n`;
-        }
-        if (details.comboDetails) {
-          text += `    ------------------------------------\n`;
-          text += `    >> ${details.comboDetails.title} <<\n`;
-          text += `    * FRITADEIRA: ${details.comboDetails.fryerItem.toUpperCase()}\n`;
-          if (details.comboDetails.chapaItem) {
-            text += `    * CHAPA/MONTAGEM: ${details.comboDetails.chapaItem.toUpperCase()}\n`;
-          }
-          if (details.comboDetails.drinkItem) {
-            text += `    * BEBIDA: ${details.comboDetails.drinkItem.toUpperCase()}\n`;
-          }
-          text += `    ------------------------------------\n`;
-        } else if (item.combo) {
-          text += `    + COMBO: ${item.combo.toUpperCase()}\n`;
-        }
-        if (details.effectiveMeatPoint && details.chapaItems.length === 0) {
-          text += `    * PONTO: ${details.effectiveMeatPoint.toUpperCase()} *\n`;
-        }
-        if (item.additionals && item.additionals.length > 0) {
-          text += `    + ADICIONAIS: ${item.additionals.map(a => a.name).join(', ')}\n`;
-        }
-        if (item.removals && item.removals.length > 0) {
-          text += `    *** 🚫 ATENCAO RETIRAR: ${item.removals.join(', ').toUpperCase()} ***\n`;
-        }
-        if (item.notes) text += `    *** OBS: ${item.notes.toUpperCase()} ***\n`;
-        text += subDivider;
-      });
-      text += divider;
-      text += '        *** AGILIDADE & QUALIDADE ***   \n';
+      if (item.meatPoint) text += `  * PONTO: ${item.meatPoint.toUpperCase()} *\n`;
+      if (item.additionals && item.additionals.length > 0) {
+        text += `  + ADICIONAIS: ${item.additionals.map(a => a.name).join(', ')}\n`;
+      }
+      if (item.removals && item.removals.length > 0) {
+        text += `  - RETIRAR: ${item.removals.join(', ').toUpperCase()}\n`;
+      }
+      if (item.notes) text += `  *** OBS: ${item.notes.toUpperCase()} ***\n`;
+    });
+    text += subDivider;
+    if (sale.subtotal) text += `SUBTOTAL:                    R$ ${sale.subtotal.toFixed(2)}\n`;
+    if (sale.discount) text += `DESCONTO:                   -R$ ${sale.discount.toFixed(2)}\n`;
+    if (sale.deliveryFee) text += `TAXA DE ENTREGA:            +R$ ${sale.deliveryFee.toFixed(2)}\n`;
+    text += `TOTAL A PAGAR:               R$ ${sale.total.toFixed(2)}\n`;
+    if (sale.paymentStatus === 'pendente_retirada') {
+      text += 'STATUS:                     PAGAR NA RETIRADA\n';
+      text += `*** ATENCAO: COBRAR R$ ${sale.total.toFixed(2)} NA ENTREGA ***\n`;
     } else {
-      text += '    CUPOM NAO FISCAL DE CONFERENCIA     \n';
-      text += `PEDIDO #${sale.id.slice(0, 6).toUpperCase()} • ${sale.channel.toUpperCase()}\n`;
-      if (sale.customerName) text += `CLIENTE: ${sale.customerName}\n`;
-      text += `DATA/HORA: ${formattedDate} ${formattedTime}\n`;
-      text += subDivider;
-      text += 'ITEM                            QTD  R$ TOTAL\n';
-      sale.items.forEach(item => {
-        const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
-        const itemTot = ((item.unitPrice || 0) * item.quantity).toFixed(2);
-        const namePad = item.productName.slice(0, 26).padEnd(28, ' ');
-        text += `${namePad} ${item.quantity}x ${itemTot}\n`;
-        if (details.comboDetails) {
-          text += `  + ${details.comboDetails.title}\n`;
-          text += `    (Acomp: ${details.comboDetails.fryerItem} + ${details.comboDetails.drinkItem})\n`;
-        } else if (item.combo) {
-          text += `  + ${item.combo.toUpperCase()}\n`;
-        }
-        if (item.meatPoint) text += `  * PONTO: ${item.meatPoint.toUpperCase()} *\n`;
-        if (item.additionals && item.additionals.length > 0) {
-          text += `  + ADICIONAIS: ${item.additionals.map(a => a.name).join(', ')}\n`;
-        }
-        if (item.removals && item.removals.length > 0) {
-          text += `  - RETIRAR: ${item.removals.join(', ').toUpperCase()}\n`;
-        }
-        if (item.notes) text += `  *** OBS: ${item.notes.toUpperCase()} ***\n`;
-      });
-      text += subDivider;
-      if (sale.subtotal) text += `SUBTOTAL:                    R$ ${sale.subtotal.toFixed(2)}\n`;
-      if (sale.discount) text += `DESCONTO:                   -R$ ${sale.discount.toFixed(2)}\n`;
-      if (sale.deliveryFee) text += `TAXA DE ENTREGA:            +R$ ${sale.deliveryFee.toFixed(2)}\n`;
-      text += `TOTAL A PAGAR:               R$ ${sale.total.toFixed(2)}\n`;
-      if (sale.paymentStatus === 'pendente_retirada') {
-        text += 'STATUS:                     PAGAR NA RETIRADA\n';
-        text += `*** ATENCAO: COBRAR R$ ${sale.total.toFixed(2)} NA ENTREGA ***\n`;
-      } else {
-        text += `FORMA DE PAGAMENTO: ${sale.paymentMethod.toUpperCase()}\n`;
-      }
-      text += divider;
-      text += '          OBRIGADO PELA PREFERENCIA!    \n';
-      text += '             VOLTE SEMPRE! 🍔           \n';
+      text += `FORMA DE PAGAMENTO: ${sale.paymentMethod.toUpperCase()}\n`;
     }
+    text += divider;
+    text += '          OBRIGADO PELA PREFERENCIA!    \n';
+    text += '             VOLTE SEMPRE! 🍔           \n';
 
     return text;
   };
@@ -315,264 +220,8 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
         {/* Pré-visualização da Bobina Térmica (80mm) */}
         <div className="flex-1 overflow-y-auto bg-white text-black p-5 rounded-2xl font-sans font-bold text-xs shadow-inner select-none border-2 border-slate-300">
           <div id="thermal-receipt-printable">
-            {type === 'diferencial' && activeDiff ? (
-              /* --- VIA DIFERENCIAL (ALTERAÇÕES / ADIÇÕES) --- */
-              <div className="space-y-3">
-                <div className="text-center border-b-2 border-dashed border-black pb-3">
-                  <h3 className="font-extrabold text-base uppercase tracking-wider">HUM VÍCIO HAMBURGUERIA</h3>
-                  <div className="bg-black text-white px-2 py-1 my-1.5 font-black text-sm uppercase">
-                    *** ALTERAÇÃO / ADIÇÃO ***
-                  </div>
-                  <p className="text-xs font-bold">
-                    PEDIDO #{sale.id.slice(0, 6).toUpperCase()} • {sale.channel.toUpperCase()}
-                  </p>
-                  {sale.customerName && (
-                    <p className="text-sm font-black mt-1 uppercase">
-                      {sale.orderType ? `${sale.orderType.toUpperCase()}: ` : 'CLIENTE: '}{sale.customerName}
-                    </p>
-                  )}
-                  <p className="text-[10px] mt-1">{formattedDate} - {formattedTime}</p>
-                </div>
-
-                <div className="py-2 border-b-2 border-dashed border-black space-y-2">
-                  <p className="font-black text-xs uppercase bg-black text-white px-1">
-                    ITENS MODIFICADOS NA COZINHA:
-                  </p>
-
-                  {/* Adicionados */}
-                  {activeDiff.added.length > 0 && (
-                    <div className="space-y-1.5 pt-1">
-                      <p className="text-[11px] font-black text-black uppercase">ITENS ADICIONADOS (+):</p>
-                      {activeDiff.added.map((item, idx) => {
-                        const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
-                        return (
-                          <div key={idx} className="pl-2 border-l-2 border-black font-bold space-y-0.5">
-                            <span className="text-sm">[+] {item.quantity}x {item.productName} (ADICIONADO)</span>
-                            {showMontagem && details.recipeIngredients.length > 0 && (
-                              <p className="text-[11px] font-semibold text-black leading-tight">
-                                <span className="font-extrabold uppercase">Montagem: </span>
-                                {details.recipeIngredients.join(' • ')}
-                              </p>
-                            )}
-                            {details.chapaItems.length > 0 && (
-                              <p className="text-xs font-black text-black">
-                                🔥 CHAPA: {details.chapaItems.join(' + ')}
-                              </p>
-                            )}
-                            {details.fryerItems.length > 0 && (
-                              <p className="text-xs font-black text-black">
-                                🍟 FRITADEIRA: {details.fryerItems.join(' + ')}
-                              </p>
-                            )}
-                            {/* Combo Detalhado */}
-                            {details.comboDetails ? (
-                              <div className="my-1.5 p-1.5 bg-black text-white rounded-none border border-black space-y-0.5">
-                                <p className="font-black text-xs uppercase tracking-wide text-white flex items-center gap-1">
-                                  <span>{details.comboDetails.icon}</span>
-                                  <span>{details.comboDetails.title}</span>
-                                </p>
-                                <div className="pl-1.5 border-l-2 border-white text-[11px] font-semibold space-y-0.5 text-white">
-                                  <p>🍟 <span className="font-black uppercase">Fritadeira:</span> {details.comboDetails.fryerItem}</p>
-                                  {details.comboDetails.chapaItem && (
-                                    <p>🔥 <span className="font-black uppercase">Chapa/Montagem:</span> {details.comboDetails.chapaItem}</p>
-                                  )}
-                                  {details.comboDetails.drinkItem && (
-                                    <p>🥤 <span className="font-black uppercase">Bebida:</span> {details.comboDetails.drinkItem}</p>
-                                  )}
-                                </div>
-                              </div>
-                            ) : item.combo ? (
-                              <p className="text-xs font-bold text-black">
-                                + COMBO: {item.combo.toUpperCase()}
-                              </p>
-                            ) : null}
-                            {item.additionals && item.additionals.length > 0 && (
-                              <p className="text-xs font-bold text-black">
-                                + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
-                              </p>
-                            )}
-                            {item.removals && item.removals.length > 0 && (
-                              <div>
-                                <span className="bg-black text-white px-2 py-0.5 text-xs font-black uppercase tracking-wider inline-block">
-                                  🚫 RETIRAR: {item.removals.join(', ').toUpperCase()}
-                                </span>
-                              </div>
-                            )}
-                            {item.notes && (
-                              <div>
-                                <p className="text-xs font-black bg-black text-white px-1.5 py-0.5 mt-1 inline-block uppercase">
-                                  *** OBS: {item.notes.toUpperCase()} ***
-                                </p>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  {/* Cancelados / Removidos */}
-                  {activeDiff.removed.length > 0 && (
-                    <div className="space-y-1.5 pt-1">
-                      <p className="text-[11px] font-black text-black uppercase">ITENS CANCELADOS (-):</p>
-                      {activeDiff.removed.map((item, idx) => (
-                        <div key={idx} className="pl-2 border-l-2 border-dashed border-black font-bold line-through">
-                          <span className="text-sm">[-] {item.quantity}x {item.productName} (CANCELADO)</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Observações Modificadas */}
-                  {activeDiff.modified.length > 0 && (
-                    <div className="space-y-1.5 pt-1">
-                      <p className="text-[11px] font-black text-black uppercase">OBSERVAÇÕES ALTERADAS (*):</p>
-                      {activeDiff.modified.map((m, idx) => (
-                        <div key={idx} className="pl-2 border-l-2 border-black text-xs">
-                          <span className="font-bold">[*] {m.item.quantity}x {m.item.productName}</span>
-                          <p className="text-[11px] pl-2 line-through uppercase">DE: {(m.oldNotes || 'Sem obs').toUpperCase()}</p>
-                          <p className="text-[11px] pl-2 font-black uppercase">PARA: {(m.newNotes || 'Sem obs').toUpperCase()}</p>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="text-center text-[10px] pt-1 font-bold">
-                  *** NÃO REPETIR ITENS JÁ PREPARADOS ***
-                </div>
-              </div>
-            ) : type === 'cozinha' ? (
-              /* --- VIA DA COZINHA (CHAPA) --- */
-              <div className="space-y-3">
-                <div className="text-center border-b-2 border-dashed border-black pb-3">
-                  <h3 className="font-extrabold text-base uppercase tracking-wider">HUM VÍCIO HAMBURGUERIA</h3>
-                  <p className="font-bold text-xs bg-black text-white px-2 py-0.5 mt-1 inline-block uppercase">
-                    VIA DE PRODUÇÃO (CHAPA)
-                  </p>
-                  <p className="text-xs mt-1">
-                    PEDIDO #{sale.id.slice(0, 6).toUpperCase()} • {sale.channel.toUpperCase()}
-                    {sale.orderType && ` [${sale.orderType.toUpperCase()}]`}
-                  </p>
-                  {sale.customerName && (
-                    <p className="text-sm font-black mt-1 bg-black text-white px-2 py-0.5 inline-block uppercase">
-                      {sale.orderType ? `${sale.orderType.toUpperCase()}: ` : 'CLIENTE: '}{sale.customerName}
-                    </p>
-                  )}
-                  {sale.paymentStatus === 'pendente_retirada' && (
-                    <div className="bg-black text-white p-1.5 mt-1.5 text-center border border-black">
-                      <p className="font-black text-xs uppercase tracking-wider">⚠️ ATENÇÃO: PAGAR NA RETIRADA</p>
-                      <p className="text-[11px] font-extrabold uppercase">COBRAR NO BALCÃO: R$ {sale.total.toFixed(2)}</p>
-                    </div>
-                  )}
-                  <p className="text-[10px] mt-1">{formattedDate} - {formattedTime}</p>
-                </div>
-
-                <div className="py-2 border-b-2 border-dashed border-black">
-                  <p className="font-bold mb-2 uppercase text-xs">ITENS DO PEDIDO:</p>
-                  <div className="space-y-3 text-sm">
-                    {sale.items.map((item, idx) => {
-                      const details = getBurgerPrintDetails(item, allProducts, allInventoryItems);
-                      return (
-                        <div key={idx} className="border-b-2 border-dashed border-black pb-2.5 last:border-0 last:pb-0 space-y-1">
-                          <div className="flex justify-between items-start font-bold">
-                            <span className="text-base font-black text-black leading-tight">
-                              [{item.quantity}x] {item.productName}
-                            </span>
-                          </div>
-
-                          {/* Ficha Técnica / Montagem da Receita (Opcional) */}
-                          {showMontagem && details.recipeIngredients.length > 0 && (
-                            <div className="pl-2 border-l-2 border-black text-[11px] font-semibold text-black leading-tight">
-                              <span className="font-black uppercase">Montagem: </span>
-                              <span>{details.recipeIngredients.join(' • ')}</span>
-                            </div>
-                          )}
-
-                          {/* Estação Chapa */}
-                          {details.chapaItems.length > 0 && (
-                            <p className="text-xs font-black text-black pl-2">
-                              🔥 CHAPA: {details.chapaItems.join(' + ')}
-                            </p>
-                          )}
-
-                          {/* Estação Fritadeira */}
-                          {details.fryerItems.length > 0 && (
-                            <p className="text-xs font-black text-black pl-2">
-                              🍟 FRITADEIRA: {details.fryerItems.join(' + ')}
-                            </p>
-                          )}
-
-                          {/* Combo Detalhado com Destaque Máximo para Chapeiro e Montador */}
-                          {details.comboDetails ? (
-                            <div className="my-1.5 p-2 bg-black text-white rounded-none border border-black space-y-1">
-                              <div className="flex items-center gap-1.5 font-black text-xs uppercase tracking-wider text-white">
-                                <span>{details.comboDetails.icon}</span>
-                                <span>{details.comboDetails.title}</span>
-                              </div>
-                              <div className="pl-2 border-l-2 border-white text-[11px] font-semibold space-y-0.5 text-white">
-                                <p>
-                                  🍟 <span className="font-black uppercase">Fritadeira:</span> {details.comboDetails.fryerItem}
-                                </p>
-                                {details.comboDetails.chapaItem && (
-                                  <p>
-                                    🔥 <span className="font-black uppercase">Chapa/Montagem:</span> {details.comboDetails.chapaItem}
-                                  </p>
-                                )}
-                                {details.comboDetails.drinkItem && (
-                                  <p>
-                                    🥤 <span className="font-black uppercase">Bebida:</span> {details.comboDetails.drinkItem}
-                                  </p>
-                                )}
-                              </div>
-                            </div>
-                          ) : item.combo ? (
-                            <p className="text-xs font-bold pl-2 text-black">
-                              + COMBO: {item.combo.toUpperCase()}
-                            </p>
-                          ) : null}
-
-                          {/* Ponto da Carne (se não incluso acima) */}
-                          {details.effectiveMeatPoint && details.chapaItems.length === 0 && (
-                            <p className="text-xs font-black pl-2 text-black">
-                              🥩 PONTO: {details.effectiveMeatPoint.toUpperCase()}
-                            </p>
-                          )}
-
-                          {/* Adicionais */}
-                          {item.additionals && item.additionals.length > 0 && (
-                            <p className="text-xs font-black pl-2 text-black">
-                              + ADICIONAIS: {item.additionals.map(a => a.name.toUpperCase()).join(', ')}
-                            </p>
-                          )}
-
-                          {/* Retiradas com Destaque Máximo (Fundo Preto / Texto Branco Invertido) */}
-                          {item.removals && item.removals.length > 0 && (
-                            <div>
-                              <span className="bg-black text-white px-2 py-1 text-xs font-black uppercase tracking-wider inline-block">
-                                🚫 RETIRAR: {item.removals.join(', ').toUpperCase()}
-                              </span>
-                            </div>
-                          )}
-
-                          {/* Observações */}
-                          {item.notes && (
-                            <div>
-                              <p className="text-xs font-black bg-black text-white px-1.5 py-0.5 mt-0.5 inline-block uppercase">
-                                *** OBS: {item.notes.toUpperCase()} ***
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="text-center text-[10px] pt-1 font-bold">
-                  *** AGILIDADE & QUALIDADE ***
-                </div>
-              </div>
+            {type === 'diferencial' || type === 'cozinha' ? (
+              <KitchenTicketView ticket={kitchenTicket} showMontagem={showMontagem} />
             ) : (
               /* --- VIA DO CLIENTE --- */
               <div className="space-y-3">
