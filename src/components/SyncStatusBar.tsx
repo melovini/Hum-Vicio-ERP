@@ -33,7 +33,7 @@ export default function SyncStatusBar({ className = '', compact = false }: SyncS
       if (res.syncedCount > 0) {
         setSyncFeedback(`Sucesso: ${res.syncedCount} pedido(s) sincronizado(s) com o servidor!`);
       } else if (res.errorsCount > 0) {
-        setSyncFeedback(`Atenção: O servidor ainda está inacessível. Os pedidos continuam salvos com segurança neste aparelho.`);
+        setSyncFeedback(`Há pedidos aguardando confirmação. Confira o motivo abaixo e tente sincronizar novamente. A fila permanece neste aparelho.`);
       } else {
         setSyncFeedback(`Fila vazia. Todos os pedidos estão 100% atualizados no servidor.`);
       }
@@ -202,7 +202,7 @@ export default function SyncStatusBar({ className = '', compact = false }: SyncS
                   </div>
                   <p className="text-[11px] text-slate-400 mt-1">
                     {connectionStatus === 'connected' 
-                      ? 'Todas as operações estão sincronizadas em tempo real.'
+                      ? 'Conexão disponível. Confira abaixo se há pedidos aguardando envio.'
                       : connectionStatus === 'offline'
                         ? 'Seu computador está sem rede. Os dados estão salvos localmente.'
                         : 'Você tem internet, mas o servidor central demorou a responder.'}
@@ -263,7 +263,7 @@ export default function SyncStatusBar({ className = '', compact = false }: SyncS
                           <span className="font-mono font-bold text-emerald-400">
                             R$ {sale.total.toFixed(2)}
                           </span>
-                          {sale.syncStatus === 'failed' ? (
+                          {sale.syncError ? (
                             <span className="px-2 py-0.5 bg-rose-500/20 text-rose-300 border border-rose-500/40 rounded text-[10px] font-bold" title={sale.syncError}>
                               ❌ Falha: {sale.syncError || 'Erro'}
                             </span>

@@ -171,7 +171,13 @@ export async function POST(request: Request) {
           db.from('products').select('*')
         ]);
 
-        if ([recRes, invRes, compRes, prodRes].some(result => result.error)) throw new AccessError(503, 'Não foi possível confirmar a composição. Tente novamente.');
+        // Older installations may not have applied the optional kitchen migration yet.
+        // Only tolerate a missing table, never permissions, network or other database failures.
+        const missingComponents = compRes.error?.code === 'PGRST205' || compRes.error?.code === '42P01';
+        if ([recRes, invRes, prodRes].some(result => result.error) || (compRes.error && !missingComponents)) {
+          console.error('[Checkout composition]', { recipes: recRes.error, inventory: invRes.error, components: compRes.error, products: prodRes.error });
+          throw new AccessError(503, 'Não foi possível consultar a composição no banco. O pedido permanece na fila para nova tentativa.');
+        }
         const recipes = recRes.data || [];
         const inventory = invRes.data || [];
         const components = compRes.data || [];
@@ -210,6 +216,10 @@ export async function POST(request: Request) {
               })),
             }));
             const structuredSnap = buildSaleItemKitchenSnapshot(item as any, catalog, mappedInv, mappedComps.length > 0 ? mappedComps : undefined);
+            if (missingComponents) {
+              structuredSnap.components = [];
+              structuredSnap.pendingReview = ['Configuração de cozinha indisponível. Confira a ficha do item antes de produzir e solicite a atualização do banco.'];
+            }
             item.productionSnapshot = {
               ...(item.productionSnapshot || {}),
               structuredProduction: structuredSnap,

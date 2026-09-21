@@ -39,6 +39,44 @@ test('Checkout recompõe no servidor mesmo quando o cliente envia uma composiç�
   assert.equal(snapshot.components[0].quantity, 1);
 });
 
+for (const code of ['PGRST205', '42P01', '42501', '08006']) test(`Checkout trata ausência de tabela sem esconder outras falhas: ${code}`, async () => {
+  const productId = 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11';
+  let saved;
+  const tables = {
+    products: [{ id: productId, name: 'Argentina', category: 'lanche', price_balcao: 30, status: 'ativo' }],
+    recipes: [{ product_id: productId, ingredient_id: 'costela', quantity: 1, kitchen_component_id: 'cmp-costela-180' }],
+    inventory: [{ id: 'costela', name: 'Costela 180g', unit: 'un' }],
+    kitchen_components: DEFAULT_KITCHEN_COMPONENTS.map(c => ({ id: c.id, name: c.name, component_type: c.componentType, station: c.station, production_unit: c.productionUnit, portion_weight: c.portionWeight, portion_unit: c.portionUnit })),
+  };
+  const db = {
+    from(table) { const result = Promise.resolve(table === 'kitchen_components' ? { error: { code, message: 'Database test failure' } } : { data: tables[table] || [] }); result.in = () => result; return { select: () => result }; },
+    async rpc(name, args) { saved = args.p_sale; return { data: { success: true } }; },
+  };
+  class AccessError extends Error { constructor(status, message) { super(message); this.status = status; } }
+  const load = createLoader({
+    '@/lib/supabase-server': { createServerDatabase: () => db },
+    '@/lib/security/server-session': {
+      requireSession: async () => ({ role: 'caixa', userName: 'Teste', collaboratorId: 'op' }), requireSameOrigin() {},
+      readJsonBody: request => request.json(), AccessError,
+      apiError: error => Response.json({ message: error.message }, { status: error.status || 500 }),
+    },
+  });
+  const { POST } = load('src/app/api/sales/checkout/route.ts');
+  const response = await POST(new Request('https://erp.test/api/sales/checkout', { method: 'POST', body: JSON.stringify({
+    idempotencyKey: 'snapshot-regression', sale: { id: productId, channel: 'balcao', total: 30, items: [{ productId, productName: 'Argentina', quantity: 1, unitPrice: 30,
+      productionSnapshot: { structuredProduction: { version: 3, components: [] } } }] },
+  }) }));
+  if (['PGRST205', '42P01'].includes(code)) {
+    assert.equal(response.status, 200);
+    const snapshot = saved.items[0].productionSnapshot.structuredProduction;
+    assert.deepEqual(snapshot.components, []);
+    assert.match(snapshot.pendingReview[0], /Configuração de cozinha indisponível/);
+  } else {
+    assert.equal(response.status, 503);
+    assert.equal(saved, undefined);
+  }
+});
+
 test('Argentina: costela separada, queijo não vira carne, adicionais e combo sobrevivem ao snapshot', () => {
   const inventory = [
     { id: 'costela', name: 'Hambúrguer bovino recheado de costela 180g', category: 'Carnes', unit: 'un', kitchenComponentId: 'cmp-costela-180' },

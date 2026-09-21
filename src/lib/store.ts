@@ -336,7 +336,7 @@ export async function syncOfflineSalesQueue(supabaseClient?: any): Promise<{ syn
 
   for (const sale of queue) {
     // Pula vendas marcadas com falha definitiva de validação para permitir que outras prossigam
-    if (sale.syncStatus === 'failed') continue;
+    if (sale.syncStatus === 'failed') { errorsCount++; continue; }
 
     try {
       const idempotencyKey = (sale as any).idempotencyKey || `sale_checkout_${sale.id}`;
@@ -353,11 +353,12 @@ export async function syncOfflineSalesQueue(supabaseClient?: any): Promise<{ syn
         const errJson = await res.json().catch(() => ({}));
         console.warn('Falha na sincronização transacional da venda offline:', sale.id, errJson);
         errorsCount++;
+        updateOfflineSaleInQueue(sale.id, { syncError: errJson.message || (typeof errJson.error === 'string' ? errJson.error : 'O servidor não confirmou o pedido. Tente sincronizar novamente.') });
         // Se rejeitada por validação de negócio definitiva (ex: 400), marca como falha para inspeção do operador
         if (res.status === 400) {
           updateOfflineSaleInQueue(sale.id, {
             syncStatus: 'failed',
-            syncError: errJson.error || 'Validação de pedido falhou no servidor'
+            syncError: errJson.message || errJson.error || 'Validação de pedido falhou no servidor'
           });
         } else {
           break; // Servidor temporariamente indisponível ou fora do ar
@@ -1584,8 +1585,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
         sales: updated
       });
     } else if (res.errorsCount > 0) {
-      const status = typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable';
-      updateGlobalStore({ connectionStatus: status });
+      await checkServerHealth();
     }
     return res;
   };
@@ -2771,6 +2771,8 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     }
 
     let sData: any = null;
+    let checkoutError: string | undefined;
+    let checkoutResponded = false;
     let isOffline = false;
 
     // Execução atômica no servidor com timeout de 3.5s (tolerância para conexão lenta)
@@ -2811,9 +2813,12 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
           })
         });
 
+        checkoutResponded = true;
         if (res.ok) {
           return await res.json();
         }
+        const failure = await res.json().catch(() => ({}));
+        checkoutError = failure.message || (typeof failure.error === 'string' ? failure.error : 'O servidor não confirmou o pedido. Tente sincronizar novamente.');
         return null;
       };
 
@@ -2914,6 +2919,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       deliveredBy: sale.deliveredBy || undefined,
       isOfflineSynced: !isOffline,
       syncStatus: isOffline ? 'pending' : 'synced',
+      syncError: isOffline ? checkoutError : undefined,
       productionStatus: initialProductionStatus,
       productionStartedAt: initialProductionStarted,
       targetPrepMinutes: initialTargetPrep,
@@ -2935,7 +2941,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       const q = getOfflineSalesQueue();
       setOfflineQueueCount(q.length);
       setOfflineSalesList(q);
-      setConnectionStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable');
+      setConnectionStatus(checkoutResponded ? 'connected' : typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable');
     } else {
       const nowIso = new Date().toISOString();
       setLastServerSync(nowIso);
