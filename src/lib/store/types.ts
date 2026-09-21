@@ -69,7 +69,8 @@ export type RecipeProductionStation =
   | 'oven'
   | 'cold'
   | 'assembly'
-  | 'other';
+  | 'other'
+  | (string & {});
 
 export type RecipeProductionKind =
   | 'none'

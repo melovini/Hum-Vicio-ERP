@@ -669,7 +669,7 @@ export async function executeParallelLoadData(
             productionKind: i.production_kind || meta.productionKind,
             portionWeight: i.portion_weight !== undefined ? Number(i.portion_weight) : meta.portionWeight,
             portionUnit: i.portion_unit || meta.portionUnit || 'g',
-            kitchenComponentId: i.kitchen_component_id || meta.kitchenComponentId || undefined,
+            kitchenComponentId: 'kitchen_component_id' in i ? (i.kitchen_component_id || undefined) : meta.kitchenComponentId,
           };
         });
         if (typeof window !== 'undefined') {
@@ -1330,6 +1330,12 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     } catch (err) {
       throw err;
     }
+  };
+
+  const linkInventoryKitchenComponent = async (id: string, componentId: string) => {
+    const { error } = await supabase.from('inventory').update({ kitchen_component_id: componentId || null }).eq('id', id);
+    if (error) throw new Error('Não foi possível salvar o vínculo do insumo.');
+    setItems(prev => prev.map(item => item.id === id ? { ...item, kitchenComponentId: componentId || undefined } : item));
   };
 
   const removeKitchenComponent = async (id: string) => {
@@ -3879,7 +3885,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   };
 
   return { 
-    items, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
+    items, linkInventoryKitchenComponent, addInventoryItem, updateInventoryItem, removeInventoryItem, updateStatus, registerPurchase,
     products, addProduct, updateProduct, removeProduct, getProductCmv, getRealSalesCmv, setProducts,
     kitchenComponents, setKitchenComponents, addKitchenComponent, updateKitchenComponent, removeKitchenComponent,
     batchAddIngredientToProducts, batchUpdateProductSubcategory,

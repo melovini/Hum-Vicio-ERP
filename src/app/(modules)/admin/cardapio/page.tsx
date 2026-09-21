@@ -25,6 +25,7 @@ import {
   type CardapioCategoryFilter 
 } from '@/lib/recipe-helpers';
 import { validateProductIntegrity, type ProductStatus } from '@/lib/product-validator';
+import { WorkstationsPanel } from '@/components/cardapio/WorkstationsPanel';
 import { KitchenProductPreview } from '@/components/cardapio/KitchenProductPreview';
 import {
   getCustomSubcategories,
@@ -73,7 +74,7 @@ const PRODUCTION_KINDS: Array<{ value: RecipeProductionKind; label: string }> = 
 ];
 
 const stationLabel = (value?: RecipeProductionStation) =>
-  PRODUCTION_STATIONS.find(option => option.value === value)?.label || 'Não revisado';
+  PRODUCTION_STATIONS.find(option => option.value === value)?.label || value || 'Não revisado';
 
 const kindLabel = (value?: RecipeProductionKind) =>
   PRODUCTION_KINDS.find(option => option.value === value)?.label || 'Regra legada';
@@ -88,7 +89,7 @@ export default function CardapioAdminPage() {
   } = useInventory();
   const { notify } = useToast();
 
-  const [activeTab, setActiveTab] = useState<'produtos' | 'subreceitas'>('produtos');
+  const [activeTab, setActiveTab] = useState<'produtos' | 'subreceitas' | 'estacoes'>('produtos');
   const [categoryFilter, setCategoryFilter] = useState<CardapioCategoryFilter>('todos');
   const [subcategoryFilter, setSubcategoryFilter] = useState<string>('todas');
   const [searchTerm, setSearchTerm] = useState('');
@@ -662,7 +663,7 @@ export default function CardapioAdminPage() {
 
         notify({
           title: `Insumo "${newItem.name}" criado no estoque com custo R$ 0,00!`,
-          description: 'Agora informe quantidade, destino de produção e regra de contagem antes de adicioná-lo.',
+          description: 'Informe a quantidade. O preparo pode ser vinculado uma única vez na aba Estações de trabalho.',
           tone: 'warning',
         });
       }
@@ -763,18 +764,7 @@ export default function CardapioAdminPage() {
     setCfop(p.cfop || '');
     setCsosn(p.csosn || '');
     setCest(p.cest || '');
-    setRecipe(p.recipe.map(r => {
-      const ing = items.find(i => i.id === r.ingredientId);
-      return {
-        ...r,
-        productionStation: r.productionStation && r.productionStation !== 'none'
-          ? r.productionStation
-          : (ing?.productionStation || 'none'),
-        productionKind: r.productionKind && r.productionKind !== 'none'
-          ? r.productionKind
-          : (ing?.productionKind || 'none'),
-      };
-    }));
+    setRecipe(p.recipe.map(r => ({ ...r })));
     setAcceptsAddons(p.acceptsAddons !== false);
     setIsAddon(Boolean(p.isAddon));
     if (p.allowedAddonIds && p.allowedAddonIds.length > 0) {
@@ -799,18 +789,7 @@ export default function CardapioAdminPage() {
     setCfop(p.cfop || '');
     setCsosn(p.csosn || '');
     setCest(p.cest || '');
-    setRecipe(p.recipe.map(r => {
-      const ing = items.find(i => i.id === r.ingredientId);
-      return {
-        ...r,
-        productionStation: r.productionStation && r.productionStation !== 'none'
-          ? r.productionStation
-          : (ing?.productionStation || 'none'),
-        productionKind: r.productionKind && r.productionKind !== 'none'
-          ? r.productionKind
-          : (ing?.productionKind || 'none'),
-      };
-    }));
+    setRecipe(p.recipe.map(r => ({ ...r })));
     setAcceptsAddons(p.acceptsAddons !== false);
     setIsAddon(Boolean(p.isAddon));
     if (p.allowedAddonIds && p.allowedAddonIds.length > 0) {
@@ -923,8 +902,8 @@ export default function CardapioAdminPage() {
       setRecipe([...recipe, {
         ingredientId: selectedIngId,
         quantity: qty,
-        productionStation: ingredientProductionStation,
-        productionKind: ingredientProductionStation === 'none' ? 'none' : ingredientProductionKind,
+        productionStation: 'none',
+        productionKind: 'none',
       }]);
       setSelectedIngId('');
       setIngQuantity('');
@@ -1401,9 +1380,11 @@ export default function CardapioAdminPage() {
             <FlaskConical size={16} aria-hidden="true" />
             <span>Sub-Receitas & Molhos ({prepIngredients.length})</span>
           </button>
+          <button type="button" role="tab" aria-selected={activeTab === 'estacoes'} onClick={() => setActiveTab('estacoes')} className={cn('min-h-11 border-b-2 px-4 text-sm font-semibold whitespace-nowrap', activeTab === 'estacoes' ? 'border-brand-primary text-text-primary' : 'border-transparent text-text-muted')}>Estações de trabalho</button>
         </div>
 
         {/* ABA 1: PRODUTOS & FICHAS TÉCNICAS */}
+        {activeTab === 'estacoes' && <WorkstationsPanel />}
         {activeTab === 'produtos' && (
           <div className="space-y-6">
             <FilterBar
@@ -2234,30 +2215,8 @@ export default function CardapioAdminPage() {
                     className="w-full bg-surface-input border border-border-default rounded-control p-2.5 text-text-primary font-mono text-xs outline-none focus:border-brand-primary"
                   />
 
-                  <Select
-                    aria-label="Destino de produção do ingrediente"
-                    value={ingredientProductionStation}
-                    onChange={event => {
-                      const station = event.target.value as RecipeProductionStation;
-                      setIngredientProductionStation(station);
-                      if (station === 'none') setIngredientProductionKind('none');
-                    }}
-                  >
-                    {PRODUCTION_STATIONS.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </Select>
+                  <p className="text-xs text-text-muted">O preparo é herdado do cadastro em Estações de trabalho.</p>
 
-                  <Select
-                    aria-label="Regra de contagem do ingrediente no KDS"
-                    value={ingredientProductionKind}
-                    onChange={event => setIngredientProductionKind(event.target.value as RecipeProductionKind)}
-                    disabled={ingredientProductionStation === 'none'}
-                  >
-                    {PRODUCTION_KINDS.map(option => (
-                      <option key={option.value} value={option.value}>{option.label}</option>
-                    ))}
-                  </Select>
 
                   <Button
                     size="sm"
@@ -2309,7 +2268,7 @@ export default function CardapioAdminPage() {
                     const unitCost = ing ? getIngredientTrueCost(ing.id) : 0;
                     const subtotal = unitCost * r.quantity;
                     const isZeroCost = unitCost <= 0;
-                    const matchedComp = (kitchenComponents || []).find(c => c.id === r.kitchenComponentId);
+                    const matchedComp = (kitchenComponents || []).find(c => c.id === (r.kitchenComponentId || ing?.kitchenComponentId));
 
                     return (
                       <div key={idx} className={cn(
@@ -2347,10 +2306,10 @@ export default function CardapioAdminPage() {
                                 </span>
                               )}
                               <span className="rounded-full border border-border-default bg-surface-elevated px-2 py-0.5 text-[10px] font-bold text-text-secondary">
-                                {stationLabel(r.productionStation)}
+                                {stationLabel(matchedComp?.station || r.productionStation)}
                               </span>
                               <span className="rounded-full border border-brand-primary/30 bg-brand-primary/10 px-2 py-0.5 text-[10px] font-bold text-brand-primary">
-                                {kindLabel(r.productionKind)}
+                                {matchedComp ? matchedComp.productionUnit : kindLabel(r.productionKind)}
                               </span>
                             </div>
                           </div>
@@ -2369,8 +2328,9 @@ export default function CardapioAdminPage() {
                           </div>
                         </div>
 
+                        <details className="mt-2"><summary className="cursor-pointer text-xs text-brand-primary">Preparo diferente nesta receita</summary>
                         <div className="mt-2 grid grid-cols-1 sm:grid-cols-3 gap-2 border-t border-border-default/60 pt-2">
-                          <div>
+                        <div>
                             <span className="block text-[10px] text-text-muted mb-1 font-semibold uppercase">Como identificar na cozinha:</span>
                             <Select
                               aria-label={`Componente de preparo de ${ing?.name || 'ingrediente'}`}
@@ -2382,13 +2342,13 @@ export default function CardapioAdminPage() {
                                   ? { 
                                       ...item, 
                                       kitchenComponentId: compId || undefined,
-                                      productionStation: comp ? comp.station : item.productionStation,
+                                      productionStation: 'none',
                                       productionKind: comp ? (comp.componentType === 'burger' ? 'beef_patty' : comp.componentType === 'egg' ? 'egg' : 'other') : item.productionKind
                                     }
                                   : item));
                               }}
                             >
-                              <option value="">Usar identificação do insumo (legado)</option>
+                              <option value="">Herdar configuração do insumo</option>
                               {(kitchenComponents || []).filter(option => option.isActive !== false).map(option => (
                                 <option key={option.id} value={option.id}>
                                   {option.name} ({option.station === 'grill' ? 'Chapa' : option.station === 'fryer' ? 'Fritadeira' : option.station})
@@ -2401,7 +2361,8 @@ export default function CardapioAdminPage() {
                             <span className="block text-[10px] text-text-muted mb-1 font-semibold uppercase">Onde preparar:</span>
                             <Select
                               aria-label={`Destino de produção de ${ing?.name || 'ingrediente'}`}
-                              value={r.productionStation || ''}
+                              disabled={Boolean(matchedComp)}
+                              value={matchedComp?.station || r.productionStation || ''}
                               onChange={event => {
                                 const station = event.target.value as RecipeProductionStation;
                                 setRecipe(current => current.map((item, itemIndex) => itemIndex === idx
@@ -2409,6 +2370,7 @@ export default function CardapioAdminPage() {
                                   : item));
                               }}
                             >
+                              {matchedComp && !PRODUCTION_STATIONS.some(option => option.value === matchedComp.station) && <option value={matchedComp.station}>{matchedComp.station}</option>}
                               <option value="" disabled>Revisar destino...</option>
                               {PRODUCTION_STATIONS.map(option => (
                                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -2423,7 +2385,7 @@ export default function CardapioAdminPage() {
                               onChange={event => setRecipe(current => current.map((item, itemIndex) => itemIndex === idx
                                 ? { ...item, productionKind: event.target.value as RecipeProductionKind }
                                 : item))}
-                              disabled={r.productionStation === 'none'}
+                              disabled={Boolean(matchedComp) || r.productionStation === 'none'}
                             >
                               <option value="" disabled>Revisar contagem...</option>
                               {PRODUCTION_KINDS.map(option => (
@@ -2433,6 +2395,7 @@ export default function CardapioAdminPage() {
                           </div>
                         </div>
 
+                        </details>
                         {/* Edição Rápida de Custo para Insumo com Custo Zerado */}
                         {isZeroCost && ing && (
                           <div className="mt-2 pt-2 border-t border-amber-500/20 flex items-center justify-between gap-2">
@@ -3327,6 +3290,7 @@ export default function CardapioAdminPage() {
                         value={compStation}
                         onChange={e => setCompStation(e.target.value as RecipeProductionStation)}
                       >
+                        {![...PRODUCTION_STATIONS.map(s => s.value)].includes(compStation) && <option value={compStation}>{compStation}</option>}
                         <option value="grill">Chapa 🔥</option>
                         <option value="fryer">Fritadeira 🍟</option>
                         <option value="oven">Forno</option>

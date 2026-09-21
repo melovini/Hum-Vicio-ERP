@@ -236,6 +236,7 @@ export default function KitchenTicketView({ ticket, showMontagem = false }: Kitc
             </>
           )}
         </div>
+        {Object.entries(productionSummary.otherStations || {}).map(([station, entries]) => <div key={station} className="pt-2"><p className="font-black uppercase">{({ oven: 'Forno', cold: 'Preparo frio', assembly: 'Montagem', other: 'Outros' } as Record<string, string>)[station] || station}</p>{entries.map((entry, idx) => <p key={idx} className="pl-1 font-bold">{entry.label}</p>)}</div>)}
       </div>
     </div>
   );

@@ -61,6 +61,7 @@ export interface KitchenProductionSummary {
     items: { label: string; count: number }[];
     status: 'ok' | 'sem_itens' | 'a_conferir';
   };
+  otherStations?: Record<string, { label: string; count: number }[]>;
   isComplete: boolean;
   differentialSummary?: {
     addChapa?: string[];
@@ -320,6 +321,7 @@ export function buildKitchenTicket({
       items: fryerItems,
       status: fryerStatus,
     },
+    otherStations: structuredReqs.otherStations,
     isComplete: !hasAnyUnconfirmed && structuredReqs.isComplete,
   };
 
@@ -494,5 +496,10 @@ export function formatKitchenTicketEscPos(ticket: KitchenTicketData): string {
     }
   }
 
+  for (const [station, entries] of Object.entries(productionSummary.otherStations || {})) {
+    const label = ({ oven: 'FORNO', cold: 'PREPARO FRIO', assembly: 'MONTAGEM', other: 'OUTROS' } as Record<string, string>)[station] || station.toUpperCase();
+    out += `\n${label}\n`;
+    for (const entry of entries) out += `${entry.label}\n`;
+  }
   return out;
 }

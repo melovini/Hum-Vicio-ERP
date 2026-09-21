@@ -774,3 +774,28 @@ test('15. Exemplo exato do prompt: carnes com tipos e gramaturas diferentes, ovo
   assert.match(text, /OUTROS NA CHAPA\n2x Ovo/);
   assert.match(text, /FRITADEIRA\n2x Batata pequena\n1x Anéis de cebola/);
 });
+
+
+test('Estações: herança, exceção, sem preparo e impressão de estação personalizada', () => {
+  const inv = [{ id: 'base', name: 'Pré-preparo', unit: 'un', kitchenComponentId: 'forno' }];
+  const comps = [
+    { id: 'forno', name: 'Pão assado', station: 'Forno de pizzas', componentType: 'other', productionUnit: 'unidade', showInSummary: true, isActive: true },
+    { id: 'chapa', name: 'Pão na chapa', station: 'grill', componentType: 'other', productionUnit: 'unidade', showInSummary: true, isActive: true },
+    { id: 'none', name: 'Sem preparo individual', station: 'none', componentType: 'other', productionUnit: 'unidade', showInSummary: false, isActive: true },
+  ];
+  const product = { id: 'p', name: 'Lanche', category: 'lanche', recipe: [{ ingredientId: 'base', quantity: 2, productionStation: 'none' }] };
+  const item = { productId: 'p', productName: 'Lanche', quantity: 3, unitPrice: 10 };
+  const snapshot = buildSaleItemKitchenSnapshot(item, [product], inv, comps);
+  assert.equal(snapshot.components[0].station, 'Forno de pizzas');
+  assert.equal(snapshot.components[0].quantity, 2);
+  const ticket = buildKitchenTicket({ sale: makeBaseSale([{ ...item, productionSnapshot: { structuredProduction: snapshot } }]), products: [product], inventoryItems: inv, kitchenComponents: comps });
+  assert.equal(ticket.productionSummary.otherStations['Forno de pizzas'][0].count, 6);
+  assert.match(formatKitchenTicketEscPos(ticket), /FORNO DE PIZZAS/);
+  const exception = { ...product, recipe: [{ ...product.recipe[0], kitchenComponentId: 'chapa' }] };
+  assert.equal(buildSaleItemKitchenSnapshot(item, [exception], inv, comps).components[0].station, 'grill');
+  const excluded = { ...product, recipe: [{ ...product.recipe[0], kitchenComponentId: 'none' }] };
+  assert.equal(buildSaleItemKitchenSnapshot(item, [excluded], inv, comps).components.length, 0);
+  const moved = comps.map(c => c.id === 'forno' ? { ...c, station: 'assembly' } : c);
+  assert.equal(buildSaleItemKitchenSnapshot(item, [product], inv, moved).components[0].station, 'assembly');
+  assert.equal(snapshot.components[0].station, 'Forno de pizzas');
+});

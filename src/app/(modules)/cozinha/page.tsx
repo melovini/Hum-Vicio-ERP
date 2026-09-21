@@ -749,9 +749,7 @@ export default function CozinhaKDSPage() {
       });
     });
 
-    const totalChapaPatties = structuredReqs.chapa.totalBurgers > 0
-      ? structuredReqs.chapa.totalBurgers
-      : Object.values(burgerCounts).reduce((a, b) => a + b, 0);
+    const totalChapaPatties = structuredReqs.chapa.totalBurgers;
 
     return {
       structured: structuredReqs,
@@ -1553,6 +1551,7 @@ export default function CozinhaKDSPage() {
                 </div>
               </div>
 
+              {Object.entries(kitchenStationsSummary.structured.otherStations).map(([station, entries]) => <section key={station} className="rounded-xl border border-slate-700 bg-slate-900 p-4 mb-4"><h3 className="font-bold">{({ oven: 'Forno', cold: 'Preparo frio', assembly: 'Montagem', other: 'Outros' } as Record<string, string>)[station] || station}</h3>{entries.map((entry, idx) => <p key={idx}>{entry.label}</p>)}</section>)}
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 {productionOrders.map((order, orderIdx) => (
                   <KitchenProductionOrderCard

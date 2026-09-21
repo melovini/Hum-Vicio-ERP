@@ -306,6 +306,7 @@ export function KitchenProductPreview({
           </div>
         )}
 
+        {structuredBreakdown.items.filter(item => !['grill', 'fryer', 'none'].includes(item.station)).map((item, idx) => <p key={idx} className="text-sm"><strong>{({ oven: 'Forno', cold: 'Preparo frio', assembly: 'Montagem', other: 'Outros' } as Record<string, string>)[item.station] || item.station}</strong>: {item.quantity * simQty} {item.productionUnit} de {item.name}</p>)}
         {/* Avisos e Pendências de Cadastro */}
         {warnings.length > 0 && (
           <div className="space-y-1.5 pt-1">

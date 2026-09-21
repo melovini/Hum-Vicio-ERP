@@ -195,14 +195,14 @@ export function resolveKitchenComponentForRecipeLine(
   // 1. Vínculo explícito na linha da receita (prioridade máxima)
   if (recipeItem.kitchenComponentId) {
     const comp = allComponents.find(c => c.id === recipeItem.kitchenComponentId && c.isActive !== false);
-    if (comp) return { component: comp, needsConfiguration: false, isNonKitchen: false };
+    if (comp) return { component: comp, needsConfiguration: false, isNonKitchen: comp.station === 'none' };
     return { needsConfiguration: true, isNonKitchen: false };
   }
 
   // 2. Vínculo padrão herdado do insumo no estoque
   if (inventoryItem?.kitchenComponentId) {
     const comp = allComponents.find(c => c.id === inventoryItem.kitchenComponentId && c.isActive !== false);
-    if (comp) return { component: comp, needsConfiguration: false, isNonKitchen: false };
+    if (comp) return { component: comp, needsConfiguration: false, isNonKitchen: comp.station === 'none' };
     return { needsConfiguration: true, isNonKitchen: false };
   }
 
