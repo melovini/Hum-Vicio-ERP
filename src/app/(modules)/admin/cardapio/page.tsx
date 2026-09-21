@@ -233,6 +233,8 @@ export default function CardapioAdminPage() {
   const [showNewSubModal, setShowNewSubModal] = useState(false);
   const [newSubName, setNewSubName] = useState('');
   const [newSubUnit, setNewSubUnit] = useState('kg');
+  const [newSubComponent, setNewSubComponent] = useState('');
+  const [prepComponent, setPrepComponent] = useState('');
   const [newSubStation, setNewSubStation] = useState<RecipeProductionStation>('none');
   const [newSubKind, setNewSubKind] = useState<RecipeProductionKind>('none');
   const [newSubPortionWeight, setNewSubPortionWeight] = useState('');
@@ -334,6 +336,7 @@ export default function CardapioAdminPage() {
   // Sincronizar estado de classificação operacional com o activePrep selecionado
   useEffect(() => {
     if (activePrep) {
+      setPrepComponent(activePrep.kitchenComponentId === 'cmp-no-prep' ? '' : activePrep.kitchenComponentId || '');
       setPrepStation(activePrep.productionStation || 'none');
       setPrepKind(activePrep.productionKind || 'none');
       setPrepPortionWeight(
@@ -342,7 +345,7 @@ export default function CardapioAdminPage() {
           : ''
       );
     }
-  }, [activePrep?.id, activePrep?.productionStation, activePrep?.productionKind, activePrep?.portionWeight]);
+  }, [activePrep?.id, activePrep?.kitchenComponentId, activePrep?.productionStation, activePrep?.productionKind, activePrep?.portionWeight]);
 
   // Subcategorias disponíveis para a categoria sendo editada no formulário
   const availableSubcategoriesForCategory = useMemo(() => {
@@ -962,6 +965,7 @@ export default function CardapioAdminPage() {
       costPerUnit: 0,
       currentStock: 0,
       status: 'ok',
+      kitchenComponentId: newSubComponent || 'cmp-no-prep',
       productionStation: newSubStation,
       productionKind: newSubStation === 'none' ? 'none' : newSubKind,
       portionWeight: weight,
@@ -973,6 +977,7 @@ export default function CardapioAdminPage() {
       setSelectedPrepId(created.id);
     }
     setNewSubName('');
+    setNewSubComponent('');
     setNewSubStation('none');
     setNewSubKind('none');
     setNewSubPortionWeight('');
@@ -985,6 +990,7 @@ export default function CardapioAdminPage() {
     try {
       const weight = prepPortionWeight.trim() ? Number(prepPortionWeight.replace(',', '.')) : undefined;
       await updateInventoryItem(activePrep.id, {
+        kitchenComponentId: prepComponent || 'cmp-no-prep',
         productionStation: prepStation,
         productionKind: prepStation === 'none' ? 'none' : prepKind,
         portionWeight: weight,
@@ -1835,36 +1841,15 @@ export default function CardapioAdminPage() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
                       <div className="space-y-1">
                         <label className="block text-[11px] font-semibold text-text-secondary uppercase">
-                          Onde Preparar
+                          Preparo na cozinha (opcional)
                         </label>
-                        <Select
-                          value={prepStation}
-                          onChange={e => {
-                            const val = e.target.value as RecipeProductionStation;
-                            setPrepStation(val);
-                            if (val === 'none') setPrepKind('none');
-                          }}
-                        >
-                          {PRODUCTION_STATIONS.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                          ))}
-                        </Select>
+                        <Select aria-label="Preparo na cozinha (opcional)" value={prepComponent} onChange={e => { setPrepComponent(e.target.value); setPrepStation('none'); setPrepKind('none'); }}>
+<option value="">Não exibir nas estações</option>
+{kitchenComponents.filter(c => c.isActive && c.station !== 'none').map(c => <option key={c.id} value={c.id}>{c.name} — {stationLabel(c.station)}</option>)}
+</Select>
                       </div>
 
-                      <div className="space-y-1">
-                        <label className="block text-[11px] font-semibold text-text-secondary uppercase">
-                          O Que Contar (KDS)
-                        </label>
-                        <Select
-                          value={prepKind}
-                          onChange={e => setPrepKind(e.target.value as RecipeProductionKind)}
-                          disabled={prepStation === 'none'}
-                        >
-                          {PRODUCTION_KINDS.map(opt => (
-                            <option key={opt.value} value={opt.value}>{opt.label}</option>
-                          ))}
-                        </Select>
-                      </div>
+
 
                       <div className="space-y-1">
                         <label className="block text-[11px] font-semibold text-text-secondary uppercase">
@@ -2875,34 +2860,13 @@ export default function CardapioAdminPage() {
                 <label className="block text-xs font-bold text-text-secondary">
                   Praça de Produção (Onde preparar)
                 </label>
-                <Select 
-                  value={newSubStation} 
-                  onChange={e => {
-                    const val = e.target.value as RecipeProductionStation;
-                    setNewSubStation(val);
-                    if (val === 'none') setNewSubKind('none');
-                  }}
-                >
-                  {PRODUCTION_STATIONS.map(opt => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </Select>
+                <Select aria-label="Preparo na cozinha (opcional)" value={newSubComponent} onChange={e => { setNewSubComponent(e.target.value); setNewSubStation('none'); setNewSubKind('none'); }}>
+<option value="">Não exibir nas estações</option>
+{kitchenComponents.filter(c => c.isActive && c.station !== 'none').map(c => <option key={c.id} value={c.id}>{c.name} — {stationLabel(c.station)}</option>)}
+</Select>
               </div>
 
-              <div className="space-y-1.5">
-                <label className="block text-xs font-bold text-text-secondary">
-                  Regra de Contagem KDS
-                </label>
-                <Select 
-                  value={newSubKind} 
-                  onChange={e => setNewSubKind(e.target.value as RecipeProductionKind)}
-                  disabled={newSubStation === 'none'}
-                >
-                  {PRODUCTION_KINDS.map(opt => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </Select>
-              </div>
+
             </div>
 
             <div className="space-y-1.5">

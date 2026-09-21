@@ -143,7 +143,7 @@ const mockInventory = [
   { id: 'inv-patty-90', name: 'Hambúrguer Bovino Smash 90g', category: 'Carnes', unit: 'un', station: 'chapa', portionWeight: 90, portionUnit: 'g', kitchenComponentId: 'cmp-bovino-90' },
   { id: 'inv-frango', kitchenComponentId: 'cmp-frango-emp', name: 'Filé de Frango Empanado', category: 'Carnes', unit: 'un', station: 'fritadeira_frango' },
   { id: 'inv-queijo-emp', kitchenComponentId: 'cmp-queijo-emp', name: 'Queijo Minas Empanado', category: 'Laticínios', unit: 'un', station: 'fritadeira_queijo' },
-  { id: 'inv-ovo', name: 'Ovo', category: 'Laticínios', unit: 'un', station: 'chapa' },
+  { id: 'inv-ovo', kitchenComponentId: 'cmp-ovo', name: 'Ovo', category: 'Laticínios', unit: 'un', station: 'chapa' },
   { id: 'inv-bacon', name: 'Bacon Fatiado', category: 'Carnes', unit: 'kg', station: 'chapa' },
   { id: 'inv-batata', name: 'Batata Palito Congelada', category: 'Porções', unit: 'kg', station: 'fritadeira_batata' },
   { id: 'inv-onion', name: 'Anéis de Cebola', category: 'Porções', unit: 'kg', station: 'fritadeira_onion' },
@@ -401,7 +401,7 @@ test('6. Frango, queijo empanado e batata -> Cada tipo separado na fritadeira co
   assert.match(text, /1x Frango empanado/);
   assert.match(text, /1x Queijo empanado/);
   assert.match(text, /1x Batata pequena/);
-  assert.match(text, /CHAPA: SEM CARNES/);
+  assert.doesNotMatch(text, /CHAPA: SEM CARNES/);
 });
 
 test('7. Mesmo produto com pontos diferentes -> Blocos separados e resumo somado coerente', () => {
@@ -798,4 +798,17 @@ test('Estações: herança, exceção, sem preparo e impressão de estação per
   const moved = comps.map(c => c.id === 'forno' ? { ...c, station: 'assembly' } : c);
   assert.equal(buildSaleItemKitchenSnapshot(item, [product], inv, moved).components[0].station, 'assembly');
   assert.equal(snapshot.components[0].station, 'Forno de pizzas');
+});
+
+
+test('Itens sem configuração não geram estação nem revisão, independentemente do nome', () => {
+  const inventory = ['Hambúrguer bovino', 'Batata', 'Ovo', 'Pão', 'Molho', 'Gás'].map((name, index) => ({ id: String(index), name, unit: 'un' }));
+  const product = { id: 'optional', name: 'Lanche', category: 'lanche', recipe: inventory.map(i => ({ ingredientId: i.id, quantity: 1 })) };
+  const snap = buildSaleItemKitchenSnapshot({ productId: product.id, productName: product.name, quantity: 1 }, [product], inventory);
+  assert.deepEqual(snap.components, []);
+  assert.deepEqual(snap.pendingReview, []);
+  const selected = inventory.map((i, index) => index === 0 ? { ...i, kitchenComponentId: 'cmp-costela-180' } : i);
+  const configured = buildSaleItemKitchenSnapshot({ productId: product.id, productName: product.name, quantity: 1 }, [product], selected);
+  assert.equal(configured.components.length, 1);
+  assert.equal(configured.components[0].componentId, 'cmp-costela-180');
 });

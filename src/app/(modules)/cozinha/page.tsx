@@ -758,8 +758,8 @@ export default function CozinhaKDSPage() {
         burgersBreakdown: structuredReqs.chapa.burgersBreakdown,
         otherItems: structuredReqs.chapa.otherItems,
         status: structuredReqs.chapa.status,
-        totalEggs,
-        burgerList: Object.entries(burgerCounts).map(([name, qty]) => `${qty}x ${name}`),
+        totalEggs: structuredReqs.chapa.otherItems.filter(i => i.componentId === 'cmp-ovo').reduce((sum, i) => sum + i.count, 0),
+        burgerList: structuredReqs.chapa.burgersBreakdown.map(i => i.label),
         points: Object.entries(meatPointsMap).map(([pt, qty]) => `${qty}x ${pt}`)
       },
       fritadeira: {
@@ -1383,6 +1383,7 @@ export default function CozinhaKDSPage() {
               {/* PAINEL DUPLO DE ESTAÇÕES: CHAPA & FRITADEIRA EM TEMPO REAL */}
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {/* ESTAÇÃO 1: CHAPA / GRELHA */}
+                {(kitchenStationsSummary.chapa.totalPatties > 0 || kitchenStationsSummary.chapa.otherItems.length > 0) && (
                 <div className="p-4 md:p-5 rounded-3xl bg-gradient-to-br from-amber-500/20 via-orange-950/30 to-slate-900/90 border-2 border-amber-500/50 shadow-2xl flex flex-col justify-between gap-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3.5">
@@ -1458,9 +1459,10 @@ export default function CozinhaKDSPage() {
                       ? kitchenStationsSummary.chapa.burgerList.join(' • ')
                       : 'Nenhum hambúrguer bovino ativo'}
                   </div>
-                </div>
+                </div>)}
 
                 {/* ESTAÇÃO 2: FRITADEIRA (BATATAS, ONIONS & EMPANADOS) */}
+                {kitchenStationsSummary.fritadeira.itemsBreakdown.length > 0 && (
                 <div className="p-4 md:p-5 rounded-3xl bg-gradient-to-br from-yellow-500/15 via-amber-950/20 to-slate-900/90 border-2 border-yellow-500/40 shadow-2xl flex flex-col justify-between gap-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3.5">
@@ -1477,9 +1479,9 @@ export default function CozinhaKDSPage() {
                           </span>
                         </div>
                         <div className="text-2xl md:text-3xl font-black text-white flex items-baseline gap-2 mt-0.5">
-                          <span>{kitchenStationsSummary.fritadeira.totalBatatas + kitchenStationsSummary.fritadeira.totalOnions}</span>
+                          <span>{kitchenStationsSummary.fritadeira.totalPreparos}</span>
                           <span className="text-sm md:text-base font-bold text-yellow-300 uppercase tracking-normal">
-                            Porções p/ Fritar
+                            Preparos p/ Fritar
                           </span>
                         </div>
                       </div>
@@ -1488,29 +1490,6 @@ export default function CozinhaKDSPage() {
                       <span className="text-[10px] font-bold text-slate-400 block uppercase">
                         Combos + Avulsas
                       </span>
-                    </div>
-                  </div>
-
-                  {/* Linha de Totais de Batatas e Anéis */}
-                  <div className="grid grid-cols-2 gap-2 text-xs">
-                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-yellow-500/20">
-                      <div className="font-extrabold text-white flex items-center justify-between">
-                        <span>🍟 Batatas:</span>
-                        <span className="text-yellow-400 text-sm font-black">{kitchenStationsSummary.fritadeira.totalBatatas}</span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        {kitchenStationsSummary.fritadeira.batatasComboCount}x combo • {kitchenStationsSummary.fritadeira.totalBatatas - kitchenStationsSummary.fritadeira.batatasComboCount}x avulsas
-                      </p>
-                    </div>
-
-                    <div className="bg-slate-950/70 p-2.5 rounded-xl border border-yellow-500/20">
-                      <div className="font-extrabold text-white flex items-center justify-between">
-                        <span>🧅 Onions:</span>
-                        <span className="text-yellow-400 text-sm font-black">{kitchenStationsSummary.fritadeira.totalOnions}</span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 mt-0.5">
-                        {kitchenStationsSummary.fritadeira.onionsComboCount}x combo • {kitchenStationsSummary.fritadeira.onionsAvulsasCount}x avulsas
-                      </p>
                     </div>
                   </div>
 
@@ -1529,26 +1508,7 @@ export default function CozinhaKDSPage() {
                   )}
 
                   {/* Empanados de Frango e Queijo em Destaque */}
-                  {(kitchenStationsSummary.fritadeira.totalChickenBreaded > 0 || kitchenStationsSummary.fritadeira.totalCheeseBreaded > 0) ? (
-                    <div className="flex items-center gap-2 flex-wrap bg-amber-500/15 border border-amber-500/40 p-2 rounded-xl text-xs font-black text-amber-200">
-                      <span className="text-amber-400 uppercase tracking-wider">🍗 Fritar Empanados:</span>
-                      {kitchenStationsSummary.fritadeira.totalChickenBreaded > 0 && (
-                        <span className="px-2 py-0.5 bg-orange-600 text-white rounded-lg font-black">
-                          {kitchenStationsSummary.fritadeira.totalChickenBreaded}x Frango Empanado
-                        </span>
-                      )}
-                      {kitchenStationsSummary.fritadeira.totalCheeseBreaded > 0 && (
-                        <span className="px-2 py-0.5 bg-amber-600 text-white rounded-lg font-black">
-                          {kitchenStationsSummary.fritadeira.totalCheeseBreaded}x Queijo Empanado
-                        </span>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="text-[11px] text-slate-500 italic bg-slate-950/40 p-1.5 rounded-xl text-center">
-                      Nenhum empanado de frango ou queijo pendente na fritadeira
-                    </div>
-                  )}
-                </div>
+                </div>)}
               </div>
 
               {Object.entries(kitchenStationsSummary.structured.otherStations).map(([station, entries]) => <section key={station} className="rounded-xl border border-slate-700 bg-slate-900 p-4 mb-4"><h3 className="font-bold">{({ oven: 'Forno', cold: 'Preparo frio', assembly: 'Montagem', other: 'Outros' } as Record<string, string>)[station] || station}</h3>{entries.map((entry, idx) => <p key={idx}>{entry.label}</p>)}</section>)}

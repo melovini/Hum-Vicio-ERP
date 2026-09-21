@@ -221,14 +221,6 @@ export function validateProductIntegrity(
       continue;
     }
 
-    if (!r.productionStation) {
-      warnings.push({
-        code: 'MISSING_PRODUCTION_CLASSIFICATION',
-        message: `Escolha onde "${inv.name}" será preparado.`,
-        severity: 'danger'
-      });
-    }
-
     const normUnit = normalizeProductionString(inv.unit);
     // Se a unidade for kg mas a quantidade for >= 10 (ex: operador colocou 180 em vez de 0.180 kg)
     if ((normUnit === 'kg' || normUnit === 'kilo') && r.quantity >= 10) {

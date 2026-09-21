@@ -1680,13 +1680,14 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     try {
       let data: any = null;
       let error: any = null;
-      const finalStation = item.station || getDefaultStationForIngredient(item.name);
+      const finalStation = item.station || 'nenhuma';
 
       try {
         const res = await supabase.from('inventory').insert({
           name: item.name, category: item.category, unit: item.unit, 
           cost_per_unit: item.costPerUnit, current_stock: item.currentStock, status: item.status,
-          min_stock: item.minStock
+          min_stock: item.minStock,
+          ...('kitchenComponentId' in item ? { kitchen_component_id: item.kitchenComponentId || null } : {})
         }).select().single();
         data = res.data;
         error = res.error;
@@ -1726,6 +1727,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   
   const updateInventoryItem = async (id: string, updates: Partial<InventoryItem>) => {
     const dbUpdates: any = {};
+    if ('kitchenComponentId' in updates) dbUpdates.kitchen_component_id = updates.kitchenComponentId || null;
     if (updates.name !== undefined) dbUpdates.name = updates.name;
     if (updates.category !== undefined) dbUpdates.category = updates.category;
     if (updates.unit !== undefined) dbUpdates.unit = updates.unit;
@@ -1749,18 +1751,8 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       portionUnit: updates.portionUnit,
     });
 
-    try {
-      await supabase.from('inventory').update(dbUpdates).eq('id', id);
-    } catch {
-      // Fallback sem station ou min_stock caso coluna não exista no Postgres
-      delete dbUpdates.station;
-      delete dbUpdates.min_stock;
-      try {
-        await supabase.from('inventory').update(dbUpdates).eq('id', id);
-      } catch (err) {
-        console.warn('Erro ao atualizar insumo no Supabase:', err);
-      }
-    }
+    const { error } = await supabase.from('inventory').update(dbUpdates).eq('id', id);
+    if (error) throw new Error('Não foi possível salvar o insumo. Confira a conexão e a atualização do banco.');
     setItems(items.map(i => i.id === id ? { ...i, ...updates } : i));
   };
 

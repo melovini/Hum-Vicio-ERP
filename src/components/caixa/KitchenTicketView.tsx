@@ -191,7 +191,7 @@ export default function KitchenTicketView({ ticket, showMontagem = false }: Kitc
           {productionSummary.chapa.status === 'a_conferir' ? (
             <p className="font-black uppercase">CHAPA: QUANTIDADE A CONFERIR</p>
           ) : productionSummary.chapa.status === 'sem_carnes' ? (
-            <p className="font-black uppercase">CHAPA: SEM CARNES</p>
+            null
           ) : (
             <>
               <p className="font-black uppercase">
@@ -222,7 +222,7 @@ export default function KitchenTicketView({ ticket, showMontagem = false }: Kitc
           {productionSummary.fritadeira.status === 'a_conferir' ? (
             <p className="font-black uppercase">FRITADEIRA: QUANTIDADE A CONFERIR</p>
           ) : productionSummary.fritadeira.status === 'sem_itens' ? (
-            <p className="font-black uppercase">FRITADEIRA: SEM ITENS</p>
+            null
           ) : (
             <>
               <p className="font-black uppercase">

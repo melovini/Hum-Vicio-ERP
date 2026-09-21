@@ -207,7 +207,8 @@ export function resolveKitchenComponentForRecipeLine(
   }
 
   // 3. Se explicitamente marcado como 'none' (não vai à cozinha, ex: embalagens, gás)
-  const station = recipeItem.productionStation || inventoryItem?.productionStation || inventoryItem?.station;
+  const station = inventoryItem?.productionStation ?? recipeItem.productionStation;
+  if (!station) return { needsConfiguration: false, isNonKitchen: true };
   if (station === 'none' || station === 'nenhuma') {
     return { component: undefined, needsConfiguration: false, isNonKitchen: true };
   }
@@ -215,7 +216,6 @@ export function resolveKitchenComponentForRecipeLine(
   // Legacy recipes retain ingredient identity instead of selecting the first burger
   // with the same weight. Explicit links always take precedence.
   if (inventoryItem) {
-    const type = inferComponentType(inventoryItem.name, '');
     const kind = recipeItem.productionKind || inventoryItem.productionKind;
     const types: Record<string, [KitchenComponentType, RecipeProductionStation]> = {
       carne_bovina: ['burger', 'grill'], ovo: ['egg', 'grill'],
@@ -225,15 +225,12 @@ export function resolveKitchenComponentForRecipeLine(
       breaded_chicken: ['protein', 'fryer'], breaded_cheese: ['side', 'fryer'],
       fries: ['side', 'fryer'], onion_rings: ['side', 'fryer'],
     };
-    const resolved = types[kind || type];
-    if (!resolved && ['pao', 'laticinio', 'molho', 'hortifruti', 'nao_alimentar', 'bacon'].includes(type)) {
-      return { needsConfiguration: false, isNonKitchen: true };
-    }
+    const resolved = types[kind || ''] || ['other', station] as [KitchenComponentType, RecipeProductionStation];
     if (resolved) {
       const portion = inferPortionWeightFromInventory(inventoryItem);
       return { needsConfiguration: false, isNonKitchen: false, component: {
         id: `ingredient:${inventoryItem.id}`, name: inventoryItem.name,
-        componentType: resolved[0], station: resolved[1],
+        componentType: resolved[0], station,
         productionUnit: resolved[0] === 'burger' ? 'disco' : 'unidade',
         portionWeight: portion?.weight, portionUnit: portion?.unit,
         showInSummary: true, isActive: true,

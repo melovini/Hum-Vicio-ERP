@@ -84,7 +84,7 @@ test('Validador: Reconhece lanche duplo coerente (2 carnes e nome duplo)', () =>
   assert.equal(res.warnings.some(w => w.code === 'NAME_DUPLO_MISMATCH'), false);
 });
 
-test('Validador: exige classificação de produção ao revisar receitas legadas', () => {
+test('Validador: permite salvar receita sem estação opcional', () => {
   const res = validateProductIntegrity({
     name: 'Brasil Francês',
     category: 'lanche',
@@ -93,8 +93,8 @@ test('Validador: exige classificação de produção ao revisar receitas legadas
     recipe: [{ ingredientId: 'inv-pao', quantity: 1 }]
   }, mockInventory);
 
-  assert.equal(res.isValid, false);
-  assert.ok(res.warnings.some(w => w.code === 'MISSING_PRODUCTION_CLASSIFICATION'));
+  assert.equal(res.isValid, true);
+  assert.equal(res.warnings.some(w => w.code === 'MISSING_PRODUCTION_CLASSIFICATION'), false);
 });
 
 test('Validador: Detecta ausência de proteína principal em lanche', () => {

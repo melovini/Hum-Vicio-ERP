@@ -53,7 +53,7 @@ const stationLabels: Record<KitchenStation, { label: string; icon: string }> = {
 };
 
 export default function GestaoInsumosPage() {
-  const { items, addInventoryItem, updateInventoryItem, removeInventoryItem, isLoaded } = useInventory();
+  const { items, kitchenComponents, addInventoryItem, updateInventoryItem, removeInventoryItem, isLoaded } = useInventory();
   const { notify } = useToast();
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -80,6 +80,7 @@ export default function GestaoInsumosPage() {
   const [stock, setStock] = useState('');
   const [minStock, setMinStock] = useState('');
   const [station, setStation] = useState<KitchenStation>('nenhuma');
+  const [kitchenComponentId, setKitchenComponentId] = useState('');
   const [productionStation, setProductionStation] = useState<RecipeProductionStation>('none');
   const [productionKind, setProductionKind] = useState<RecipeProductionKind>('none');
   const [portionWeight, setPortionWeight] = useState('');
@@ -109,6 +110,7 @@ export default function GestaoInsumosPage() {
     setStock('');
     setMinStock('');
     setStation('nenhuma');
+    setKitchenComponentId('');
     setProductionStation('none');
     setProductionKind('none');
     setPortionWeight('');
@@ -125,6 +127,7 @@ export default function GestaoInsumosPage() {
     setStock(item.currentStock.toString());
     setMinStock(item.minStock !== undefined ? item.minStock.toString() : '');
     setStation(item.station || 'nenhuma');
+    setKitchenComponentId(item.kitchenComponentId === 'cmp-no-prep' ? '' : item.kitchenComponentId || '');
     setProductionStation(item.productionStation || 'none');
     setProductionKind(item.productionKind || 'none');
     setPortionWeight(item.portionWeight !== undefined && item.portionWeight !== null ? item.portionWeight.toString() : '');
@@ -155,6 +158,7 @@ export default function GestaoInsumosPage() {
           currentStock: stockNum,
           minStock: minStockNum,
           station,
+          kitchenComponentId: kitchenComponentId || 'cmp-no-prep',
           productionStation,
           productionKind: productionStation === 'none' ? 'none' : productionKind,
           portionWeight: portionWeightNum,
@@ -175,6 +179,7 @@ export default function GestaoInsumosPage() {
           status: 'ok',
           minStock: minStockNum,
           station,
+          kitchenComponentId: kitchenComponentId || 'cmp-no-prep',
           productionStation,
           productionKind: productionStation === 'none' ? 'none' : productionKind,
           portionWeight: portionWeightNum,
@@ -546,51 +551,17 @@ export default function GestaoInsumosPage() {
                 />
               </FormField>
 
-              <FormField label="Onde preparar (Praça de Produção)">
-                <Select
-                  value={productionStation}
-                  onChange={(e) => {
-                    const val = e.target.value as RecipeProductionStation;
-                    setProductionStation(val);
-                    if (val === 'none') setProductionKind('none');
-                    if (val === 'grill') setStation('chapa');
-                    else if (val === 'none') setStation('nenhuma');
-                    else if (val === 'fryer') {
-                      if (productionKind === 'breaded_chicken') setStation('fritadeira_frango');
-                      else if (productionKind === 'breaded_cheese') setStation('fritadeira_queijo');
-                      else if (productionKind === 'onion_rings') setStation('fritadeira_onion');
-                      else setStation('fritadeira_batata');
-                    }
-                  }}
-                >
-                  {PRODUCTION_STATIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
+              <FormField label="Preparo na cozinha (opcional)">
+                <Select value={kitchenComponentId} onChange={e => { setKitchenComponentId(e.target.value); setProductionStation('none'); setProductionKind('none'); setStation('nenhuma'); }}>
+                  <option value="">Não exibir nas estações</option>
+                  {kitchenComponents.filter(c => c.isActive && c.station !== 'none').map(c => <option key={c.id} value={c.id}>{c.name} — {c.station === 'grill' ? 'Chapa' : c.station === 'fryer' ? 'Fritadeira' : c.station}</option>)}
                 </Select>
+
               </FormField>
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <FormField label="O que contar no KDS">
-                <Select
-                  value={productionKind}
-                  disabled={productionStation === 'none'}
-                  onChange={(e) => {
-                    const val = e.target.value as RecipeProductionKind;
-                    setProductionKind(val);
-                    if (productionStation === 'fryer') {
-                      if (val === 'breaded_chicken') setStation('fritadeira_frango');
-                      else if (val === 'breaded_cheese') setStation('fritadeira_queijo');
-                      else if (val === 'onion_rings') setStation('fritadeira_onion');
-                      else setStation('fritadeira_batata');
-                    }
-                  }}
-                >
-                  {PRODUCTION_KINDS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>{opt.label}</option>
-                  ))}
-                </Select>
-              </FormField>
+
 
               <FormField label={`Porção padrão ao vincular (${unit})`}>
                 <Input

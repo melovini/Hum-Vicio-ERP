@@ -467,7 +467,7 @@ export function formatKitchenTicketEscPos(ticket: KitchenTicketData): string {
   if (productionSummary.chapa.status === 'a_conferir') {
     out += 'CHAPA: QUANTIDADE A CONFERIR\n';
   } else if (productionSummary.chapa.status === 'sem_carnes') {
-    out += 'CHAPA: SEM CARNES\n';
+    // Sem componentes selecionados: não imprimir estação vazia.
   } else {
     out += `CHAPA — ${productionSummary.chapa.pattiesLabel}\n`;
     for (const p of productionSummary.chapa.pattiesBreakdown) {
@@ -488,7 +488,7 @@ export function formatKitchenTicketEscPos(ticket: KitchenTicketData): string {
   if (productionSummary.fritadeira.status === 'a_conferir') {
     out += 'FRITADEIRA: QUANTIDADE A CONFERIR\n';
   } else if (productionSummary.fritadeira.status === 'sem_itens') {
-    out += 'FRITADEIRA: SEM ITENS\n';
+    // Sem componentes selecionados: não imprimir estação vazia.
   } else {
     out += 'FRITADEIRA\n';
     for (const f of productionSummary.fritadeira.items) {
