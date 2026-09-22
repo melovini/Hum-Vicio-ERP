@@ -31,7 +31,7 @@ import {
 } from './store/cash-operations';
 import { inferDefaultSubcategory } from './recipe-helpers';
 import { getFallbackSubcategoryForCategory } from './subcategory-store';
-import { calculateItemProduction } from './production-calculator';
+import { prepareCheckoutItems } from './checkout-production';
 import { getActiveCentralConfig, publishCentralConfig } from './central-config';
 
 // === DOMÍNIO MODULARIZADO (Frente 5.1 - Separação de Responsabilidades) ===
@@ -2709,14 +2709,7 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
 
   const addSale = async (rawSale: Omit<Sale, 'id' | 'date' | 'status'>) => {
     // Normalizar observações e gerar snapshot determinístico de produção (Etapa 4 - Composição Confirmada)
-    const normalizedItems = (rawSale.items || []).map(i => {
-      const snapshot = i.productionSnapshot || calculateItemProduction(i, products, items);
-      return {
-        ...i,
-        productionSnapshot: snapshot,
-        notes: i.notes?.trim() ? i.notes.trim().toUpperCase() : undefined
-      };
-    });
+    const normalizedItems = prepareCheckoutItems(rawSale.items || [], products, items, kitchenComponents);
     const sale = { ...rawSale, items: normalizedItems };
 
     // Por padrão operacional da hamburgueria, pedidos entram em espera para montagem de rotas de entrega

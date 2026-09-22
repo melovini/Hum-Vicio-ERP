@@ -812,3 +812,24 @@ test('Itens sem configuração não geram estação nem revisão, independenteme
   assert.equal(configured.components.length, 1);
   assert.equal(configured.components[0].componentId, 'cmp-costela-180');
 });
+
+
+test('Impressão imediata do checkout recebe composição estruturada, mesmo com carrinho antigo', () => {
+  const { prepareCheckoutItems } = createLoader()('src/lib/checkout-production.ts');
+  const product = { id: 'p-print', name: 'Argentina', category: 'lanche', recipe: [{ ingredientId: 'costela-print', quantity: 1 }] };
+  const inventory = [{ id: 'costela-print', name: 'Bovino recheado de costela', unit: 'un', kitchenComponentId: 'cmp-costela-180' }];
+  const cartItem = { productId: product.id, productName: product.name, quantity: 2, unitPrice: 30, notes: ' sem sal ', productionSnapshot: { chapaPatties: 99 } };
+  const items = prepareCheckoutItems([cartItem], [product], inventory, DEFAULT_KITCHEN_COMPONENTS);
+  const ticket = buildKitchenTicket({ sale: makeBaseSale(items), products: [product], inventoryItems: inventory, kitchenComponents: DEFAULT_KITCHEN_COMPONENTS });
+  assert.equal(items[0].productionSnapshot.structuredProduction.version, 3);
+  assert.equal(items[0].notes, 'SEM SAL');
+  assert.equal(ticket.productionSummary.chapa.totalPatties, 2);
+  assert.equal(ticket.productionSummary.chapa.status, 'ok');
+  assert.equal(ticket.productionSummary.isComplete, true);
+  assert.match(formatKitchenTicketEscPos(ticket), /2x Costela/);
+  assert.doesNotMatch(formatKitchenTicketEscPos(ticket), /A CONFERIR/);
+  assert.equal(cartItem.productionSnapshot.chapaPatties, 99);
+  const replay = JSON.parse(JSON.stringify(items));
+  const reprint = buildKitchenTicket({ sale: makeBaseSale(replay), products: [], inventoryItems: [], kitchenComponents: [] });
+  assert.equal(reprint.productionSummary.chapa.totalPatties, 2);
+});
