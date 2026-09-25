@@ -222,6 +222,7 @@ export interface Sale {
   channel: 'balcao' | 'ifood';
   subtotal?: number;
   discount?: number;
+  discountReason?: string;
   deliveryFee?: number;
   storeCouponSubsidy?: number;
   total: number;

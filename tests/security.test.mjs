@@ -238,7 +238,8 @@ test('checkout transacional valida permissões, integridade matemática e idempo
       return {
         select() { return this; },
         eq() { return this; },
-        in() { return this; },
+        in() { return Promise.resolve({ data: [{ id: 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', name: 'Brasil Burger', price_balcao: 50 }] }); },
+        async maybeSingle() { return { data: null }; },
         async single() {
           return {
             data: table === 'app_sessions' ? fixture.state.session : fixture.state.person,
@@ -267,11 +268,12 @@ test('checkout transacional valida permissões, integridade matemática e idempo
     channel: 'balcao',
     subtotal: 50,
     discount: 5,
+    discountReason: 'Compensação pelo atraso',
     deliveryFee: 0,
     total: 45,
     paymentMethod: 'pix',
     items: [
-      { productId: 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', productName: 'Brasil Burger', quantity: 1, unitPrice: 45 }
+      { productId: 'b0eebc99-9c0b-4ef8-bb6d-6bb9bd380a22', productName: 'Brasil Burger', quantity: 1, unitPrice: 50 }
     ]
   };
 
@@ -687,4 +689,34 @@ test('backup e restauração preservam integridade relacional, financeira e cred
   const orphanReport = verifySnapshotIntegrity(orphanSnapshot);
   assert.equal(orphanReport.valid, false);
   assert.ok(orphanReport.issues.some(i => i.includes('referencia venda inexistente')));
+});
+
+
+test('Rotas genéricas não podem criar vendas, movimentos ou turnos', () => {
+  for (const role of ['admin', 'gerente', 'caixa']) for (const table of ['sales', 'cash_sessions', 'cash_movements']) {
+    assert.equal(canAccessData(role, table, 'POST', [{ total: 1 }]), false);
+  }
+  assert.equal(canAccessData('caixa', 'cash_sessions', 'PATCH', [{ status: 'closed' }]), false);
+});
+
+test('Cozinha recebe preparo sem preços, custos ou informações financeiras', async () => {
+  const { sanitizeKitchenRows } = await import('../src/lib/security/data-policy.mjs');
+  const row = { id: 'item', product_name: 'Lanche', quantity: 2, unit_price: 35, additionals: [{ id: 'ovo', name: 'Ovo', quantity: 1, price: 5 }], production_snapshot: { cost: 10, structuredProduction: { version: 3, components: [] } } };
+  const result = sanitizeKitchenRows('cozinha', 'sale_items', [row])[0];
+  assert.equal(result.unit_price, undefined);
+  assert.equal(result.additionals[0].price, undefined);
+  assert.equal(result.production_snapshot.cost, undefined);
+  assert.equal(result.quantity, 2);
+  assert.equal(sanitizeKitchenRows('admin', 'sale_items', [row])[0].unit_price, 35);
+});
+
+test('Preço de catálogo, subtotal, desconto e brinde são conferidos no servidor', () => {
+  const { validateCheckoutPricing } = createLoader()('src/lib/checkout-pricing.ts');
+  const catalog = [{ id: 'p', price_balcao: 30 }, { id: 'combo', category: 'combo', price_balcao: 10 }, { id: 'egg', price_balcao: 3 }];
+  const sale = { channel: 'balcao', subtotal: 92, total: 87, discount: 5, discountReason: 'Atraso', items: [{ productId: 'p', quantity: 2, unitPrice: 46, comboId: 'combo', additionals: [{ id: 'egg', quantity: 2 }] }] };
+  assert.doesNotThrow(() => validateCheckoutPricing(sale, catalog));
+  assert.throws(() => validateCheckoutPricing({ ...sale, items: [{ ...sale.items[0], unitPrice: 1 }] }, catalog), /preço/);
+  assert.throws(() => validateCheckoutPricing({ ...sale, subtotal: 100 }, catalog), /subtotal/);
+  assert.throws(() => validateCheckoutPricing({ ...sale, discountReason: '' }, catalog), /justificativa/);
+  assert.throws(() => validateCheckoutPricing({ ...sale, items: [{ ...sale.items[0], isGift: true, unitPrice: 0 }] }, catalog), /motivo/);
 });

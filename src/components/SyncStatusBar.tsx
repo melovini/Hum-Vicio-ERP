@@ -17,7 +17,8 @@ export default function SyncStatusBar({ className = '', compact = false }: SyncS
     lastServerSync, 
     offlineQueueCount, 
     offlineSalesList, 
-    syncOfflineQueueNow, 
+    syncOfflineQueueNow,
+    retryOfflineSale,
     checkServerHealth 
   } = useInventory();
 
@@ -263,6 +264,12 @@ export default function SyncStatusBar({ className = '', compact = false }: SyncS
                           <span className="font-mono font-bold text-emerald-400">
                             R$ {sale.total.toFixed(2)}
                           </span>
+                          {sale.syncStatus === 'failed' && <button type="button" disabled={isSyncing} className="underline text-blue-300" onClick={async () => {
+                            setIsSyncing(true);
+                            try { const result = await retryOfflineSale(sale.id); setSyncFeedback(result.errorsCount ? 'O pedido continua pendente. Confira o motivo apresentado.' : 'Tentativa concluída. Confira a fila de pedidos.'); }
+                            catch { setSyncFeedback('Não foi possível reenviar. O pedido permanece na fila.'); }
+                            finally { setIsSyncing(false); }
+                          }}>Tentar novamente</button>}
                           {sale.syncError ? (
                             <span className="px-2 py-0.5 bg-rose-500/20 text-rose-300 border border-rose-500/40 rounded text-[10px] font-bold" title={sale.syncError}>
                               ❌ Falha: {sale.syncError || 'Erro'}

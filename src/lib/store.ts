@@ -302,6 +302,7 @@ export function saveOfflineSalesQueue(queue: Sale[]): void {
     localStorage.setItem(STORAGE_OFFLINE_SALES_KEY, JSON.stringify(queue));
   } catch (err) {
     console.error('Erro ao salvar fila offline:', err);
+    throw new Error('Não foi possível salvar o pedido neste aparelho. Libere espaço ou use outro terminal; o pedido não foi confirmado.');
   }
 }
 
@@ -327,7 +328,16 @@ export function removeOfflineSaleFromQueue(saleId: string): void {
 }
 
 // Drena e sincroniza as vendas offline para o Supabase quando a conexão estiver restabelecida
-export async function syncOfflineSalesQueue(supabaseClient?: any): Promise<{ syncedCount: number; errorsCount: number }> {
+let activeQueueSync: Promise<{ syncedCount: number; errorsCount: number }> | null = null;
+export function syncOfflineSalesQueue(supabaseClient?: any): Promise<{ syncedCount: number; errorsCount: number }> {
+  if (activeQueueSync) return activeQueueSync;
+  const run = () => drainOfflineSalesQueue(supabaseClient);
+  const pending = (async () => typeof navigator !== 'undefined' && navigator.locks
+    ? await navigator.locks.request('hum-vicio-sales-sync', run) : await run())();
+  activeQueueSync = pending.finally(() => { activeQueueSync = null; });
+  return activeQueueSync;
+}
+async function drainOfflineSalesQueue(supabaseClient?: any): Promise<{ syncedCount: number; errorsCount: number }> {
   const queue = getOfflineSalesQueue();
   if (!Array.isArray(queue) || queue.length === 0) return { syncedCount: 0, errorsCount: 0 };
 
@@ -629,7 +639,7 @@ export async function executeParallelLoadData(
           supabaseClient.from('products').select('*').catch(() => ({ data: null })),
           supabaseClient.from('recipes').select('*').catch(() => ({ data: null })),
           supabaseClient.from('sales').select('*').is('deleted_at', null).order('created_at', { ascending: false }).limit(80).catch(() => ({ data: null })),
-          supabaseClient.from('sale_items').select('*').not('sale_id', 'is', null).catch(() => ({ data: null })),
+          Promise.resolve({ data: [] }),
           supabaseClient.from('kitchen_checklists').select('*').order('date', { ascending: false }).catch(() => ({ data: null })),
           supabaseClient.from('kitchen_components').select('*').order('name', { ascending: true }).catch(() => ({ data: null }))
         ]);
@@ -639,7 +649,8 @@ export async function executeParallelLoadData(
         prodData = prodRes?.data;
         recData = recRes?.data;
         salesData = salesRes?.data;
-        saleItemsData = saleItemsRes?.data;
+        const visibleSaleIds = (salesRes?.data || []).map((sale: any) => sale.id);
+        saleItemsData = visibleSaleIds.length ? (await supabaseClient.from('sale_items').select('*').in('sale_id', visibleSaleIds)).data : [];
         allChecks = checksRes?.data;
         compsData = compsRes?.data;
       }
@@ -2761,6 +2772,13 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       return trainingSale;
     }
 
+    enqueueOfflineSale({
+      ...sale, id: clientGeneratedId, idempotencyKey,
+      date: new Date().toISOString(), status: 'completed',
+      paymentStatus, creditStatus, productionStatus: initialProductionStatus,
+      productionStartedAt: initialProductionStarted, targetPrepMinutes: initialTargetPrep,
+    });
+
     let sData: any = null;
     let checkoutError: string | undefined;
     let checkoutResponded = false;
@@ -2928,12 +2946,16 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
 
     // Se salvou offline (banco de dados caiu ou não respondeu em 3.5s), adiciona na fila outbox
     if (isOffline) {
-      enqueueOfflineSale(newSaleLocal);
+      updateOfflineSaleInQueue(newSaleLocal.id, newSaleLocal);
       const q = getOfflineSalesQueue();
       setOfflineQueueCount(q.length);
       setOfflineSalesList(q);
       setConnectionStatus(checkoutResponded ? 'connected' : typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'server_unreachable');
     } else {
+      try { removeOfflineSaleFromQueue(clientGeneratedId); } catch (error) { console.warn('Pedido confirmado; limpeza da fila pendente.', error); }
+      const queue = getOfflineSalesQueue();
+      setOfflineQueueCount(queue.length);
+      setOfflineSalesList(queue);
       const nowIso = new Date().toISOString();
       setLastServerSync(nowIso);
       try { localStorage.setItem('hum_vicio_last_server_sync', nowIso); } catch {}
@@ -3887,6 +3909,10 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
     auditLogs, addAuditLog,
     fixedExpensesConfig, saveFixedExpensesConfig, settleCreditSale,
     settlePickupPayment, markPickupAsDelivered, offlineQueueCount, isOnline, syncOfflineQueueNow,
+    retryOfflineSale: async (saleId: string) => {
+      updateOfflineSaleInQueue(saleId, { syncStatus: 'pending', syncError: undefined });
+      return syncOfflineQueueNow();
+    },
     connectionStatus, lastServerSync, offlineSalesList, checkServerHealth,
     isTrainingMode, setTrainingMode: setTrainingModeActive, resetTrainingSandbox
   };

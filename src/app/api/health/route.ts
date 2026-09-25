@@ -10,7 +10,7 @@ export async function GET() {
 
     if (error) {
       return Response.json(
-        { status: 'degraded', database: 'error', error: error.message, time: timestamp },
+        { status: 'degraded', database: 'error', error: 'Serviço indisponível.', time: timestamp },
         { status: 503, headers: { 'Cache-Control': 'no-store' } }
       );
     }
@@ -21,7 +21,7 @@ export async function GET() {
     );
   } catch (err: any) {
     return Response.json(
-      { status: 'error', database: 'unreachable', error: err?.message || 'Server error', time: timestamp },
+      { status: 'error', database: 'unreachable', error: 'Serviço indisponível.', time: timestamp },
       { status: 500, headers: { 'Cache-Control': 'no-store' } }
     );
   }

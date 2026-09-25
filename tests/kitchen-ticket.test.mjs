@@ -15,7 +15,7 @@ test('Checkout recompõe no servidor mesmo quando o cliente envia uma composiç�
     kitchen_components: DEFAULT_KITCHEN_COMPONENTS.map(c => ({ id: c.id, name: c.name, component_type: c.componentType, station: c.station, production_unit: c.productionUnit, portion_weight: c.portionWeight, portion_unit: c.portionUnit })),
   };
   const db = {
-    from(table) { const result = Promise.resolve({ data: tables[table] || [] }); result.in = () => result; return { select: () => result }; },
+    from(table) { if (table === 'idempotency_keys') return { select() { return this; }, eq() { return this; }, async maybeSingle() { return { data: null }; } }; const result = Promise.resolve({ data: tables[table] || [] }); result.in = () => result; return { select: () => result }; },
     async rpc(name, args) { saved = args.p_sale; return { data: { success: true } }; },
   };
   class AccessError extends Error { constructor(status, message) { super(message); this.status = status; } }
@@ -49,7 +49,7 @@ for (const code of ['PGRST205', '42P01', '42501', '08006']) test(`Checkout trata
     kitchen_components: DEFAULT_KITCHEN_COMPONENTS.map(c => ({ id: c.id, name: c.name, component_type: c.componentType, station: c.station, production_unit: c.productionUnit, portion_weight: c.portionWeight, portion_unit: c.portionUnit })),
   };
   const db = {
-    from(table) { const result = Promise.resolve(table === 'kitchen_components' ? { error: { code, message: 'Database test failure' } } : { data: tables[table] || [] }); result.in = () => result; return { select: () => result }; },
+    from(table) { if (table === 'idempotency_keys') return { select() { return this; }, eq() { return this; }, async maybeSingle() { return { data: null }; } }; const result = Promise.resolve(table === 'kitchen_components' ? { error: { code, message: 'Database test failure' } } : { data: tables[table] || [] }); result.in = () => result; return { select: () => result }; },
     async rpc(name, args) { saved = args.p_sale; return { data: { success: true } }; },
   };
   class AccessError extends Error { constructor(status, message) { super(message); this.status = status; } }

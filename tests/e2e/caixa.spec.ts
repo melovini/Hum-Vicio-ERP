@@ -240,3 +240,15 @@ test.describe('Caixa / PDV — ergonomia, 3 zonas e acessibilidade', () => {
     await expect(page.getByRole('dialog', { name: /Navegação do Sistema & Central de Módulos/i })).toBeHidden();
   });
 });
+
+
+test('desconto apresenta justificativa obrigatória no caixa', async ({ page }) => {
+  await mockCaixaApi(page);
+  await page.goto('/caixa');
+  await page.getByRole('button', { name: /Batata Rústica Especial/i }).click();
+  await page.getByPlaceholder('Ex: 5 ou 10%').fill('5');
+  const reason = page.getByRole('textbox', { name: 'Justificativa do desconto' });
+  await expect(reason).toBeVisible();
+  await reason.fill('Compensação por atraso');
+  await expect(reason).toHaveValue('Compensação por atraso');
+});

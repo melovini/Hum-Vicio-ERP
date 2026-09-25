@@ -115,6 +115,7 @@ export default function CaixaPage() {
 
   // 3. ZONA DE RESUMO E PAGAMENTO (ZONA 3)
   const [discountInput, setDiscountInput] = useState('');
+  const [discountReason, setDiscountReason] = useState('');
   const [deliveryFeeInput, setDeliveryFeeInput] = useState('');
   const [saleMethod, setSaleMethod] = useState('dinheiro');
   const [cashReceivedInput, setCashReceivedInput] = useState('');
@@ -467,6 +468,7 @@ export default function CaixaPage() {
         cart,
         deliveryFeeInput,
         discountInput,
+        discountReason,
         saleMethod,
         hasStoreCoupon,
         storeCouponInput,
@@ -479,7 +481,7 @@ export default function CaixaPage() {
     }, 250);
 
     return () => clearTimeout(timer);
-  }, [activeDraftId, cart, customerName, saleChannel, orderType, pickupPaymentTiming, deliveryFeeInput, discountInput, saleMethod, hasStoreCoupon, storeCouponInput]);
+  }, [activeDraftId, cart, customerName, saleChannel, orderType, pickupPaymentTiming, deliveryFeeInput, discountInput, discountReason, saleMethod, hasStoreCoupon, storeCouponInput]);
 
   const handleSelectDraft = (targetId: string) => {
     if (targetId === activeDraftId) return;
@@ -496,6 +498,7 @@ export default function CaixaPage() {
       setPickupPaymentTiming(targetDraft.pickupPaymentTiming || 'imediato');
       setDeliveryFeeInput(targetDraft.deliveryFeeInput || '');
       setDiscountInput(targetDraft.discountInput || '');
+      setDiscountReason(targetDraft.discountReason || '');
       setSaleMethod(targetDraft.saleMethod || 'dinheiro');
       setHasStoreCoupon(targetDraft.hasStoreCoupon || false);
       setStoreCouponInput(targetDraft.storeCouponInput || '10.00');
@@ -514,6 +517,7 @@ export default function CaixaPage() {
     setPickupPaymentTiming('imediato');
     setDeliveryFeeInput('');
     setDiscountInput('');
+    setDiscountReason('');
     setSaleMethod('dinheiro');
     setHasStoreCoupon(false);
     setStoreCouponInput('10.00');
@@ -533,6 +537,7 @@ export default function CaixaPage() {
         cart,
         deliveryFeeInput,
         discountInput,
+        discountReason,
         saleMethod,
         hasStoreCoupon,
         storeCouponInput,
@@ -676,6 +681,7 @@ export default function CaixaPage() {
   const handleClearCart = () => {
     setCart([]);
     setDiscountInput('');
+    setDiscountReason('');
     setDeliveryFeeInput('');
     setCashReceivedInput('');
     setCreditCustomerInput('');
@@ -698,6 +704,10 @@ export default function CaixaPage() {
       return;
     }
 
+    if (discountAmount > 0 && !discountReason.trim()) {
+      notify({ title: 'Informe a justificativa do desconto antes de finalizar.', tone: 'warning' });
+      return;
+    }
     const isPickupPending = orderType === 'retirada' && pickupPaymentTiming === 'retirada' && saleChannel !== 'ifood';
     const cashChange = calculateCashChange(cashReceivedInput, cartTotal);
     if (saleMethod === 'dinheiro' && !isPickupPending && !cashChange.isEnough) {
@@ -729,6 +739,7 @@ export default function CaixaPage() {
           channel: saleChannel,
           subtotal: cartSubtotal,
           discount: discountAmount,
+          discountReason,
           deliveryFee: orderType === 'delivery' ? deliveryFeeAmount : 0,
           storeCouponSubsidy: storeCouponSubsidyAmount,
           total: cartTotal,
@@ -761,6 +772,7 @@ export default function CaixaPage() {
         channel: orderType === 'mesa' ? 'balcao' : saleChannel,
         subtotal: cartSubtotal,
         discount: discountAmount,
+          discountReason,
         deliveryFee: orderType === 'delivery' ? deliveryFeeAmount : 0,
         storeCouponSubsidy: storeCouponSubsidyAmount,
         total: cartTotal,
@@ -806,6 +818,7 @@ export default function CaixaPage() {
 
       // Limpar campos auxiliares
       setDiscountInput('');
+    setDiscountReason('');
       setDeliveryFeeInput('');
       setCashReceivedInput('');
       setFiscalCpfInput('');
@@ -831,6 +844,7 @@ export default function CaixaPage() {
             setPickupPaymentTiming(nextDraft.pickupPaymentTiming || 'imediato');
             setDeliveryFeeInput(nextDraft.deliveryFeeInput || '');
             setDiscountInput(nextDraft.discountInput || '');
+            setDiscountReason(nextDraft.discountReason || '');
             setSaleMethod(nextDraft.saleMethod || 'dinheiro');
             setHasStoreCoupon(nextDraft.hasStoreCoupon || false);
             setStoreCouponInput(nextDraft.storeCouponInput || '10.00');
@@ -1276,6 +1290,8 @@ export default function CaixaPage() {
                 <PosCheckoutZone
                   cart={cart}
                   cartSubtotal={cartSubtotal}
+                  discountReason={discountReason}
+                  onDiscountReasonChange={setDiscountReason}
                   discountInput={discountInput}
                   onDiscountInputChange={setDiscountInput}
                   discountAmount={discountAmount}

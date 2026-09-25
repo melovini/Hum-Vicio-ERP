@@ -193,3 +193,32 @@ test('Fluxo de Conclusão de Venda: último atendimento concluído reseta para A
 });
 
 
+
+
+test('Fila recusa confirmação quando o armazenamento local falha', () => {
+  const store = createLoader()('src/lib/store.ts');
+  const original = localStorage.setItem;
+  localStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+  try { assert.throws(() => store.saveOfflineSalesQueue([{ id: 'pending' }]), /Não foi possível salvar o pedido/); }
+  finally { localStorage.setItem = original; }
+});
+
+test('Sincronização compartilha tentativa em andamento e mantém rejeições para revisão', async () => {
+  const store = createLoader()('src/lib/store.ts');
+  const oldFetch = globalThis.fetch;
+  store.saveOfflineSalesQueue([{ id: 'queue-test', items: [], syncStatus: 'pending' }]);
+  let requests = 0;
+  globalThis.fetch = async () => { requests++; return Response.json({ message: 'Revise o desconto.' }, { status: 400 }); };
+  try {
+    const first = store.syncOfflineSalesQueue(); const second = store.syncOfflineSalesQueue();
+    assert.equal(first, second);
+    await first;
+    assert.equal(requests, 1);
+    assert.equal(store.getOfflineSalesQueue()[0].syncStatus, 'failed');
+    assert.equal(store.getOfflineSalesQueue()[0].syncError, 'Revise o desconto.');
+    store.updateOfflineSaleInQueue('queue-test', { syncStatus: 'pending' });
+    globalThis.fetch = async () => Response.json({ success: true });
+    await store.syncOfflineSalesQueue();
+    assert.deepEqual(store.getOfflineSalesQueue(), []);
+  } finally { globalThis.fetch = oldFetch; store.saveOfflineSalesQueue([]); }
+});

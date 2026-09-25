@@ -10,6 +10,7 @@ export interface ParkedDraft {
   cart: SaleItem[];
   deliveryFeeInput: string;
   discountInput: string;
+  discountReason?: string;
   saleMethod: string;
   hasStoreCoupon?: boolean;
   storeCouponInput?: string;

@@ -1,5 +1,5 @@
 import { requireSession, requireSameOrigin, readJsonBody, apiError, AccessError } from '@/lib/security/server-session';
-import { canAccessData, safeSelection } from '@/lib/security/data-policy.mjs';
+import { canAccessData, safeSelection, sanitizeKitchenRows, kitchenReadableFields } from '@/lib/security/data-policy.mjs';
 
 type Context = { params: Promise<{ table: string }> };
 async function handle(request: Request, context: Context) {
@@ -15,6 +15,15 @@ async function handle(request: Request, context: Context) {
     }
     if (!safeSelection(url.searchParams.get('select') || '*')) throw new AccessError(400, 'Consulta inválida.');
     if ([...url.searchParams.keys()].some(key => !/^[a-z_][a-z0-9_]*$/.test(key))) throw new AccessError(400, 'Filtro inválido.');
+    const kitchenFields = session.role === 'cozinha' ? kitchenReadableFields[table as keyof typeof kitchenReadableFields] : undefined;
+    if (kitchenFields) {
+      const filterKeys = [...url.searchParams.keys()].filter(key => !['select', 'order', 'limit', 'offset'].includes(key));
+      const requested = (url.searchParams.get('select') || '*').split(',');
+      const orderFields = (url.searchParams.get('order') || '').split(',').filter(Boolean).map(value => value.split('.')[0]);
+      if ([...filterKeys, ...orderFields, ...requested.filter(field => field !== '*')].some(field => !kitchenFields.includes(field))) {
+        throw new AccessError(403, 'Consulta não disponível para o perfil da cozinha.');
+      }
+    }
     let body: unknown;
     if (!reading && method !== 'DELETE') {
       body = await readJsonBody(request, 1_000_000);
@@ -51,6 +60,11 @@ async function handle(request: Request, context: Context) {
     const range = response.headers.get('content-range');
     if (range) outgoing.set('content-range', range);
     if (!response.ok) return Response.json({ message: 'Não foi possível concluir a operação no banco.' }, { status: response.status });
+    if (session.role === 'cozinha' && method !== 'HEAD' && response.status !== 204) {
+      const data = await response.json();
+      const sanitized = Array.isArray(data) ? sanitizeKitchenRows(session.role, table, data) : sanitizeKitchenRows(session.role, table, [data])[0];
+      return Response.json(sanitized, { status: response.status, headers: outgoing });
+    }
     return new Response(method === 'HEAD' || response.status === 204 ? null : await response.text(), { status: response.status, headers: outgoing });
   } catch (error) { return apiError(error); }
 }

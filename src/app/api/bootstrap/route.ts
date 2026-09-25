@@ -1,7 +1,7 @@
 import 'server-only';
 import { requireSession, apiError } from '@/lib/security/server-session';
 import { createServerDatabase } from '@/lib/supabase-server';
-import { canAccessData } from '@/lib/security/data-policy.mjs';
+import { canAccessData, sanitizeKitchenRows } from '@/lib/security/data-policy.mjs';
 
 export type BootstrapScope = 'caixa' | 'cozinha' | 'admin' | 'all';
 
@@ -11,7 +11,7 @@ export async function GET(request?: Request) {
     const db = createServerDatabase();
 
     const url = request ? new URL(request.url) : null;
-    const scope: BootstrapScope = (url?.searchParams.get('scope') as BootstrapScope) || 'all';
+    const scope: BootstrapScope = session.role === 'cozinha' ? 'cozinha' : (url?.searchParams.get('scope') as BootstrapScope) || 'all';
 
     // Determinar tabelas necessárias com base no escopo requisitado
     const isCozinha = scope === 'cozinha';
@@ -138,6 +138,9 @@ export async function GET(request?: Request) {
       payload.saleItems = [];
     }
 
+    for (const [key, table] of Object.entries({ inventory: 'inventory', products: 'products', recipes: 'recipes', sales: 'sales', saleItems: 'sale_items' })) {
+      payload[key] = sanitizeKitchenRows(session.role, table, payload[key]);
+    }
     return Response.json(payload, {
       headers: {
         'Cache-Control': 'no-store, must-revalidate',

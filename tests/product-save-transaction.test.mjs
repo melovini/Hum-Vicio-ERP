@@ -293,3 +293,13 @@ test('POST /api/products/save: erro do banco retorna mensagem limpa com código 
   // Não expõe a query SQL interna
   assert.equal(data.message.includes('unknown_table'), false);
 });
+
+
+test('Ficha sem função transacional bloqueia salvamento sem apagar receitas', async () => {
+  const fixture = sessionFixture('admin'); await fixture.sign();
+  fixture.setRpcHandler(async () => ({ data: null, error: { code: '42883', message: 'save_product_transaction does not exist' } }));
+  const route = fixture.load('src/app/api/products/save/route.ts');
+  const response = await route.POST(new Request('https://erp.test/api/products/save', { method: 'POST', headers: { origin: 'https://erp.test', 'Content-Type': 'application/json' }, body: JSON.stringify({ product: { name: 'Lanche', category: 'lanche', priceBalcao: 30 }, recipe: [] }) }));
+  assert.equal(response.status, 503);
+  assert.match((await response.json()).message, /Nenhuma gravação alternativa/);
+});

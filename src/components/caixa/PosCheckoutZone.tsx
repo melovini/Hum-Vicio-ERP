@@ -13,6 +13,8 @@ interface PosCheckoutZoneProps {
   cart: SaleItem[];
   cartSubtotal: number;
   discountInput: string;
+  discountReason?: string;
+  onDiscountReasonChange?: (reason: string) => void;
   onDiscountInputChange: (val: string) => void;
   discountAmount: number;
   deliveryFeeInput: string;
@@ -78,6 +80,8 @@ export default function PosCheckoutZone({
   cart,
   cartSubtotal,
   discountInput,
+  discountReason,
+  onDiscountReasonChange,
   onDiscountInputChange,
   discountAmount,
   deliveryFeeInput,
@@ -430,6 +434,9 @@ export default function PosCheckoutZone({
               />
             </div>
 
+            {discountAmount > 0 && <label className="col-span-2 text-xs text-slate-300">Justificativa do desconto (obrigatória)
+              <input aria-label="Justificativa do desconto" maxLength={300} value={discountReason || ''} onChange={e => onDiscountReasonChange?.(e.target.value)} className="block w-full rounded-xl border border-slate-700 bg-slate-950 p-2 text-white" placeholder="Ex.: compensação pelo atraso" />
+            </label>}
             {orderType === 'delivery' && (
               <div>
                 <label className="text-[10px] font-bold text-slate-400 block mb-1">

@@ -1,5 +1,6 @@
 import { requireSession, requireSameOrigin, readJsonBody, apiError, AccessError } from '@/lib/security/server-session';
 import { createServerDatabase } from '@/lib/supabase-server';
+import { validateCheckoutPricing } from '@/lib/checkout-pricing';
 import { buildSaleItemKitchenSnapshot } from '@/lib/kitchen-calculator';
 
 interface SaleItemInput {
@@ -36,6 +37,7 @@ interface SaleInput {
   total: number;
   subtotal?: number;
   discount?: number;
+  discountReason?: string;
   deliveryFee?: number;
   storeCouponSubsidy?: number;
   paymentMethod: string;
@@ -96,7 +98,7 @@ export async function POST(request: Request) {
       throw new AccessError(400, 'Canal de venda inválido (balcao ou ifood).');
     }
 
-    if (!Array.isArray(sale.items) || sale.items.length === 0) {
+    if (!Array.isArray(sale.items) || sale.items.length === 0 || sale.items.length > 200) {
       throw new AccessError(400, 'O pedido deve conter pelo menos 1 item.');
     }
 
@@ -105,10 +107,10 @@ export async function POST(request: Request) {
     const deliveryFee = Number(sale.deliveryFee ?? 0);
     const total = Number(sale.total);
 
-    if (isNaN(subtotal) || subtotal < 0) throw new AccessError(400, 'Subtotal inválido.');
-    if (isNaN(discount) || discount < 0) throw new AccessError(400, 'Desconto inválido.');
-    if (isNaN(deliveryFee) || deliveryFee < 0) throw new AccessError(400, 'Taxa de entrega inválida.');
-    if (isNaN(total) || total < 0) throw new AccessError(400, 'Total da venda não pode ser negativo.');
+    if (!Number.isFinite(subtotal) || subtotal < 0) throw new AccessError(400, 'Subtotal inválido.');
+    if (!Number.isFinite(discount) || discount < 0) throw new AccessError(400, 'Desconto inválido.');
+    if (!Number.isFinite(deliveryFee) || deliveryFee < 0) throw new AccessError(400, 'Taxa de entrega inválida.');
+    if (!Number.isFinite(total) || total < 0) throw new AccessError(400, 'Total da venda não pode ser negativo.');
 
     // 5. Validação matemática do total (tolerância de arredondamento de 5 centavos)
     const computedExpectedTotal = Math.max(0, subtotal - discount + deliveryFee);
@@ -118,6 +120,7 @@ export async function POST(request: Request) {
 
     // Validação de cada item
     for (const item of sale.items) {
+      if (!item || (item.additionals !== undefined && (!Array.isArray(item.additionals) || item.additionals.length > 100 || item.additionals.some(add => !add || typeof add !== 'object')))) throw new AccessError(400, 'Itens ou adicionais inválidos.');
       if (!item.productName || typeof item.productName !== 'string') {
         throw new AccessError(400, 'Nome do produto obrigatório.');
       }
@@ -128,6 +131,18 @@ export async function POST(request: Request) {
         throw new AccessError(400, `Preço unitário inválido para o produto "${item.productName}".`);
       }
     }
+
+    // Recalculate against the authoritative catalog before making any sale mutation.
+    const pricingDb = createServerDatabase();
+    const { data: previous, error: previousError } = await pricingDb.from('idempotency_keys').select('response,status').eq('key', idempotencyKey.trim()).eq('sale_id', sale.id).maybeSingle();
+    if (previousError) throw new AccessError(503, 'Não foi possível conferir um envio anterior. Tente novamente.');
+    if (previous?.status === 'completed' && previous.response) return Response.json(previous.response, { headers: { 'Cache-Control': 'no-store' } });
+    const pricingIds = [...new Set(sale.items.flatMap(item => [item.productId, item.comboId, ...(item.additionals || []).map(add => add.productId || add.id)].filter((id): id is string => Boolean(id))))];
+    if (pricingIds.some(id => !UUID_REGEX.test(id))) throw new AccessError(400, 'Produto, combo ou adicional sem cadastro válido. Atualize o cardápio e revise o pedido.');
+    const { data: pricingCatalog, error: pricingError } = await pricingDb.from('products').select('id,name,category,price_balcao,price_ifood,status,is_active').in('id', pricingIds);
+    if (pricingError || !pricingCatalog) throw new AccessError(503, 'Não foi possível consultar os preços. O pedido permanece aguardando confirmação.');
+    try { validateCheckoutPricing(sale, pricingCatalog); }
+    catch (error) { throw new AccessError(400, error instanceof Error ? error.message : 'Revise os valores do pedido.'); }
 
     // 6. Validação no servidor contra produtos em rascunho ou inativos (V07)
     const db = createServerDatabase();
@@ -223,6 +238,7 @@ export async function POST(request: Request) {
             item.productionSnapshot = {
               ...(item.productionSnapshot || {}),
               structuredProduction: structuredSnap,
+              discountReason: sale.discount ? sale.discountReason?.trim() : undefined,
             };
           }
         }
