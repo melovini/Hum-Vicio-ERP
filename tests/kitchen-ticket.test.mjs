@@ -833,3 +833,23 @@ test('Impressão imediata do checkout recebe composição estruturada, mesmo com
   const reprint = buildKitchenTicket({ sale: makeBaseSale(replay), products: [], inventoryItems: [], kitchenComponents: [] });
   assert.equal(reprint.productionSummary.chapa.totalPatties, 2);
 });
+
+
+test('Fritadeira: porções prontas e combo com identificador antigo mantêm os vínculos cadastrados', () => {
+  const components = DEFAULT_KITCHEN_COMPONENTS;
+  const inventory = [{ id: 'fries-ready', name: 'Porção pronta', unit: 'un' }, { id: 'onion-ready', name: 'Anéis prontos', unit: 'un' }];
+  const products = [
+    { id: 'burger', name: 'Lanche', category: 'lanche', recipe: [] },
+    { id: 'fries', name: 'Batata 180g', category: 'porcao', recipe: [{ ingredientId: 'fries-ready', quantity: 1, kitchenComponentId: 'cmp-batata-gde' }] },
+    { id: 'combo-real', name: 'Combo: Anéis de Cebola + Bebida', category: 'combo', recipe: [{ ingredientId: 'onion-ready', quantity: 1, kitchenComponentId: 'cmp-aneis-cebola' }] },
+  ];
+  const order = [
+    { productId: 'fries', productName: 'Batata 180g', quantity: 2, unitPrice: 10 },
+    { productId: 'burger', productName: 'Lanche', quantity: 3, unitPrice: 30, comboId: 'combo-old', combo: 'Anéis de Cebola + Bebida' },
+  ];
+  const snapItems = order.map(item => ({ ...item, productionSnapshot: { structuredProduction: buildSaleItemKitchenSnapshot(item, products, inventory, components) } }));
+  const summary = calculateOrderProductionRequirements(JSON.parse(JSON.stringify(snapItems)), [], [], []);
+  assert.equal(summary.fritadeira.totalPreparos, 5);
+  assert.equal(summary.fritadeira.items.find(i => i.componentId === 'cmp-batata-gde').count, 2);
+  assert.equal(summary.fritadeira.items.find(i => i.componentId === 'cmp-aneis-cebola').count, 3);
+});

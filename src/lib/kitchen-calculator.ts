@@ -570,7 +570,9 @@ export function calculateOrderProductionRequirements(
     }
 
     // Contabilizar Combo (se o item vem com combo de batata, onion, etc.)
-    const comboProduct = item.comboId ? prodMap.get(item.comboId) : products.find(p => p.category === 'combo' && p.name === item.combo);
+    const normalizeComboName = (name: string) => name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/^combo:\s*/i, '').trim().toLowerCase();
+    const matches = item.combo ? products.filter(p => p.category === 'combo' && normalizeComboName(p.name) === normalizeComboName(item.combo!)) : [];
+    const comboProduct = (item.comboId ? prodMap.get(item.comboId) : undefined) || (matches.length === 1 ? matches[0] : undefined);
     if (comboProduct) {
       const comboBreakdown = calculateProductKitchenComponents(comboProduct, inventoryItems, kitchenComponents);
       comboBreakdown.pendingReview.forEach(p => pendingReviewSet.add(`${comboProduct.name}: ${p.reason}`));
