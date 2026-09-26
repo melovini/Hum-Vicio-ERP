@@ -7,6 +7,7 @@ const sampleSales = [
     customer_name: 'Carlos Silva - Rua das Flores, 120',
     customer_phone: '11988887777',
     total_amount: 150.0,
+    total: 150.0,
     discount_amount: 0,
     delivery_fee: 10.0,
     status: 'completed',
@@ -19,6 +20,7 @@ const sampleSales = [
     customer_name: 'Carlos Silva',
     customer_phone: '11988887777',
     total_amount: 180.0,
+    total: 180.0,
     discount_amount: 0,
     delivery_fee: 10.0,
     status: 'completed',
@@ -31,6 +33,7 @@ const sampleSales = [
     customer_name: 'Ana Oliveira',
     customer_phone: '11977776666',
     total_amount: 60.0,
+    total: 60.0,
     discount_amount: 0,
     delivery_fee: 0,
     status: 'completed',
@@ -134,6 +137,30 @@ async function mockAdminApi(
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ success: true, customers: [] }),
+      });
+    }
+
+    if (url.pathname === '/api/data/sales') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(sampleSales),
+      });
+    }
+
+    if (url.pathname === '/api/data/sale_items') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(sampleSaleItems),
+      });
+    }
+
+    if (url.pathname === '/api/data/products') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(sampleProducts),
       });
     }
 

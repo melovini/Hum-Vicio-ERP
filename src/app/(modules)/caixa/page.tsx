@@ -52,6 +52,7 @@ import ReceiptModal from '@/components/ReceiptModal';
 import SaleSuccessModal from '@/components/SaleSuccessModal';
 import RouteManifestModal from '@/components/RouteManifestModal';
 import SyncStatusBar from '@/components/SyncStatusBar';
+import { OfflineReconciliationModal } from '@/components/caixa/OfflineReconciliationModal';
 import TrainingBanner from '@/components/TrainingBanner';
 import TrainingExercisesModal from '@/components/TrainingExercisesModal';
 import QuickHelpModal from '@/components/QuickHelpModal';
@@ -96,12 +97,17 @@ export default function CaixaPage() {
     reopenOrderForEdit, updateReopenedOrder,
     movements, addMovement,
     targetPrepMinutes, setTargetPrepMinutes, updateOrderProductionStatus, updateBatchProductionStatus,
-    settleCreditSale, settlePickupPayment, markPickupAsDelivered, offlineQueueCount, isOnline,
+    settleCreditSale, settlePickupPayment, markPickupAsDelivered, offlineQueueCount, isOnline, offlineSalesList, resolveRejectedOfflineSale, discardRejectedOfflineSale,
     connectionStatus, isLoaded
   } = useInventory('caixa');
 
   // Abas operacionais
   const [activeTab, setActiveTab] = useState<PosTab>('pdv');
+  const [reconcilingOfflineSale, setReconcilingOfflineSale] = useState<Sale | null>(null);
+
+  const failedOfflineSales = useMemo(() => {
+    return (offlineSalesList || []).filter(s => s.syncStatus === 'failed');
+  }, [offlineSalesList]);
 
   // 1. ZONA DE CATÁLOGO (ZONA 1)
   const [posCategory, setPosCategory] = useState<PosCategory>('mais_pedidos');
@@ -1033,6 +1039,28 @@ export default function CaixaPage() {
       {/* Barra de Status e Conexão Offline */}
       <SyncStatusBar className="sticky top-0 z-40" />
 
+      {/* Alerta de Pedidos Rejeitados na Contingência */}
+      {failedOfflineSales.length > 0 && (
+        <div className="max-w-[1720px] w-full mx-auto px-4 sm:px-6 pt-3">
+          <div className="p-3.5 bg-rose-950/60 border border-rose-500/50 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs text-rose-200 shadow-md">
+            <div className="flex items-center gap-2.5">
+              <ShieldAlert size={18} className="text-rose-400 shrink-0" />
+              <span>
+                <strong>Divergência na Contingência:</strong> {failedOfflineSales.length} pedido(s) salvo(s) offline foram recusados pelo servidor. Revise os itens para atualizar os preços ou aplicar desconto de contingência sem perder o histórico.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setReconcilingOfflineSale(failedOfflineSales[0])}
+              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-bold text-xs shrink-0 cursor-pointer shadow-sm transition-colors flex items-center gap-1.5"
+            >
+              <ShieldAlert size={14} />
+              <span>Revisar Divergência Agora</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="max-w-[1720px] w-full mx-auto p-4 sm:p-6 space-y-4">
         {/* Cabeçalho Superior do Caixa */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-slate-900/80 p-4 rounded-3xl border border-slate-800 backdrop-blur-md shadow-md">
@@ -1961,6 +1989,22 @@ export default function CaixaPage() {
       <TrainingExercisesModal
         isOpen={showExercisesModal}
         onClose={() => setShowExercisesModal(false)}
+      />
+    <OfflineReconciliationModal
+        isOpen={Boolean(reconcilingOfflineSale)}
+        onClose={() => setReconcilingOfflineSale(null)}
+        sale={reconcilingOfflineSale}
+        products={products}
+        currentUserRole={currentUserSession.role || 'caixa'}
+        onResolve={async (revisedSale) => {
+          const res = await resolveRejectedOfflineSale(revisedSale);
+          setReconcilingOfflineSale(null);
+          return res;
+        }}
+        onDiscard={async (saleId, reason) => {
+          await discardRejectedOfflineSale(saleId, reason);
+          setReconcilingOfflineSale(null);
+        }}
       />
     </div>
   );

@@ -3872,6 +3872,39 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       updateOfflineSaleInQueue(saleId, { syncStatus: 'pending', syncError: undefined });
       return syncOfflineQueueNow();
     },
+    resolveRejectedOfflineSale: async (revisedSale: Sale, operatorName?: string) => {
+      updateOfflineSaleInQueue(revisedSale.id, {
+        ...revisedSale,
+        syncStatus: 'pending',
+        syncError: undefined,
+      });
+      const queue = getOfflineSalesQueue();
+      updateGlobalStore({
+        offlineQueueCount: queue.length,
+        offlineSalesList: queue
+      });
+      const actor = operatorName || globalStore.activeCashSession?.openedBy || 'Operador';
+      addAuditLog(
+        'RECONCILIACAO_OFFLINE',
+        `Pedido #${revisedSale.id.slice(0, 8)} reconciliado com catálogo oficial. Novo total: R$ ${revisedSale.total.toFixed(2)}`,
+        actor
+      );
+      return syncOfflineQueueNow();
+    },
+    discardRejectedOfflineSale: async (saleId: string, reason: string, operatorName?: string) => {
+      removeOfflineSaleFromQueue(saleId);
+      const queue = getOfflineSalesQueue();
+      updateGlobalStore({
+        offlineQueueCount: queue.length,
+        offlineSalesList: queue
+      });
+      const actor = operatorName || globalStore.activeCashSession?.openedBy || 'Operador';
+      addAuditLog(
+        'DESCARTE_VENDA_REJEITADA',
+        `Pedido rejeitado #${saleId.slice(0, 8)} descartado da contingência offline. Motivo: ${reason}`,
+        actor
+      );
+    },
     connectionStatus, lastServerSync, offlineSalesList, checkServerHealth,
     isTrainingMode, setTrainingMode: setTrainingModeActive, resetTrainingSandbox
   };

@@ -5,6 +5,7 @@ import {
   CheckCircle2, Clock, ShieldAlert, FileText, ChevronRight, X, Sparkles
 } from 'lucide-react';
 import { useInventory, Sale, ConnectionStatus } from '@/lib/store';
+import { OfflineReconciliationModal } from './caixa/OfflineReconciliationModal';
 
 interface SyncStatusBarProps {
   className?: string;
@@ -19,12 +20,16 @@ export default function SyncStatusBar({ className = '', compact = false }: SyncS
     offlineSalesList, 
     syncOfflineQueueNow,
     retryOfflineSale,
+    products,
+    resolveRejectedOfflineSale,
+    discardRejectedOfflineSale,
     checkServerHealth 
   } = useInventory();
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncFeedback, setSyncFeedback] = useState<string | null>(null);
+  const [reconcilingSale, setReconcilingSale] = useState<Sale | null>(null);
 
   const handleManualSync = async () => {
     setIsSyncing(true);
@@ -264,12 +269,38 @@ export default function SyncStatusBar({ className = '', compact = false }: SyncS
                           <span className="font-mono font-bold text-emerald-400">
                             R$ {sale.total.toFixed(2)}
                           </span>
-                          {sale.syncStatus === 'failed' && <button type="button" disabled={isSyncing} className="underline text-blue-300" onClick={async () => {
-                            setIsSyncing(true);
-                            try { const result = await retryOfflineSale(sale.id); setSyncFeedback(result.errorsCount ? 'O pedido continua pendente. Confira o motivo apresentado.' : 'Tentativa concluída. Confira a fila de pedidos.'); }
-                            catch { setSyncFeedback('Não foi possível reenviar. O pedido permanece na fila.'); }
-                            finally { setIsSyncing(false); }
-                          }}>Tentar novamente</button>}
+                          {sale.syncStatus === 'failed' && (
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                disabled={isSyncing}
+                                onClick={() => setReconcilingSale(sale)}
+                                className="px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg text-[11px] font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                                title="Revisar divergência e ajustar pedido"
+                              >
+                                <ShieldAlert size={12} />
+                                <span>Revisar</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isSyncing}
+                                className="underline text-blue-300 text-[11px] hover:text-blue-200 cursor-pointer"
+                                onClick={async () => {
+                                  setIsSyncing(true);
+                                  try {
+                                    const result = await retryOfflineSale(sale.id);
+                                    setSyncFeedback(result.errorsCount ? 'O pedido continua pendente. Clique em "Revisar" para corrigir.' : 'Tentativa concluída com sucesso!');
+                                  } catch {
+                                    setSyncFeedback('Não foi possível reenviar. O pedido permanece na fila.');
+                                  } finally {
+                                    setIsSyncing(false);
+                                  }
+                                }}
+                              >
+                                Reenviar
+                              </button>
+                            </div>
+                          )}
                           {sale.syncError ? (
                             <span className="px-2 py-0.5 bg-rose-500/20 text-rose-300 border border-rose-500/40 rounded text-[10px] font-bold" title={sale.syncError}>
                               ❌ Falha: {sale.syncError || 'Erro'}
@@ -358,8 +389,23 @@ export default function SyncStatusBar({ className = '', compact = false }: SyncS
             </div>
 
           </div>
-        </div>
-      )}
+        </div>      )}
+
+      <OfflineReconciliationModal
+        isOpen={Boolean(reconcilingSale)}
+        onClose={() => setReconcilingSale(null)}
+        sale={reconcilingSale}
+        products={products}
+        onResolve={async (revisedSale) => {
+          const res = await resolveRejectedOfflineSale(revisedSale);
+          setReconcilingSale(null);
+          return res;
+        }}
+        onDiscard={async (saleId, reason) => {
+          await discardRejectedOfflineSale(saleId, reason);
+          setReconcilingSale(null);
+        }}
+      />
     </>
   );
 }

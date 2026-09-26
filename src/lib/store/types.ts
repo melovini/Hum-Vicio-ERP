@@ -380,7 +380,9 @@ export type AuditAction =
   | 'RETIRADA_ENTREGUE'
   | 'CUSTOS_FIXOS_CONFIG'
   | 'VINCULO_LOTE_RECEITAS'
-  | 'BAIXA_ESTOQUE_VENDA';
+  | 'BAIXA_ESTOQUE_VENDA'
+  | 'DESCARTE_VENDA_REJEITADA'
+  | 'RECONCILIACAO_OFFLINE';
 
 export interface AuditLog {
   id: string;
