@@ -7,6 +7,9 @@ export interface PrinterProfile {
   printableWidthMm: number; // 72 for 80mm, 48 for 58mm
   feedLines: number; // Linhas de avanço antes do corte físico (padrão 4)
   fontSizeScale: 'compact' | 'normal' | 'large';
+  autoCut: boolean; // Disparo automático de corte de papel ao final da impressão
+  cutType: 'full' | 'partial'; // Corte total ou parcial
+  columnsCount: 32 | 42 | 48; // Colunas de caracteres no papel
 }
 
 export interface ReceiptTemplateConfig {
@@ -20,6 +23,22 @@ export interface ReceiptTemplateConfig {
   storeName: string;
   storeCnpj: string;
   autoPrintOnFinish: boolean;
+  // Campos fiscais e de conferência do cliente
+  showFiscalData: boolean;
+  storeIe: string;
+  showTaxDetails: boolean;
+  showQrCodePlaceholder: boolean;
+  receiptFooterMessage: string;
+}
+
+export interface TerminalPrintBinding {
+  terminalId: string; // Identificador único (ex: 'caixa-01', 'balcao-01', 'tablet-01')
+  terminalName: string; // Nome legível (ex: 'Caixa Balcão Principal')
+  kitchenPrinterTarget: string; // Destino de impressão da cozinha (ex: 'padrao_sistema', 'rede_cozinha')
+  clientPrinterTarget: string; // Destino de impressão do cupom do cliente (ex: 'padrao_sistema', 'usb_balcao')
+  autoPrintKitchen: boolean; // Auto-impressão para a cozinha ao concluir pedido
+  autoPrintClient: boolean; // Auto-impressão de comprovante para o cliente
+  updatedAt: string;
 }
 
 export const DEFAULT_PRINTER_PROFILE: PrinterProfile = {
@@ -28,6 +47,9 @@ export const DEFAULT_PRINTER_PROFILE: PrinterProfile = {
   printableWidthMm: 72,
   feedLines: 4,
   fontSizeScale: 'normal',
+  autoCut: true,
+  cutType: 'partial',
+  columnsCount: 48,
 };
 
 export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplateConfig = {
@@ -41,7 +63,24 @@ export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplateConfig = {
   storeName: 'Hum Vício Hamburgueria',
   storeCnpj: '32.588.610/0001-44',
   autoPrintOnFinish: false,
+  showFiscalData: true,
+  storeIe: '123.456.789.110',
+  showTaxDetails: true,
+  showQrCodePlaceholder: true,
+  receiptFooterMessage: 'OBRIGADO PELA PREFERÊNCIA!\nVOLTE SEMPRE! 🍔',
 };
+
+export const DEFAULT_TERMINAL_BINDINGS: TerminalPrintBinding[] = [
+  {
+    terminalId: 'caixa-01',
+    terminalName: 'Terminal Caixa Principal',
+    kitchenPrinterTarget: 'padrao_sistema',
+    clientPrinterTarget: 'padrao_sistema',
+    autoPrintKitchen: false,
+    autoPrintClient: false,
+    updatedAt: '2026-09-26T00:00:00.000Z',
+  }
+];
 
 export interface CentralStoreConfig {
   version: number;
@@ -53,6 +92,7 @@ export interface CentralStoreConfig {
   ingredientStations: Record<string, KitchenStation>;
   printerProfile: PrinterProfile;
   receiptTemplate: ReceiptTemplateConfig;
+  terminalBindings: TerminalPrintBinding[];
 }
 
 export const CENTRAL_CONFIG_STORAGE_KEY = 'hum_vicio_central_store_config_v1';
@@ -67,6 +107,7 @@ export const DEFAULT_CENTRAL_CONFIG: CentralStoreConfig = {
   ingredientStations: {},
   printerProfile: DEFAULT_PRINTER_PROFILE,
   receiptTemplate: DEFAULT_RECEIPT_TEMPLATE,
+  terminalBindings: DEFAULT_TERMINAL_BINDINGS,
 };
 
 /**
@@ -89,7 +130,17 @@ export function migrateLegacyLocalConfig(existingStorage?: Storage): CentralStor
           template.showMontagem = legacyShowMontagem === 'true';
         }
 
-        const profile = parsed.printerProfile ? { ...DEFAULT_PRINTER_PROFILE, ...parsed.printerProfile } : { ...DEFAULT_PRINTER_PROFILE };
+        const profile: PrinterProfile = parsed.printerProfile ? {
+          ...DEFAULT_PRINTER_PROFILE,
+          ...parsed.printerProfile,
+          autoCut: parsed.printerProfile.autoCut !== undefined ? parsed.printerProfile.autoCut : DEFAULT_PRINTER_PROFILE.autoCut,
+          cutType: parsed.printerProfile.cutType || DEFAULT_PRINTER_PROFILE.cutType,
+          columnsCount: parsed.printerProfile.columnsCount || (parsed.printerProfile.paperWidth === '58mm' ? 32 : 48),
+        } : { ...DEFAULT_PRINTER_PROFILE };
+
+        const terminalBindings: TerminalPrintBinding[] = Array.isArray(parsed.terminalBindings) && parsed.terminalBindings.length > 0
+          ? parsed.terminalBindings
+          : DEFAULT_TERMINAL_BINDINGS;
 
         return {
           version: parsed.version || 1,
@@ -101,6 +152,7 @@ export function migrateLegacyLocalConfig(existingStorage?: Storage): CentralStor
           ingredientStations: parsed.ingredientStations || {},
           printerProfile: profile,
           receiptTemplate: template,
+          terminalBindings,
         };
       }
     }
@@ -152,6 +204,7 @@ export function migrateLegacyLocalConfig(existingStorage?: Storage): CentralStor
       ingredientStations: legacyStations,
       printerProfile: DEFAULT_PRINTER_PROFILE,
       receiptTemplate: legacyTemplate,
+      terminalBindings: DEFAULT_TERMINAL_BINDINGS,
     };
 
     store.setItem(CENTRAL_CONFIG_STORAGE_KEY, JSON.stringify(migrated));
@@ -160,6 +213,40 @@ export function migrateLegacyLocalConfig(existingStorage?: Storage): CentralStor
     console.warn('[CentralConfig] Falha ao migrar configurações legadas:', err);
     return { ...DEFAULT_CENTRAL_CONFIG };
   }
+}
+
+export const LOCAL_TERMINAL_ID_STORAGE_KEY = 'hum_vicio_terminal_id';
+
+export function getCurrentTerminalId(): string {
+  if (typeof window === 'undefined') return 'caixa-01';
+  try {
+    return localStorage.getItem(LOCAL_TERMINAL_ID_STORAGE_KEY) || 'caixa-01';
+  } catch {
+    return 'caixa-01';
+  }
+}
+
+export function setCurrentTerminalId(terminalId: string): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(LOCAL_TERMINAL_ID_STORAGE_KEY, terminalId);
+    window.dispatchEvent(new CustomEvent('hum_vicio_terminal_changed', { detail: terminalId }));
+  } catch {}
+}
+
+export function getTerminalBinding(config: CentralStoreConfig, terminalId?: string): TerminalPrintBinding {
+  const activeId = terminalId || getCurrentTerminalId();
+  const found = (config.terminalBindings || []).find(b => b.terminalId === activeId);
+  if (found) return found;
+  return {
+    terminalId: activeId,
+    terminalName: `Terminal (${activeId})`,
+    kitchenPrinterTarget: 'padrao_sistema',
+    clientPrinterTarget: 'padrao_sistema',
+    autoPrintKitchen: Boolean(config.receiptTemplate?.autoPrintOnFinish),
+    autoPrintClient: false,
+    updatedAt: config.updatedAt || new Date().toISOString(),
+  };
 }
 
 /**
@@ -173,19 +260,26 @@ export function resolveEffectiveConfig(
   if (!remote || typeof remote.version !== 'number') return local;
   if (!local || typeof local.version !== 'number') return remote;
 
+  let chosen: CentralStoreConfig;
   if (remote.version > local.version) {
-    return remote;
+    chosen = remote;
+  } else if (local.version > remote.version) {
+    chosen = local;
+  } else {
+    // Empate de versão: desempate por timestamp ISO
+    const localTime = new Date(local.updatedAt).getTime() || 0;
+    const remoteTime = new Date(remote.updatedAt).getTime() || 0;
+    chosen = remoteTime >= localTime ? remote : local;
   }
 
-  if (local.version > remote.version) {
-    return local;
+  if (!chosen.terminalBindings || !Array.isArray(chosen.terminalBindings) || chosen.terminalBindings.length === 0) {
+    return {
+      ...chosen,
+      terminalBindings: local.terminalBindings || DEFAULT_TERMINAL_BINDINGS,
+    };
   }
 
-  // Empate de versão: desempate por timestamp ISO
-  const localTime = new Date(local.updatedAt).getTime() || 0;
-  const remoteTime = new Date(remote.updatedAt).getTime() || 0;
-
-  return remoteTime >= localTime ? remote : local;
+  return chosen;
 }
 
 /**

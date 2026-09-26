@@ -274,7 +274,10 @@ export function renderClientReceiptHtml(
         <div style="font-weight: 900; font-size: ${is58mm ? '13px' : '15px'}; text-transform: uppercase;">
           ${options.template.storeName}
         </div>
-        <div style="font-size: 10px; font-weight: 700;">CNPJ: ${options.template.storeCnpj}</div>
+        ${options.template.showFiscalData !== false ? `
+          <div style="font-size: 10px; font-weight: 700;">CNPJ: ${options.template.storeCnpj}</div>
+          ${options.template.storeIe ? `<div style="font-size: 10px; font-weight: 700;">IE: ${options.template.storeIe}</div>` : ''}
+        ` : ''}
         <div style="font-size: 10px; font-weight: 800; margin-top: 2px;">CUPOM NÃO FISCAL DE CONFERÊNCIA</div>
         <div style="font-weight: 800; font-size: 11px; margin-top: 2px;">
           PEDIDO #${sale.id.slice(0, 6).toUpperCase()} • ${(sale.channel || 'BALCÃO').toUpperCase()}
@@ -341,11 +344,26 @@ export function renderClientReceiptHtml(
           <span>PAGAMENTO:</span>
           <span style="font-weight: 900; text-transform: uppercase;">${sale.paymentMethod}</span>
         </div>
+        ${options.template.showTaxDetails !== false ? `
+          <div style="font-size: 9px; color: #222; margin-top: 4px; border-top: 1px dotted #000; padding-top: 2px;">
+            Trib. Aprox. (Lei 12.741/12): R$ ${(sale.total * 0.1345).toFixed(2)} Fed (13.45%), R$ ${(sale.total * 0.18).toFixed(2)} Est (18.00%)
+          </div>
+        ` : ''}
+        ${options.template.showQrCodePlaceholder ? `
+          <div style="text-align: center; margin-top: 6px; padding: 4px; border: 1px dashed #000;">
+            <div style="font-size: 9px; font-weight: 800;">CONSULTA PELA CHAVE DE ACESSO OU QR CODE</div>
+            <div style="font-family: monospace; font-size: 8px; word-break: break-all; margin: 2px 0;">
+              ${sale.id.replace(/-/g, '').toUpperCase().padStart(44, '3526093258861000014455001000')}
+            </div>
+            <div style="display: inline-block; padding: 3px 6px; border: 1px solid #000; font-family: monospace; font-size: 9px; font-weight: 900; background: #eee;">
+              [ QR CODE NFC-e ]
+            </div>
+          </div>
+        ` : ''}
       </div>
 
-      <div style="text-align: center; font-size: 10px; font-weight: 700; margin-top: 4px;">
-        <div>OBRIGADO PELA PREFERÊNCIA!</div>
-        <div>VOLTE SEMPRE! 🍔</div>
+      <div style="text-align: center; font-size: 10px; font-weight: 700; margin-top: 6px; white-space: pre-line;">
+        ${options.template.receiptFooterMessage ? options.template.receiptFooterMessage : 'OBRIGADO PELA PREFERÊNCIA!\nVOLTE SEMPRE! 🍔'}
       </div>
     </div>
   `;

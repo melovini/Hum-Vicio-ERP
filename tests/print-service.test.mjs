@@ -197,6 +197,98 @@ test('PrintService: Renderização HTML do Cupom do Cliente utiliza Nome e CNPJ 
   assert.match(clientHtml, /PIX/i);
 });
 
+test('PrintService: Renderização HTML do Cupom do Cliente inclui IE, Lei 12.741/12, QR Code e rodapé personalizado', () => {
+  const customTemplate = {
+    ...DEFAULT_RECEIPT_TEMPLATE,
+    storeName: 'HUM VÍCIO HAMBURGUERIA',
+    storeCnpj: '32.588.610/0001-44',
+    showFiscalData: true,
+    storeIe: '123.456.789.110',
+    showTaxDetails: true,
+    showQrCodePlaceholder: true,
+    receiptFooterMessage: 'AGRADECEMOS A PREFERENCIA! VOLTE SEMPRE',
+  };
+
+  const clientHtml = renderClientReceiptHtml(sampleSale, {
+    template: customTemplate,
+    profile: DEFAULT_PRINTER_PROFILE,
+  });
+
+  assert.match(clientHtml, /IE: 123\.456\.789\.110/);
+  assert.match(clientHtml, /Lei 12\.741\/12/);
+  assert.match(clientHtml, /CONSULTA PELA CHAVE DE ACESSO/);
+  assert.match(clientHtml, /AGRADECEMOS A PREFERENCIA! VOLTE SEMPRE/);
+});
+
+test('PrintService: Renderização HTML do Cupom do Cliente omite campos fiscais e QR Code quando desativados', () => {
+  const minimalTemplate = {
+    ...DEFAULT_RECEIPT_TEMPLATE,
+    showFiscalData: false,
+    showTaxDetails: false,
+    showQrCodePlaceholder: false,
+    receiptFooterMessage: '',
+  };
+
+  const clientHtml = renderClientReceiptHtml(sampleSale, {
+    template: minimalTemplate,
+    profile: DEFAULT_PRINTER_PROFILE,
+  });
+
+  assert.doesNotMatch(clientHtml, /IE:/);
+  assert.doesNotMatch(clientHtml, /Lei 12\.741\/12/);
+  assert.doesNotMatch(clientHtml, /CONSULTA PELA CHAVE DE ACESSO/);
+});
+
+test('PrintService: Via Cozinha garante estritamente a omissão de dados financeiros e forma de pagamento', () => {
+  const kitchenHtml = renderKitchenTicketHtml({
+    header: {
+      customerName: 'MARCOS TESTE',
+      orderIdShort: '#A0EEBC',
+      time: '12:00',
+      date: '26/09/2026',
+      channel: 'BALCAO',
+      orderType: 'retirada',
+      isReprint: false,
+    },
+    items: [
+      {
+        quantity: 1,
+        productName: 'Duplo Burger Costela',
+        pattiesComposition: '2x Costela 180g',
+        meatPoint: 'ao ponto',
+        additionals: [{ label: 'ADICIONAR: Bacon Crocante' }],
+        removals: ['Picles'],
+        notes: 'SEM CEBOLA',
+      }
+    ],
+    productionSummary: {
+      chapa: {
+        totalPatties: 2,
+        pattiesLabel: '2 HAMBÚRGUERES',
+        pattiesBreakdown: [],
+        otherItems: [],
+        status: 'ok',
+      },
+      fritadeira: {
+        totalPreparos: 0,
+        preparosLabel: '0 PREPAROS',
+        items: [],
+        status: 'sem_itens',
+      },
+      isComplete: true,
+    }
+  }, {
+    template: DEFAULT_RECEIPT_TEMPLATE,
+    profile: DEFAULT_PRINTER_PROFILE,
+  });
+
+  assert.doesNotMatch(kitchenHtml, /R\$/);
+  assert.doesNotMatch(kitchenHtml, /PIX/i);
+  assert.doesNotMatch(kitchenHtml, /Total/i);
+  assert.doesNotMatch(kitchenHtml, /Desconto/i);
+  assert.doesNotMatch(kitchenHtml, /Subtotal/i);
+});
+
 test('CentralConfig: Migra hum_vicio_print_show_montagem do localStorage para receiptTemplate', () => {
   const legacyStorage = new MockStorage({
     hum_vicio_print_show_montagem: 'true',
@@ -211,3 +303,4 @@ test('CentralConfig: Migra hum_vicio_print_show_montagem do localStorage para re
   assert.equal(parsed.receiptTemplate.showMontagem, true);
   assert.equal(parsed.printerProfile.paperWidth, '80mm');
 });
+

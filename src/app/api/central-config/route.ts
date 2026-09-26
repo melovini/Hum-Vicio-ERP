@@ -68,6 +68,7 @@ export async function POST(request: Request) {
       ingredientStations: body.ingredientStations || serverCentralConfig.ingredientStations || {},
       printerProfile: body.printerProfile || serverCentralConfig.printerProfile || DEFAULT_CENTRAL_CONFIG.printerProfile,
       receiptTemplate: body.receiptTemplate || serverCentralConfig.receiptTemplate || DEFAULT_CENTRAL_CONFIG.receiptTemplate,
+      terminalBindings: Array.isArray(body.terminalBindings) && body.terminalBindings.length > 0 ? body.terminalBindings : (serverCentralConfig.terminalBindings || DEFAULT_CENTRAL_CONFIG.terminalBindings),
     };
 
     serverCentralConfig = updatedConfig;

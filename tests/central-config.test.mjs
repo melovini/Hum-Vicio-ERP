@@ -4,9 +4,15 @@ import { createLoader } from './load-typescript.mjs';
 
 const {
   DEFAULT_CENTRAL_CONFIG,
+  DEFAULT_PRINTER_PROFILE,
+  DEFAULT_RECEIPT_TEMPLATE,
+  DEFAULT_TERMINAL_BINDINGS,
   CENTRAL_CONFIG_STORAGE_KEY,
   migrateLegacyLocalConfig,
   resolveEffectiveConfig,
+  getCurrentTerminalId,
+  setCurrentTerminalId,
+  getTerminalBinding,
 } = createLoader()('src/lib/central-config.ts');
 
 class MockStorage {
@@ -116,3 +122,51 @@ test('CentralConfig: Resolução de conflito desempata por timestamp mais recent
   assert.equal(effective.targetPrepMinutes, 14);
   assert.equal(effective.updatedBy, 'Terminal 2');
 });
+
+test('CentralConfig: Perfil de impressora padrão inclui controle de guilhotina e colunas', () => {
+  assert.equal(DEFAULT_PRINTER_PROFILE.autoCut, true);
+  assert.equal(DEFAULT_PRINTER_PROFILE.cutType, 'partial');
+  assert.equal(DEFAULT_PRINTER_PROFILE.columnsCount, 48);
+  assert.equal(DEFAULT_PRINTER_PROFILE.paperWidth, '80mm');
+});
+
+test('CentralConfig: Template padrão de comprovante inclui dados fiscais e mensagem de rodapé', () => {
+  assert.equal(DEFAULT_RECEIPT_TEMPLATE.showFiscalData, true);
+  assert.equal(DEFAULT_RECEIPT_TEMPLATE.showTaxDetails, true);
+  assert.equal(DEFAULT_RECEIPT_TEMPLATE.showQrCodePlaceholder, true);
+  assert.ok(DEFAULT_RECEIPT_TEMPLATE.receiptFooterMessage.includes('OBRIGADO PELA PREFERÊNCIA'));
+  assert.ok(DEFAULT_RECEIPT_TEMPLATE.storeCnpj);
+});
+
+test('CentralConfig: Gerenciamento e resolução de vínculos de terminais físicos', () => {
+  assert.ok(Array.isArray(DEFAULT_TERMINAL_BINDINGS));
+  assert.ok(DEFAULT_TERMINAL_BINDINGS.length > 0);
+  assert.equal(DEFAULT_TERMINAL_BINDINGS[0].terminalId, 'caixa-01');
+
+  const config = {
+    ...DEFAULT_CENTRAL_CONFIG,
+    terminalBindings: [
+      {
+        terminalId: 'balcao-02',
+        terminalName: 'Balcão de Atendimento 2',
+        kitchenPrinterTarget: 'rede_cozinha',
+        clientPrinterTarget: 'usb_balcao',
+        autoPrintKitchen: true,
+        autoPrintClient: true,
+        updatedAt: '2026-09-26T12:00:00.000Z',
+      }
+    ]
+  };
+
+  // Terminal explicitamente cadastrado
+  const bindingFound = getTerminalBinding(config, 'balcao-02');
+  assert.equal(bindingFound.terminalName, 'Balcão de Atendimento 2');
+  assert.equal(bindingFound.kitchenPrinterTarget, 'rede_cozinha');
+  assert.equal(bindingFound.autoPrintKitchen, true);
+
+  // Terminal não cadastrado deve gerar fallback seguro
+  const bindingFallback = getTerminalBinding(config, 'tablet-desconhecido');
+  assert.equal(bindingFallback.terminalId, 'tablet-desconhecido');
+  assert.equal(bindingFallback.kitchenPrinterTarget, 'padrao_sistema');
+});
+
