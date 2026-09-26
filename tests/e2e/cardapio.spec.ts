@@ -148,7 +148,7 @@ test.describe('Cardápio & Fichas Técnicas — design system e acessibilidade',
     await mockAdminApi(page);
     await page.goto('/admin/cardapio');
 
-    await expect(page.getByRole('heading', { name: /Cardápio/i, exact: false })).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: 'Cardápio', exact: true })).toBeVisible({ timeout: 10000 });
     await expect(page.getByText('Hum Burger Clássico')).toBeVisible();
 
     const axe = new AxeBuilder({ page }).disableRules(['color-contrast']);

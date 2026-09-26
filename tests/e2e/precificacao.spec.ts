@@ -102,6 +102,14 @@ async function mockAdminApi(
       });
     }
 
+    if (url.pathname === '/api/products/save') {
+      return route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ success: true, message: 'Produto salvo com sucesso' }),
+      });
+    }
+
     return route.fulfill({ status: 200, contentType: 'application/json', body: '[]' });
   });
 }

@@ -46,11 +46,14 @@ async function mockAdminApi(
   page: Page,
   options: {
     bootstrapDelay?: number;
+    emptyCache?: boolean;
   } = {},
 ) {
-  await page.addInitScript((collabs) => {
-    localStorage.setItem('hum_vicio_collaborators', JSON.stringify(collabs));
-  }, sampleCollaborators);
+  if (!options.emptyCache) {
+    await page.addInitScript((collabs) => {
+      localStorage.setItem('hum_vicio_collaborators', JSON.stringify(collabs));
+    }, sampleCollaborators);
+  }
 
   await page.route('**/api/**', async (route: Route) => {
     const request = route.request();
@@ -193,10 +196,25 @@ test.describe('Equipe & Colaboradores — design system e acessibilidade', () =>
       sessionStorage.clear();
     });
 
-    await mockAdminApi(page, { bootstrapDelay: 600 });
+    let finishServerAction: () => void = () => {};
+    const delayPromise = new Promise<void>((resolve) => {
+      finishServerAction = resolve;
+      setTimeout(resolve, 5000);
+    });
+
+    await page.route('**/admin/colaboradores', async (route) => {
+      if (route.request().method() === 'POST') {
+        await delayPromise;
+      }
+      return route.continue();
+    });
+
+    await mockAdminApi(page, { emptyCache: true });
     await page.goto('/admin/colaboradores');
 
     const skeleton = page.locator('[data-testid="colaboradores-skeleton"], .animate-pulse').first();
     await expect(skeleton).toBeVisible({ timeout: 5000 });
+
+    finishServerAction();
   });
 });

@@ -150,9 +150,10 @@ test.describe('Caixa / PDV — ergonomia, 3 zonas e acessibilidade', () => {
 
     await expect(page.getByRole('heading', { name: 'Catálogo de Produtos' })).toBeVisible({ timeout: 10000 });
 
-    // Pressiona F1 para abrir atalhos
+    // Garante foco na janela antes do atalho de teclado
+    await page.locator('body').click();
     await page.keyboard.press('F1');
-    await expect(page.getByRole('dialog')).toBeVisible();
+    await expect(page.getByRole('dialog')).toBeVisible({ timeout: 10000 });
     await expect(page.getByText(/Atalhos de Teclado/i)).toBeVisible();
 
     // Pressiona Escape para fechar
