@@ -60,6 +60,7 @@ import ParkedOrdersBar from '@/components/ParkedOrdersBar';
 // Subcomponentes operacionais das 3 Zonas e Modais
 import PosCatalogZone from '@/components/caixa/PosCatalogZone';
 import PosCartZone from '@/components/caixa/PosCartZone';
+import { createCartItemFromProduct, addOrMergeCartItem, updateCartItemInList } from '@/lib/pos-cart-helpers';
 import PosCheckoutZone from '@/components/caixa/PosCheckoutZone';
 import PosBurgerCustomizerModal from '@/components/caixa/PosBurgerCustomizerModal';
 import PosGiftModal from '@/components/caixa/PosGiftModal';
@@ -138,6 +139,7 @@ export default function CaixaPage() {
     collaboratorId?: string;
   }>({ role: null, userName: '' });
   const [selectedBurgerForConfig, setSelectedBurgerForConfig] = useState<Product | null>(null);
+  const [editingCartItem, setEditingCartItem] = useState<SaleItem | null>(null);
   const [giftModalItemIndex, setGiftModalItemIndex] = useState<number | null>(null);
   const [cashShiftMode, setCashShiftMode] = useState<'open' | 'close' | 'quick_check' | null>(null);
   const [saleToCancel, setSaleToCancel] = useState<Sale | null>(null);
@@ -629,6 +631,7 @@ export default function CaixaPage() {
         setShowExercisesModal(false);
         setShowNavigationModal(false);
         setSelectedBurgerForConfig(null);
+        setEditingCartItem(null);
         setGiftModalItemIndex(null);
         setCashShiftMode(null);
         setSaleToCancel(null);
@@ -643,30 +646,40 @@ export default function CaixaPage() {
   }, [cart, isSubmittingOrder]);
 
   // Ações do Carrinho
-  const handleProductClick = (product: Product) => {
-    if (product.category === 'lanche') {
-      setSelectedBurgerForConfig(product);
-    } else {
-      const price = saleChannel === 'ifood' ? product.priceIfood : product.priceBalcao;
-      const existing = cart.find(i => i.productId === product.id && !i.combo && (!i.additionals || i.additionals.length === 0) && !i.notes);
-      if (existing) {
-        setCart(cart.map(i => i === existing ? { ...i, quantity: i.quantity + 1 } : i));
-      } else {
-        setCart([...cart, {
-          id: Math.random().toString(36).substring(2, 9),
-          productId: product.id,
-          productName: product.name,
-          quantity: 1,
-          unitPrice: price,
-        }]);
-      }
-      notify({ title: `${product.name} adicionado`, tone: 'success', duration: 1500 });
-    }
+  const handleProductClick = (
+    product: Product,
+    options?: { mode?: 'simples' | 'combo'; comboProduct?: Product | null }
+  ) => {
+    const newItem = createCartItemFromProduct(product, saleChannel, {
+      mode: options?.mode || 'simples',
+      comboProduct: options?.comboProduct,
+    });
+
+    setCart(prev => addOrMergeCartItem(prev, newItem));
+    notify({
+      title: `${product.name} ${options?.mode === 'combo' && options.comboProduct ? '(Combo)' : ''} adicionado!`,
+      tone: 'success',
+      duration: 1200,
+    });
   };
 
-  const handleUpdateCartQty = (index: number, delta: number) => {
-    setCart(cart.map((item, idx) => {
-      if (idx === index) {
+  const handleEditCartItem = (item: SaleItem) => {
+    const baseProd = products.find(p => p.id === item.productId) || {
+      id: item.productId,
+      name: item.productName,
+      category: 'lanche' as const,
+      priceBalcao: item.unitPrice,
+      priceIfood: item.unitPrice,
+      recipe: [],
+    };
+    setSelectedBurgerForConfig(baseProd);
+    setEditingCartItem(item);
+  };
+
+  const handleUpdateCartQty = (index: number, delta: number, itemId?: string) => {
+    setCart(prev => prev.map((item, idx) => {
+      const isTarget = itemId ? item.id === itemId : idx === index;
+      if (isTarget) {
         const newQty = item.quantity + delta;
         return newQty > 0 ? { ...item, quantity: newQty } : item;
       }
@@ -674,8 +687,8 @@ export default function CaixaPage() {
     }));
   };
 
-  const handleRemoveCartItem = (index: number) => {
-    setCart(cart.filter((_, idx) => idx !== index));
+  const handleRemoveCartItem = (index: number, itemId?: string) => {
+    setCart(prev => prev.filter((item, idx) => (itemId ? item.id !== itemId : idx !== index)));
   };
 
   const handleClearCart = () => {
@@ -1271,6 +1284,7 @@ export default function CaixaPage() {
                   onCancelEditingReopenedSale={() => setEditingReopenedSale(null)}
                   onUpdateQty={handleUpdateCartQty}
                   onRemoveItem={handleRemoveCartItem}
+                  onEditItem={handleEditCartItem}
                   onOpenGiftModal={idx => setGiftModalItemIndex(idx)}
                   onOpenNotesPrompt={idx => {
                     const current = cart[idx]?.notes || '';
@@ -1458,17 +1472,63 @@ export default function CaixaPage() {
 
       {/* MODAIS GLOBAIS E DIÁLOGOS DE APOIO */}
 
-      {/* Modal de Customização de Hambúrguer */}
+      {/* Modal de Customização de Hambúrguer (Criação e Edição com Desmembramento) */}
       <PosBurgerCustomizerModal
+        mode={editingCartItem ? 'edit' : 'create'}
         product={selectedBurgerForConfig}
+        initialItem={editingCartItem}
         products={products}
         items={items}
         saleChannel={saleChannel}
-        onClose={() => setSelectedBurgerForConfig(null)}
-        onConfirm={newItem => {
-          setCart([...cart, newItem]);
+        onClose={() => {
           setSelectedBurgerForConfig(null);
-          notify({ title: `${newItem.productName} adicionado ao pedido!`, tone: 'success' });
+          setEditingCartItem(null);
+        }}
+        onConfirm={(savedItem, options) => {
+          if (editingCartItem) {
+            // Modo de Edição
+            if (options?.isSplit) {
+              // Desmembra 1 unidade da linha original (que tinha quantity > 1) e adiciona a nova unidade personalizada
+              setCart(prev => {
+                const updated = prev.map(item => {
+                  if (item.id === editingCartItem.id) {
+                    return { ...item, quantity: item.quantity - 1 };
+                  }
+                  return item;
+                });
+                return [...updated, savedItem];
+              });
+              notify({ title: `1x ${savedItem.productName} personalizada!`, tone: 'success' });
+            } else {
+              // Atualiza a linha completa
+              setCart(prev => updateCartItemInList(prev, editingCartItem.id || '', savedItem));
+              notify({ title: `${savedItem.productName} atualizado!`, tone: 'success' });
+            }
+
+            // Revalida desconto caso o subtotal tenha diminuído e excedido o limite
+            setTimeout(() => {
+              setCart(currentCart => {
+                const newSub = calculateCartSubtotal(currentCart);
+                const currentDesc = parseFloat(discountInput) || 0;
+                if (currentDesc > newSub && newSub > 0) {
+                  setDiscountInput(newSub.toFixed(2));
+                  notify({
+                    title: 'Desconto ajustado',
+                    description: `O desconto foi ajustado para R$ ${newSub.toFixed(2)} para não ultrapassar o novo subtotal.`,
+                    tone: 'warning',
+                  });
+                }
+                return currentCart;
+              });
+            }, 60);
+          } else {
+            // Modo de Criação Direta
+            setCart(prev => addOrMergeCartItem(prev, savedItem));
+            notify({ title: `${savedItem.productName} adicionado ao pedido!`, tone: 'success' });
+          }
+
+          setSelectedBurgerForConfig(null);
+          setEditingCartItem(null);
         }}
       />
 

@@ -18,7 +18,7 @@ interface PosCatalogZoneProps {
   searchQuery: string;
   onSearchChange: (query: string) => void;
   searchInputRef?: React.RefObject<HTMLInputElement | null>;
-  onProductClick: (product: Product) => void;
+  onProductClick: (product: Product, options?: { mode: 'simples' | 'combo'; comboProduct?: Product | null }) => void;
 }
 
 export default function PosCatalogZone({
@@ -34,6 +34,18 @@ export default function PosCatalogZone({
   searchInputRef,
   onProductClick,
 }: PosCatalogZoneProps) {
+  const [inclusionMode, setInclusionMode] = React.useState<'simples' | 'combo'>('simples');
+  const [selectedComboId, setSelectedComboId] = React.useState<string>('');
+
+  const availableCombos = useMemo(() => {
+    return products.filter(p => p.isActive !== false && p.category === 'combo');
+  }, [products]);
+
+  const activeCombo = useMemo(() => {
+    if (availableCombos.length === 0) return null;
+    return availableCombos.find(c => c.id === selectedComboId) || availableCombos[0];
+  }, [availableCombos, selectedComboId]);
+
   const activeProducts = useMemo(() => {
     return products.filter(p => p.isActive !== false && p.status !== 'rascunho' && p.status !== 'inativo');
   }, [products]);
@@ -138,6 +150,59 @@ export default function PosCatalogZone({
             )}
           </div>
         </div>
+      </div>
+
+      {/* Seletor Superior de Inclusão Rápida: Simples vs Combo */}
+      <div className="flex items-center justify-between gap-2 mb-3 bg-slate-950/80 p-2 rounded-2xl border border-slate-800 flex-wrap">
+        <div className="flex items-center gap-1.5 text-xs">
+          <span className="text-[10px] font-black text-slate-400 uppercase tracking-wider pl-1">
+            Modo ao clicar:
+          </span>
+          <div className="flex items-center bg-slate-900 p-0.5 rounded-xl border border-slate-800">
+            <button
+              type="button"
+              onClick={() => setInclusionMode('simples')}
+              className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition-all cursor-pointer ${
+                inclusionMode === 'simples'
+                  ? 'bg-amber-500 text-slate-950 shadow-xs font-black'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              🍔 Simples
+            </button>
+            <button
+              type="button"
+              onClick={() => setInclusionMode('combo')}
+              className={`px-2.5 py-1 rounded-lg font-bold text-xs flex items-center gap-1 transition-all cursor-pointer ${
+                inclusionMode === 'combo'
+                  ? 'bg-emerald-600 text-white shadow-xs font-black'
+                  : 'text-slate-400 hover:text-white'
+              }`}
+            >
+              🍟🥤 Combo
+            </button>
+          </div>
+        </div>
+
+        {inclusionMode === 'combo' && availableCombos.length > 0 && (
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-[10px] text-emerald-400 font-bold uppercase">Opção:</span>
+            <select
+              value={selectedComboId || availableCombos[0]?.id}
+              onChange={e => setSelectedComboId(e.target.value)}
+              className="bg-slate-900 border border-emerald-500/40 text-emerald-300 font-bold rounded-lg px-2 py-1 text-xs outline-none cursor-pointer max-w-[200px] truncate"
+            >
+              {availableCombos.map(c => {
+                const comboPrice = saleChannel === 'ifood' ? (c.priceIfood ?? c.priceBalcao) : c.priceBalcao;
+                return (
+                  <option key={c.id} value={c.id}>
+                    {c.name} (+ R$ {comboPrice.toFixed(2)})
+                  </option>
+                );
+              })}
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Categorias Fixas e Ordenação */}
@@ -249,7 +314,10 @@ export default function PosCatalogZone({
               <button
                 key={p.id}
                 type="button"
-                onClick={() => onProductClick(p)}
+                onClick={() => onProductClick(p, {
+                  mode: inclusionMode,
+                  comboProduct: isBurger && inclusionMode === 'combo' ? activeCombo : null,
+                })}
                 className={`p-3.5 rounded-2xl text-left transition-all group flex flex-col justify-between border cursor-pointer active:scale-[0.98] ${
                   isBurger
                     ? 'bg-slate-950/70 border-slate-800/80 hover:border-amber-500/80 hover:bg-amber-500/10'
@@ -262,8 +330,12 @@ export default function PosCatalogZone({
                     {p.name}
                   </span>
                   {isBurger && (
-                    <span className="text-[10px] text-amber-400 font-semibold block mt-0.5">
-                      + Personalizar
+                    <span className={`text-[10px] font-bold block mt-0.5 ${
+                      inclusionMode === 'combo' ? 'text-emerald-400' : 'text-amber-400'
+                    }`}>
+                      {inclusionMode === 'combo'
+                        ? `+ ${activeCombo ? activeCombo.name.replace(/^Combo:\s*/i, '') : 'Combo'}`
+                        : 'Simples'}
                     </span>
                   )}
                 </div>

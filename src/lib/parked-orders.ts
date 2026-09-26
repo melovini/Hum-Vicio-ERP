@@ -118,7 +118,13 @@ export function getParkedDrafts(): ParkedDraft[] {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(validDrafts));
     }
 
-    return validDrafts;
+    return validDrafts.map(d => ({
+      ...d,
+      cart: (d.cart || []).map(item => ({
+        ...item,
+        id: item.id || ('item_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 9)),
+      })),
+    }));
   } catch (err) {
     console.error('Erro ao ler rascunhos em espera:', err);
     return [];

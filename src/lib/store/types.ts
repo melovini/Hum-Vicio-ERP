@@ -110,6 +110,8 @@ export interface Product {
   acceptsAddons?: boolean;
   allowedAddonIds?: string[];
   isAddon?: boolean;
+  requiresMeatPoint?: boolean;
+  defaultMeatPoint?: string;
 }
 
 // === VENDAS ===
@@ -122,6 +124,7 @@ export type GiftReason =
 
 export interface SaleItemAdditional {
   id?: string;
+  productId?: string;
   name: string;
   quantity?: number;
   unitPrice?: number;

@@ -6,7 +6,7 @@ import { CustomerProfile, CustomerSearchResult } from '@/lib/crm-clientes';
 import PosCustomerAutocomplete from './PosCustomerAutocomplete';
 import { 
   ShoppingCart as CartIcon, Plus, Minus, Trash2, 
-  Gift, GitCompare, User, MessageSquare, Utensils
+  Gift, GitCompare, User, MessageSquare, Utensils, Pencil
 } from 'lucide-react';
 
 interface PosCartZoneProps {
@@ -23,10 +23,11 @@ interface PosCartZoneProps {
   onSelectTable: (tableId: string | null) => void;
   editingReopenedSale: Sale | null;
   onCancelEditingReopenedSale: () => void;
-  onUpdateQty: (index: number, delta: number) => void;
-  onRemoveItem: (index: number) => void;
-  onOpenGiftModal: (index: number) => void;
-  onOpenNotesPrompt: (index: number) => void;
+  onUpdateQty: (index: number, delta: number, itemId?: string) => void;
+  onRemoveItem: (index: number, itemId?: string) => void;
+  onEditItem?: (item: SaleItem) => void;
+  onOpenGiftModal: (index: number, itemId?: string) => void;
+  onOpenNotesPrompt: (index: number, itemId?: string) => void;
   onCreateNewDraft: () => void;
   onClearCart: () => void;
   activeDraftLabel?: string;
@@ -49,6 +50,7 @@ export default function PosCartZone({
   onCancelEditingReopenedSale,
   onUpdateQty,
   onRemoveItem,
+  onEditItem,
   onOpenGiftModal,
   onOpenNotesPrompt,
   onCreateNewDraft,
@@ -232,7 +234,7 @@ export default function PosCartZone({
         ) : (
           cart.map((item, idx) => (
             <div
-              key={idx}
+              key={item.id || idx}
               className={`border p-3 rounded-2xl space-y-1 transition-all ${
                 item.isGift
                   ? 'bg-emerald-950/20 border-emerald-500/40'
@@ -296,12 +298,12 @@ export default function PosCartZone({
                 </div>
               </div>
 
-              {/* Barra de Ações do Item: Quantidade, Brinde, Obs, Excluir */}
-              <div className="flex items-center justify-between pt-1.5 border-t border-slate-900 text-xs">
+              {/* Barra de Ações do Item: Quantidade, Editar, Brinde, Obs, Excluir */}
+              <div className="flex items-center justify-between pt-1.5 border-t border-slate-900 text-xs gap-2">
                 <div className="flex items-center gap-1">
                   <button
                     type="button"
-                    onClick={() => onUpdateQty(idx, -1)}
+                    onClick={() => onUpdateQty(idx, -1, item.id)}
                     className="w-6 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 flex items-center justify-center cursor-pointer active:scale-95 transition-all"
                     title="Diminuir quantidade"
                     aria-label="Diminuir quantidade"
@@ -313,7 +315,7 @@ export default function PosCartZone({
                   </span>
                   <button
                     type="button"
-                    onClick={() => onUpdateQty(idx, 1)}
+                    onClick={() => onUpdateQty(idx, 1, item.id)}
                     className="w-6 h-6 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 flex items-center justify-center cursor-pointer active:scale-95 transition-all"
                     title="Aumentar quantidade"
                     aria-label="Aumentar quantidade"
@@ -323,9 +325,21 @@ export default function PosCartZone({
                 </div>
 
                 <div className="flex items-center gap-1.5">
+                  {onEditItem && (
+                    <button
+                      type="button"
+                      onClick={() => onEditItem(item)}
+                      className="px-2 py-0.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-amber-300 text-[11px] font-bold flex items-center gap-1 transition-all cursor-pointer border border-slate-800 active:scale-95"
+                      title="Editar personalização deste item"
+                      aria-label="Editar item"
+                    >
+                      <Pencil size={11} className="text-amber-400" />
+                      <span>Editar</span>
+                    </button>
+                  )}
                   <button
                     type="button"
-                    onClick={() => onOpenNotesPrompt(idx)}
+                    onClick={() => onOpenNotesPrompt(idx, item.id)}
                     className="p-1 rounded-lg text-slate-400 hover:text-amber-300 hover:bg-slate-900 transition-colors cursor-pointer"
                     title="Adicionar ou editar observação de cozinha"
                     aria-label="Observação do item"
@@ -334,7 +348,7 @@ export default function PosCartZone({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onOpenGiftModal(idx)}
+                    onClick={() => onOpenGiftModal(idx, item.id)}
                     className={`p-1 rounded-lg transition-colors cursor-pointer ${
                       item.isGift 
                         ? 'text-emerald-400 bg-emerald-950/40' 
@@ -347,7 +361,7 @@ export default function PosCartZone({
                   </button>
                   <button
                     type="button"
-                    onClick={() => onRemoveItem(idx)}
+                    onClick={() => onRemoveItem(idx, item.id)}
                     className="p-1 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-slate-900 transition-colors cursor-pointer"
                     title="Remover item da comanda"
                     aria-label="Remover item"

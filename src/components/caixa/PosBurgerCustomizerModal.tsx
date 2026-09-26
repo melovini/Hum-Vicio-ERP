@@ -2,15 +2,18 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Dialog } from '@/components/ui';
 import { Product, SaleItem, SaleItemAdditional, InventoryItem } from '@/lib/store';
-import { Plus, Minus, MessageSquare, AlertCircle, Sparkles, Check, Info } from 'lucide-react';
+import { generateCartItemId, isProductRequiringMeatPoint, getDefaultMeatPoint } from '@/lib/pos-cart-helpers';
+import { Plus, Minus, MessageSquare, AlertCircle, Sparkles, Check, Info, GitFork, RefreshCw } from 'lucide-react';
 
 interface PosBurgerCustomizerModalProps {
+  mode?: 'create' | 'edit';
   product: Product | null;
+  initialItem?: SaleItem | null;
   products?: Product[];
   items?: InventoryItem[];
   saleChannel: 'balcao' | 'ifood';
   onClose: () => void;
-  onConfirm: (item: SaleItem) => void;
+  onConfirm: (item: SaleItem, options?: { applyToAll?: boolean; isSplit?: boolean }) => void;
 }
 
 const MEAT_POINTS = [
@@ -24,7 +27,9 @@ const MEAT_POINTS = [
 const QUICK_OBS = ['MOLHO À PARTE', 'CORTAR AO MEIO', 'BEM TOSTADO', 'CAPRICHAR NO MOLHO'];
 
 export default function PosBurgerCustomizerModal({
+  mode = 'create',
   product,
+  initialItem = null,
   products = [],
   items = [],
   saleChannel,
@@ -36,27 +41,41 @@ export default function PosBurgerCustomizerModal({
   const [selectedMeatPoint, setSelectedMeatPoint] = useState<string>('AO PONTO');
   const [selectedRemovals, setSelectedRemovals] = useState<Set<string>>(new Set());
   const [customNotes, setCustomNotes] = useState('');
+  const [applyScope, setApplyScope] = useState<'single' | 'all'>('all');
 
   // Identifica se o produto é carne bovina ou se deve exibir ponto da carne
   const isBeefBurger = useMemo(() => {
     if (!product) return false;
-    const name = product.name.toLowerCase();
-    if (name.includes('frango') || name.includes('estados unidos') || name.includes('eua')) {
-      return false;
-    }
-    return true;
+    return isProductRequiringMeatPoint(product);
   }, [product]);
 
-  // Resetar estado quando abrir novo produto
+  // Preenchimento de estado: edição (item existente) vs criação (novo item)
   useEffect(() => {
     if (product) {
-      setSelectedComboId('none');
-      setSelectedAdditionals({});
-      setSelectedMeatPoint(isBeefBurger ? 'AO PONTO' : '');
-      setSelectedRemovals(new Set());
-      setCustomNotes('');
+      if (mode === 'edit' && initialItem) {
+        setSelectedComboId(initialItem.comboId || 'none');
+        const addMap: Record<string, number> = {};
+        if (Array.isArray(initialItem.additionals)) {
+          for (const a of initialItem.additionals) {
+            const key = a.id || a.productId || a.name;
+            if (key) addMap[key] = a.quantity || 1;
+          }
+        }
+        setSelectedAdditionals(addMap);
+        setSelectedMeatPoint(initialItem.meatPoint || (isBeefBurger ? getDefaultMeatPoint(product) : ''));
+        setSelectedRemovals(new Set(initialItem.removals || []));
+        setCustomNotes(initialItem.notes || '');
+        setApplyScope(initialItem.quantity > 1 ? 'single' : 'all');
+      } else {
+        setSelectedComboId('none');
+        setSelectedAdditionals({});
+        setSelectedMeatPoint(isBeefBurger ? getDefaultMeatPoint(product) : '');
+        setSelectedRemovals(new Set());
+        setCustomNotes('');
+        setApplyScope('all');
+      }
     }
-  }, [product, isBeefBurger]);
+  }, [product, initialItem, mode, isBeefBurger]);
 
   // Combos promocionais dinâmicos a partir do catálogo real sem ofertas ou preços fixos de fallback
   const availableCombos = useMemo(() => {
@@ -306,6 +325,8 @@ export default function PosBurgerCustomizerModal({
   };
 
   const handleSave = () => {
+    if (!product) return;
+
     const additionalsList: SaleItemAdditional[] = [];
     for (const add of availableAdditionals) {
       const qty = selectedAdditionals[add.id] || 0;
@@ -321,13 +342,22 @@ export default function PosBurgerCustomizerModal({
     }
 
     const comboName = selectedComboObj ? selectedComboObj.rawName : undefined;
+    const isGift = Boolean(initialItem?.isGift);
+    const unitPrice = isGift ? 0 : totalPrice;
+    const originalPrice = isGift ? totalPrice : (initialItem?.originalPrice || undefined);
 
-    const newItem: SaleItem = {
-      id: Math.random().toString(36).substring(2, 9),
+    const isSplitting = mode === 'edit' && applyScope === 'single' && (initialItem?.quantity || 1) > 1;
+
+    const savedItem: SaleItem = {
+      id: (!isSplitting && initialItem?.id) ? initialItem.id : generateCartItemId(),
       productId: product.id,
       productName: product.name,
-      quantity: 1,
-      unitPrice: totalPrice,
+      quantity: isSplitting ? 1 : (mode === 'edit' ? (initialItem?.quantity || 1) : 1),
+      unitPrice,
+      originalPrice,
+      isGift,
+      giftReason: initialItem?.giftReason,
+      giftNotes: initialItem?.giftNotes,
       comboId: selectedComboObj ? selectedComboObj.id : undefined,
       combo: comboName,
       comboPrice: comboPrice > 0 ? comboPrice : undefined,
@@ -337,7 +367,10 @@ export default function PosBurgerCustomizerModal({
       notes: customNotes.trim() ? customNotes.trim().toUpperCase() : undefined,
     };
 
-    onConfirm(newItem);
+    onConfirm(savedItem, {
+      applyToAll: applyScope === 'all',
+      isSplit: isSplitting,
+    });
   };
 
   const selectedAdditionalsCount = Object.values(selectedAdditionals).reduce((a, b) => a + b, 0);
@@ -346,11 +379,56 @@ export default function PosBurgerCustomizerModal({
     <Dialog
       open={!!product}
       onClose={onClose}
-      title={product.name}
-      description={`Personalização de Hambúrguer • Preço Base: R$ ${basePrice.toFixed(2)}`}
+      title={mode === 'edit' ? `Editar: ${product?.name}` : (product?.name || 'Personalização')}
+      description={
+        mode === 'edit'
+          ? `Ajuste a composição deste item na comanda • Preço Base: R$ ${basePrice.toFixed(2)}`
+          : `Personalização de Hambúrguer • Preço Base: R$ ${basePrice.toFixed(2)}`
+      }
       size="lg"
     >
       <div className="space-y-4 py-1 text-slate-200">
+        {/* Banner de Desmembramento quando o item em edição possui quantidade > 1 */}
+        {mode === 'edit' && initialItem && initialItem.quantity > 1 && (
+          <div className="bg-slate-900 border border-amber-500/40 rounded-xl p-3 space-y-2">
+            <span className="text-[11px] font-black uppercase text-amber-300 flex items-center gap-1.5">
+              <GitFork size={14} className="text-amber-400" />
+              Esta linha possui {initialItem.quantity} unidades do item:
+            </span>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setApplyScope('single')}
+                className={`p-2.5 rounded-lg font-bold text-left border transition-all cursor-pointer flex flex-col justify-between ${
+                  applyScope === 'single'
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-xs'
+                    : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <span className="text-[11px] font-black">✨ Personalizar apenas 1 unidade</span>
+                <span className={`text-[10px] mt-1 ${applyScope === 'single' ? 'text-slate-900' : 'text-slate-400'}`}>
+                  Desmembra 1 unidade para esta receita, mantendo as outras {initialItem.quantity - 1} intactas
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setApplyScope('all')}
+                className={`p-2.5 rounded-lg font-bold text-left border transition-all cursor-pointer flex flex-col justify-between ${
+                  applyScope === 'all'
+                    ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-xs'
+                    : 'bg-slate-950 text-slate-300 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <span className="text-[11px] font-black">🔄 Alterar todas as {initialItem.quantity} unidades</span>
+                <span className={`text-[10px] mt-1 ${applyScope === 'all' ? 'text-slate-900' : 'text-slate-400'}`}>
+                  Aplica esta personalização em todas as {initialItem.quantity} unidades juntas
+                </span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Seção 1: Combos Promocionais */}
         <div>
           <div className="flex items-center justify-between mb-2">
@@ -644,7 +722,18 @@ export default function PosBurgerCustomizerModal({
               onClick={handleSave}
               className="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl font-bold text-xs shadow-md shadow-emerald-600/20 transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
             >
-              <Plus size={15} /> Adicionar ao Pedido
+              {mode === 'edit' ? (
+                <>
+                  <Check size={15} />
+                  {applyScope === 'single' && (initialItem?.quantity || 1) > 1
+                    ? 'Salvar 1 Unidade Desmembrada'
+                    : 'Salvar Alterações'}
+                </>
+              ) : (
+                <>
+                  <Plus size={15} /> Adicionar ao Pedido
+                </>
+              )}
             </button>
           </div>
         </div>
