@@ -1,15 +1,18 @@
-﻿'use client';
-import React, { useEffect } from 'react';
+'use client';
+import React, { useEffect, useState } from 'react';
 import { Sale } from '@/lib/store';
-import { CheckCircle2, Printer, Plus, X, Flame, Utensils, Truck, ShoppingBag, AlertCircle } from 'lucide-react';
+import { CheckCircle2, Printer, Plus, X, Flame, Utensils, Truck, ShoppingBag, AlertCircle, Eye, Check } from 'lucide-react';
 
 interface SaleSuccessModalProps {
   sale: Sale;
   trocoInfo?: { valorRecebido: number; troco: number } | null;
   onClose: () => void;
-  onPrintThermal?: () => void;
+  onPrintThermal?: () => void; // Ação rápida: Imprime cozinha diretamente (1 clique / P)
+  onViewReceipt?: () => void; // Ação secundária: Visualizar Cupom / Outras Vias
   onNewOrder: () => void;
   onViewHistory?: () => void;
+  isQuickPrinting?: boolean;
+  quickPrintSuccess?: boolean;
 }
 
 export default function SaleSuccessModal({
@@ -17,10 +20,15 @@ export default function SaleSuccessModal({
   trocoInfo,
   onClose,
   onPrintThermal,
+  onViewReceipt,
   onNewOrder,
-  onViewHistory
+  onViewHistory,
+  isQuickPrinting = false,
+  quickPrintSuccess = false,
 }: SaleSuccessModalProps) {
-  // Atalhos de teclado: Enter / Space para Novo Atendimento, P para Imprimir, Esc para fechar
+  const [hasTriggeredPrint, setHasTriggeredPrint] = useState(false);
+
+  // Atalhos de teclado: P para Imprimir Cozinha, V para Visualizar, Enter para Novo Atendimento, Esc para fechar
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -28,7 +36,13 @@ export default function SaleSuccessModal({
         onClose();
       } else if (e.key === 'p' || e.key === 'P') {
         e.preventDefault();
-        if (onPrintThermal) onPrintThermal();
+        if (onPrintThermal && !isQuickPrinting && !hasTriggeredPrint) {
+          setHasTriggeredPrint(true);
+          onPrintThermal();
+        }
+      } else if (e.key === 'v' || e.key === 'V') {
+        e.preventDefault();
+        if (onViewReceipt) onViewReceipt();
       } else if (e.key === 'Enter') {
         e.preventDefault();
         onNewOrder();
@@ -36,7 +50,13 @@ export default function SaleSuccessModal({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, onPrintThermal, onNewOrder]);
+  }, [onClose, onPrintThermal, onViewReceipt, onNewOrder, isQuickPrinting, hasTriggeredPrint]);
+
+  const handleQuickPrint = () => {
+    if (isQuickPrinting || hasTriggeredPrint) return;
+    setHasTriggeredPrint(true);
+    onPrintThermal?.();
+  };
 
   const shortId = sale.id.slice(0, 6).toUpperCase();
   const isPickupPending = sale.paymentStatus === 'pendente_retirada' || sale.paymentMethod === 'retirada';
@@ -160,34 +180,68 @@ export default function SaleSuccessModal({
           </span>
         </div>
 
-        {/* Ações Principais */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2">
-          {onPrintThermal && (
+        {/* Ações Principais (Despacho Rápido por 1 Botão & Novo Atendimento) */}
+        <div className="space-y-2 pt-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            {onPrintThermal && (
+              <button
+                type="button"
+                onClick={handleQuickPrint}
+                disabled={isQuickPrinting || hasTriggeredPrint}
+                className={`py-3 px-4 rounded-2xl font-black text-xs flex items-center justify-center gap-2 border transition-all shadow-md ${
+                  quickPrintSuccess || hasTriggeredPrint
+                    ? 'bg-cyan-950/80 border-cyan-500/60 text-cyan-300 cursor-default'
+                    : isQuickPrinting
+                      ? 'bg-slate-800 border-slate-700 text-slate-400 cursor-wait'
+                      : 'bg-slate-800 hover:bg-slate-700 hover:border-cyan-400 text-white border-slate-700 cursor-pointer'
+                }`}
+                title="Atalho: Tecla P"
+              >
+                {quickPrintSuccess || hasTriggeredPrint ? (
+                  <>
+                    <Check size={16} className="text-cyan-400" /> Comanda Despachada!
+                  </>
+                ) : isQuickPrinting ? (
+                  <>
+                    <Printer size={16} className="text-cyan-400 animate-spin" /> Enviando...
+                  </>
+                ) : (
+                  <>
+                    <Printer size={16} className="text-cyan-400" /> Imprimir Cozinha (P)
+                  </>
+                )}
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={onPrintThermal}
-              className="py-3 px-4 bg-slate-800 hover:bg-slate-700 text-white rounded-2xl font-bold text-xs flex items-center justify-center gap-2 border border-slate-700 transition-all cursor-pointer shadow-md"
-              title="Atalho: Tecla P"
+              onClick={onNewOrder}
+              className="py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 transition-all cursor-pointer"
+              title="Atalho: Tecla Enter"
             >
-              <Printer size={16} className="text-cyan-400" /> Imprimir Comanda (P)
+              <Plus size={16} /> Novo Atendimento (Enter)
+            </button>
+          </div>
+
+          {/* Ação Secundária: Visualizar Cupom / Imprimir Outras Vias */}
+          {onViewReceipt && (
+            <button
+              type="button"
+              onClick={onViewReceipt}
+              className="w-full py-2 px-3 bg-slate-950/60 hover:bg-slate-800 text-slate-300 border border-slate-800 hover:border-slate-700 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+              title="Atalho: Tecla V"
+            >
+              <Eye size={14} className="text-slate-400" />
+              <span>Visualizar Cupom / Imprimir Cliente (V)</span>
             </button>
           )}
-
-          <button
-            type="button"
-            onClick={onNewOrder}
-            className="py-3 px-4 bg-emerald-600 hover:bg-emerald-500 text-white rounded-2xl font-black text-xs flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30 transition-all cursor-pointer"
-            title="Atalho: Tecla Enter"
-          >
-            <Plus size={16} /> Novo Atendimento (Enter)
-          </button>
         </div>
 
         {onViewHistory && (
           <button
             type="button"
             onClick={onViewHistory}
-            className="w-full py-1.5 text-center text-slate-500 hover:text-slate-300 text-xs font-semibold cursor-pointer transition-colors block"
+            className="w-full py-1 text-center text-slate-500 hover:text-slate-400 text-xs font-semibold cursor-pointer transition-colors block"
           >
             Ver Detalhes no Histórico de Vendas
           </button>

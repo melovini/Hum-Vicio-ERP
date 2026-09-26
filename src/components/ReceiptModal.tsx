@@ -6,6 +6,7 @@ import { printThermalElement } from '@/lib/thermal-printer';
 import { getBurgerPrintDetails } from '@/lib/production-calculator';
 import { buildKitchenTicket, formatKitchenTicketEscPos } from '@/lib/kitchen-ticket';
 import KitchenTicketView from '@/components/caixa/KitchenTicketView';
+import { getActiveCentralConfig, DEFAULT_PRINTER_PROFILE } from '@/lib/central-config';
 
 export interface OrderDiff {
   added: SaleItem[];
@@ -27,12 +28,17 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
   const [type, setType] = useState<'cozinha' | 'cliente' | 'diferencial'>(diff || sale?.orderDiff ? 'diferencial' : 'cozinha');
   const [copiedRaw, setCopiedRaw] = useState(false);
   const [isPrinting, setIsPrinting] = useState(false);
+  const centralConfig = useMemo(() => getActiveCentralConfig(), []);
+  const storeName = centralConfig.receiptTemplate?.storeName || 'HUM VÍCIO HAMBURGUERIA';
+  const storeCnpj = centralConfig.receiptTemplate?.storeCnpj || '32.588.610/0001-44';
+  const printerProfile = centralConfig.printerProfile || DEFAULT_PRINTER_PROFILE;
+
   const [showMontagem, setShowMontagem] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem('hum_vicio_print_show_montagem');
-      return saved !== null ? saved === 'true' : false;
+      if (saved !== null) return saved === 'true';
     }
-    return false;
+    return centralConfig.receiptTemplate?.showMontagem ?? false;
   });
 
   const handleToggleShowMontagem = (val: boolean) => {
@@ -50,13 +56,18 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
   const allProducts = (products && products.length > 0) ? products : (inventory.products || []);
   const allInventoryItems = (inventoryItems && inventoryItems.length > 0) ? inventoryItems : (inventory.items || []);
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (isPrinting) return;
     setIsPrinting(true);
-    printThermalElement('thermal-receipt-printable', `Comprovante #${sale.id.slice(0, 6).toUpperCase()} - Hum Vicio`);
+    await printThermalElement('thermal-receipt-printable', {
+      title: `Comprovante #${sale.id.slice(0, 6).toUpperCase()} - ${storeName}`,
+      printerProfile,
+      onComplete: () => setIsPrinting(false),
+      onError: () => setIsPrinting(false),
+    });
     setTimeout(() => {
       setIsPrinting(false);
-    }, 2500);
+    }, 1500);
   };
 
   const formattedDate = new Date(sale.date).toLocaleDateString('pt-BR');
@@ -83,8 +94,8 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
     const subDivider = '----------------------------------------\n';
     let text = '';
 
-    text += '          HUM VICIO HAMBURGUERIA        \n';
-    text += '           CNPJ: 32.588.610/0001-44     \n';
+    text += `          ${storeName.toUpperCase().slice(0, 32)}\n`;
+    text += `           CNPJ: ${storeCnpj}\n`;
     text += divider;
     text += '    CUPOM NAO FISCAL DE CONFERENCIA     \n';
     text += `PEDIDO #${sale.id.slice(0, 6).toUpperCase()} • ${sale.channel.toUpperCase()}\n`;
@@ -227,7 +238,7 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
               /* --- VIA DO CLIENTE --- */
               <div className="space-y-3">
                 <div className="text-center border-b-2 border-dashed border-black pb-3">
-                  <h3 className="font-extrabold text-base uppercase tracking-wider">HUM VÍCIO HAMBURGUERIA</h3>
+                  <h3 className="font-extrabold text-base uppercase tracking-wider">{storeName}</h3>
                   <p className="text-[10px]">CUPOM NÃO FISCAL DE CONFERÊNCIA</p>
                   <p className="text-xs font-bold mt-1">PEDIDO #{sale.id.slice(0, 6).toUpperCase()} • {sale.channel.toUpperCase()}</p>
                   {sale.customerName && (
@@ -319,10 +330,10 @@ export default function ReceiptModal({ sale, diff, products, inventoryItems, onC
                 </div>
 
                 <div className="text-center text-[10px] pt-2 border-t border-dashed border-black mt-2 space-y-0.5">
-                  <p className="font-bold text-xs uppercase tracking-wider">HUM VÍCIO HAMBURGUERIA</p>
-                  <p className="font-bold text-[10px]">CNPJ: 32.588.610/0001-44</p>
+                  <p className="font-bold text-xs uppercase tracking-wider">{storeName}</p>
+                  <p className="font-bold text-[10px]">CNPJ: {storeCnpj}</p>
                   <p className="pt-1 font-semibold">Obrigado pela preferência!</p>
-                  <p>Volte Sempre ao Hum Vício! 🍔</p>
+                  <p>Volte Sempre! 🍔</p>
                 </div>
               </div>
             )}

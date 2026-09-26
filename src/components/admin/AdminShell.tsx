@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import {
   ArrowLeft, BarChart3, BookOpen, Boxes, Calculator, ChevronLeft, ChevronRight,
   ClipboardCheck, ContactRound, FileCheck2, LayoutGrid, Menu, PackageSearch,
-  ReceiptText, ShieldCheck, ShoppingCart, Tags, Truck, UsersRound,
+  Printer, ReceiptText, ShieldCheck, ShoppingCart, Tags, Truck, UsersRound,
 } from 'lucide-react';
 import SlidingSheet from '@/components/ui/SlidingSheet';
 import { IconButton } from '@/components/ui/IconButton';
@@ -37,6 +37,7 @@ const groups: NavGroup[] = [
   { label: 'Operação e equipe', items: [
     { href: '/admin/mesas', label: 'Layout do salão', icon: LayoutGrid },
     { href: '/admin/checklists', label: 'Checklists', icon: ClipboardCheck },
+    { href: '/admin/configuracoes-impressao', label: 'Impressão e comanda', icon: Printer },
     { href: '/admin/colaboradores', label: 'Colaboradores', icon: UsersRound, adminOnly: true },
     { href: '/admin/auditoria', label: 'Auditoria', icon: ShieldCheck, adminOnly: true },
   ] },

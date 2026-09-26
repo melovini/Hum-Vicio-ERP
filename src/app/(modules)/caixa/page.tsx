@@ -56,6 +56,8 @@ import TrainingBanner from '@/components/TrainingBanner';
 import TrainingExercisesModal from '@/components/TrainingExercisesModal';
 import QuickHelpModal from '@/components/QuickHelpModal';
 import ParkedOrdersBar from '@/components/ParkedOrdersBar';
+import { enqueuePrintJob } from '@/lib/print-service';
+import { getActiveCentralConfig } from '@/lib/central-config';
 
 // Subcomponentes operacionais das 3 Zonas e Modais
 import PosCatalogZone from '@/components/caixa/PosCatalogZone';
@@ -154,6 +156,8 @@ export default function CaixaPage() {
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [lastCompletedSale, setLastCompletedSale] = useState<Sale | null>(null);
   const [trocoDetails, setTrocoDetails] = useState<{ valorRecebido: number; troco: number } | null>(null);
+  const [isQuickPrinting, setIsQuickPrinting] = useState(false);
+  const [quickPrintSuccess, setQuickPrintSuccess] = useState(false);
 
   // Diálogos de confirmação acessíveis
   const [isConfirmClearCartOpen, setIsConfirmClearCartOpen] = useState(false);
@@ -874,6 +878,31 @@ export default function CaixaPage() {
 
       setLastCompletedSale(createdSale);
       setShowSuccessModal(true);
+      setQuickPrintSuccess(false);
+
+      // Despacho automático se configurado (Seção 5 do Plano Técnico)
+      try {
+        const centralCfg = getActiveCentralConfig();
+        if (centralCfg.receiptTemplate?.autoPrintOnFinish) {
+          enqueuePrintJob({
+            sale: createdSale,
+            ticketType: 'cozinha',
+            products,
+            inventoryItems: items,
+            operator: currentUserSession.userName || 'Caixa',
+          }).then(res => {
+            if (res.success) {
+              setQuickPrintSuccess(true);
+              notify({
+                title: 'Comanda Auto-Impressa',
+                description: `Enviada para a cozinha (#${createdSale.id.slice(0, 6).toUpperCase()})`,
+                tone: 'success',
+              });
+            }
+          }).catch(err => console.warn('[AutoPrint] Erro na auto-impressão:', err));
+        }
+      } catch {}
+
       notify({
         title: 'Venda Concluída com Sucesso!',
         description: `Comanda #${createdSale.id.slice(0, 6).toUpperCase()} • R$ ${createdSale.total.toFixed(2)}`,
@@ -887,6 +916,42 @@ export default function CaixaPage() {
       });
     } finally {
       setIsSubmittingOrder(false);
+    }
+  };
+
+  const handleQuickPrintKitchen = async (sale: Sale) => {
+    if (isQuickPrinting) return;
+    setIsQuickPrinting(true);
+    try {
+      const res = await enqueuePrintJob({
+        sale,
+        ticketType: 'cozinha',
+        products,
+        inventoryItems: items,
+        operator: currentUserSession.userName || 'Caixa',
+      });
+      if (res.success) {
+        setQuickPrintSuccess(true);
+        notify({
+          title: 'Comanda Despachada!',
+          description: `Pedido #${sale.id.slice(0, 6).toUpperCase()} enviado para a cozinha.`,
+          tone: 'success',
+        });
+      } else {
+        notify({
+          title: 'Aviso de Impressão',
+          description: res.error || 'Não foi possível imprimir.',
+          tone: 'warning',
+        });
+      }
+    } catch (err: any) {
+      notify({
+        title: 'Falha na Impressão',
+        description: err?.message || 'Erro ao despachar trabalho para a impressora.',
+        tone: 'danger',
+      });
+    } finally {
+      setIsQuickPrinting(false);
     }
   };
 
@@ -1746,18 +1811,26 @@ export default function CaixaPage() {
         />
       )}
 
-      {/* Confirmação de Venda Finalizada com Troco */}
+      {/* Confirmação de Venda Finalizada com Troco & Despacho Rápido */}
       {showSuccessModal && lastCompletedSale && (
         <SaleSuccessModal
           sale={lastCompletedSale}
           trocoInfo={trocoDetails}
-          onClose={() => setShowSuccessModal(false)}
-          onPrintThermal={() => {
+          isQuickPrinting={isQuickPrinting}
+          quickPrintSuccess={quickPrintSuccess}
+          onClose={() => {
             setShowSuccessModal(false);
+            setQuickPrintSuccess(false);
+          }}
+          onPrintThermal={() => handleQuickPrintKitchen(lastCompletedSale)}
+          onViewReceipt={() => {
+            setShowSuccessModal(false);
+            setQuickPrintSuccess(false);
             setSelectedSaleToPrint(lastCompletedSale);
           }}
           onNewOrder={() => {
             setShowSuccessModal(false);
+            setQuickPrintSuccess(false);
             if (cart.length > 0 || customerName.trim().length > 0) {
               handleCreateNewDraft();
             }

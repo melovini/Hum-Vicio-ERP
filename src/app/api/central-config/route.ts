@@ -66,6 +66,8 @@ export async function POST(request: Request) {
       fixedExpenses: body.fixedExpenses || serverCentralConfig.fixedExpenses,
       subcategoriesByCategory: body.subcategoriesByCategory || serverCentralConfig.subcategoriesByCategory,
       ingredientStations: body.ingredientStations || serverCentralConfig.ingredientStations || {},
+      printerProfile: body.printerProfile || serverCentralConfig.printerProfile || DEFAULT_CENTRAL_CONFIG.printerProfile,
+      receiptTemplate: body.receiptTemplate || serverCentralConfig.receiptTemplate || DEFAULT_CENTRAL_CONFIG.receiptTemplate,
     };
 
     serverCentralConfig = updatedConfig;

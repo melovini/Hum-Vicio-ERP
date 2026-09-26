@@ -1,6 +1,48 @@
 import { FixedExpensesConfig, DEFAULT_FIXED_EXPENSES, KitchenStation } from './store/types';
 import { DEFAULT_SUBCATEGORIES_BY_CATEGORY, CustomSubcategoriesMap } from './subcategory-store';
 
+export interface PrinterProfile {
+  name: string;
+  paperWidth: '80mm' | '58mm';
+  printableWidthMm: number; // 72 for 80mm, 48 for 58mm
+  feedLines: number; // Linhas de avanço antes do corte físico (padrão 4)
+  fontSizeScale: 'compact' | 'normal' | 'large';
+}
+
+export interface ReceiptTemplateConfig {
+  showMontagem: boolean;
+  showCustomer: boolean;
+  showOrderNumber: boolean;
+  showOrderType: boolean;
+  highlightRemovals: boolean;
+  highlightNotes: boolean;
+  showStationSummary: boolean;
+  storeName: string;
+  storeCnpj: string;
+  autoPrintOnFinish: boolean;
+}
+
+export const DEFAULT_PRINTER_PROFILE: PrinterProfile = {
+  name: 'Térmica 80mm Padrão',
+  paperWidth: '80mm',
+  printableWidthMm: 72,
+  feedLines: 4,
+  fontSizeScale: 'normal',
+};
+
+export const DEFAULT_RECEIPT_TEMPLATE: ReceiptTemplateConfig = {
+  showMontagem: false,
+  showCustomer: true,
+  showOrderNumber: true,
+  showOrderType: true,
+  highlightRemovals: true,
+  highlightNotes: true,
+  showStationSummary: true,
+  storeName: 'Hum Vício Hamburgueria',
+  storeCnpj: '32.588.610/0001-44',
+  autoPrintOnFinish: false,
+};
+
 export interface CentralStoreConfig {
   version: number;
   updatedAt: string;
@@ -9,6 +51,8 @@ export interface CentralStoreConfig {
   fixedExpenses: FixedExpensesConfig;
   subcategoriesByCategory: CustomSubcategoriesMap;
   ingredientStations: Record<string, KitchenStation>;
+  printerProfile: PrinterProfile;
+  receiptTemplate: ReceiptTemplateConfig;
 }
 
 export const CENTRAL_CONFIG_STORAGE_KEY = 'hum_vicio_central_store_config_v1';
@@ -21,6 +65,8 @@ export const DEFAULT_CENTRAL_CONFIG: CentralStoreConfig = {
   fixedExpenses: DEFAULT_FIXED_EXPENSES,
   subcategoriesByCategory: DEFAULT_SUBCATEGORIES_BY_CATEGORY,
   ingredientStations: {},
+  printerProfile: DEFAULT_PRINTER_PROFILE,
+  receiptTemplate: DEFAULT_RECEIPT_TEMPLATE,
 };
 
 /**
@@ -36,6 +82,15 @@ export function migrateLegacyLocalConfig(existingStorage?: Storage): CentralStor
     if (centralRaw) {
       const parsed = JSON.parse(centralRaw);
       if (parsed && typeof parsed.version === 'number') {
+        // Migração suave de template de impressão se ausente
+        let template = parsed.receiptTemplate ? { ...DEFAULT_RECEIPT_TEMPLATE, ...parsed.receiptTemplate } : { ...DEFAULT_RECEIPT_TEMPLATE };
+        const legacyShowMontagem = store.getItem('hum_vicio_print_show_montagem');
+        if (legacyShowMontagem !== null && !parsed.receiptTemplate) {
+          template.showMontagem = legacyShowMontagem === 'true';
+        }
+
+        const profile = parsed.printerProfile ? { ...DEFAULT_PRINTER_PROFILE, ...parsed.printerProfile } : { ...DEFAULT_PRINTER_PROFILE };
+
         return {
           version: parsed.version || 1,
           updatedAt: parsed.updatedAt || new Date().toISOString(),
@@ -44,6 +99,8 @@ export function migrateLegacyLocalConfig(existingStorage?: Storage): CentralStor
           fixedExpenses: parsed.fixedExpenses || DEFAULT_FIXED_EXPENSES,
           subcategoriesByCategory: parsed.subcategoriesByCategory || DEFAULT_SUBCATEGORIES_BY_CATEGORY,
           ingredientStations: parsed.ingredientStations || {},
+          printerProfile: profile,
+          receiptTemplate: template,
         };
       }
     }
@@ -79,6 +136,12 @@ export function migrateLegacyLocalConfig(existingStorage?: Storage): CentralStor
       } catch {}
     }
 
+    const legacyShowMontagem = store.getItem('hum_vicio_print_show_montagem');
+    const legacyTemplate: ReceiptTemplateConfig = {
+      ...DEFAULT_RECEIPT_TEMPLATE,
+      showMontagem: legacyShowMontagem !== null ? legacyShowMontagem === 'true' : false,
+    };
+
     const migrated: CentralStoreConfig = {
       version: 1,
       updatedAt: new Date().toISOString(),
@@ -87,6 +150,8 @@ export function migrateLegacyLocalConfig(existingStorage?: Storage): CentralStor
       fixedExpenses: legacyExpenses,
       subcategoriesByCategory: legacySubcategories,
       ingredientStations: legacyStations,
+      printerProfile: DEFAULT_PRINTER_PROFILE,
+      receiptTemplate: legacyTemplate,
     };
 
     store.setItem(CENTRAL_CONFIG_STORAGE_KEY, JSON.stringify(migrated));
@@ -162,6 +227,9 @@ export function publishCentralConfig(
       }
       if (nextConfig.ingredientStations) {
         localStorage.setItem('hum_vicio_ingredient_stations_map', JSON.stringify(nextConfig.ingredientStations));
+      }
+      if (nextConfig.receiptTemplate) {
+        localStorage.setItem('hum_vicio_print_show_montagem', String(nextConfig.receiptTemplate.showMontagem));
       }
 
       // Notifica abas e componentes locais
