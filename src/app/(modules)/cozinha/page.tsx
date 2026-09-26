@@ -668,10 +668,7 @@ export default function CozinhaKDSPage() {
     if (item.productionSnapshot?.structuredProduction) {
       details.structuredProduction = item.productionSnapshot.structuredProduction;
     } else if (kitchenComponents && kitchenComponents.length > 0) {
-      const prod = products.find(p => p.id === item.productId);
-      if (prod) {
-        details.structuredProduction = buildSaleItemKitchenSnapshot(item, products, items, kitchenComponents);
-      }
+      details.structuredProduction = buildSaleItemKitchenSnapshot(item, products, items, kitchenComponents);
     }
     return details;
   };
@@ -759,7 +756,9 @@ export default function CozinhaKDSPage() {
         otherItems: structuredReqs.chapa.otherItems,
         status: structuredReqs.chapa.status,
         totalEggs: structuredReqs.chapa.otherItems.filter(i => i.componentId === 'cmp-ovo').reduce((sum, i) => sum + i.count, 0),
-        burgerList: structuredReqs.chapa.burgersBreakdown.map(i => i.label),
+        burgerList: Object.keys(burgerCounts).length > 0
+          ? Object.entries(burgerCounts).map(([name, qty]) => `${qty}x ${name}`)
+          : structuredReqs.chapa.burgersBreakdown.map(i => i.label),
         points: Object.entries(meatPointsMap).map(([pt, qty]) => `${qty}x ${pt}`)
       },
       fritadeira: {
@@ -1441,12 +1440,12 @@ export default function CozinhaKDSPage() {
                       </span>
                       {kitchenStationsSummary.chapa.burgersBreakdown.map((b, idx) => (
                         <span key={idx} className="px-2.5 py-0.5 bg-amber-500/20 border border-amber-500/40 text-amber-200 font-black text-xs rounded-lg">
-                          🔥 {b.count}x {b.label}
+                          🔥 {b.label}
                         </span>
                       ))}
                       {kitchenStationsSummary.chapa.otherItems?.map((o, idx) => (
                         <span key={`other-${idx}`} className="px-2.5 py-0.5 bg-amber-600/20 border border-amber-500/30 text-amber-300 font-bold text-xs rounded-lg">
-                          🍳 {o.count}x {o.label}
+                          🍳 {o.label}
                         </span>
                       ))}
                     </div>
@@ -1501,7 +1500,7 @@ export default function CozinhaKDSPage() {
                       </span>
                       {kitchenStationsSummary.fritadeira.itemsBreakdown.map((item, idx) => (
                         <span key={idx} className="px-2.5 py-0.5 bg-yellow-500/20 border border-yellow-500/40 text-yellow-200 font-black text-xs rounded-lg">
-                          🍟 {item.count}x {item.label}
+                          🍟 {item.label}
                         </span>
                       ))}
                     </div>

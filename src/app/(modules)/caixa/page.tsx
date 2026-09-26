@@ -66,6 +66,7 @@ import { createCartItemFromProduct, addOrMergeCartItem, updateCartItemInList } f
 import PosCheckoutZone from '@/components/caixa/PosCheckoutZone';
 import PosBurgerCustomizerModal from '@/components/caixa/PosBurgerCustomizerModal';
 import PosGiftModal from '@/components/caixa/PosGiftModal';
+import PosItemNotesModal from '@/components/caixa/PosItemNotesModal';
 import PosCashShiftModal from '@/components/caixa/PosCashShiftModal';
 import PosCancelSaleModal from '@/components/caixa/PosCancelSaleModal';
 import PosSettlementModal from '@/components/caixa/PosSettlementModal';
@@ -142,7 +143,8 @@ export default function CaixaPage() {
   }>({ role: null, userName: '' });
   const [selectedBurgerForConfig, setSelectedBurgerForConfig] = useState<Product | null>(null);
   const [editingCartItem, setEditingCartItem] = useState<SaleItem | null>(null);
-  const [giftModalItemIndex, setGiftModalItemIndex] = useState<number | null>(null);
+  const [giftModalItemId, setGiftModalItemId] = useState<string | null>(null);
+  const [notesModalItemId, setNotesModalItemId] = useState<string | null>(null);
   const [cashShiftMode, setCashShiftMode] = useState<'open' | 'close' | 'quick_check' | null>(null);
   const [saleToCancel, setSaleToCancel] = useState<Sale | null>(null);
   const [cancelReasonInput, setCancelReasonInput] = useState('Desistência do cliente antes do preparo');
@@ -636,7 +638,8 @@ export default function CaixaPage() {
         setShowNavigationModal(false);
         setSelectedBurgerForConfig(null);
         setEditingCartItem(null);
-        setGiftModalItemIndex(null);
+        setGiftModalItemId(null);
+        setNotesModalItemId(null);
         setCashShiftMode(null);
         setSaleToCancel(null);
         setSettlementModal(null);
@@ -1350,13 +1353,13 @@ export default function CaixaPage() {
                   onUpdateQty={handleUpdateCartQty}
                   onRemoveItem={handleRemoveCartItem}
                   onEditItem={handleEditCartItem}
-                  onOpenGiftModal={idx => setGiftModalItemIndex(idx)}
-                  onOpenNotesPrompt={idx => {
-                    const current = cart[idx]?.notes || '';
-                    const note = window.prompt('Observação para a cozinha:', current);
-                    if (note !== null) {
-                      setCart(cart.map((item, i) => i === idx ? { ...item, notes: note.trim().toUpperCase() || undefined } : item));
-                    }
+                  onOpenGiftModal={(idx, itemId) => {
+                    const targetId = itemId || cart[idx]?.id;
+                    if (targetId) setGiftModalItemId(targetId);
+                  }}
+                  onOpenNotesPrompt={(idx, itemId) => {
+                    const targetId = itemId || cart[idx]?.id;
+                    if (targetId) setNotesModalItemId(targetId);
                   }}
                   onCreateNewDraft={handleCreateNewDraft}
                   onClearCart={() => setIsConfirmClearCartOpen(true)}
@@ -1599,13 +1602,13 @@ export default function CaixaPage() {
 
       {/* Modal de Brinde / Cortesia */}
       <PosGiftModal
-        item={giftModalItemIndex !== null ? cart[giftModalItemIndex] : null}
-        isOpen={giftModalItemIndex !== null}
-        onClose={() => setGiftModalItemIndex(null)}
+        item={giftModalItemId ? (cart.find(it => it.id === giftModalItemId) || null) : null}
+        isOpen={Boolean(giftModalItemId)}
+        onClose={() => setGiftModalItemId(null)}
         onConfirm={(reason, notes) => {
-          if (giftModalItemIndex !== null) {
-            setCart(cart.map((item, idx) => {
-              if (idx === giftModalItemIndex) {
+          if (giftModalItemId) {
+            setCart(prev => prev.map(item => {
+              if (item.id === giftModalItemId) {
                 return {
                   ...item,
                   isGift: true,
@@ -1617,14 +1620,14 @@ export default function CaixaPage() {
               }
               return item;
             }));
-            setGiftModalItemIndex(null);
+            setGiftModalItemId(null);
             notify({ title: 'Item marcado como brinde (R$ 0,00)', tone: 'success' });
           }
         }}
         onRemoveGift={() => {
-          if (giftModalItemIndex !== null) {
-            setCart(cart.map((item, idx) => {
-              if (idx === giftModalItemIndex) {
+          if (giftModalItemId) {
+            setCart(prev => prev.map(item => {
+              if (item.id === giftModalItemId) {
                 return {
                   ...item,
                   isGift: false,
@@ -1635,8 +1638,33 @@ export default function CaixaPage() {
               }
               return item;
             }));
-            setGiftModalItemIndex(null);
+            setGiftModalItemId(null);
             notify({ title: 'Condição de brinde removida', tone: 'info' });
+          }
+        }}
+      />
+
+      {/* Modal de Observação do Item */}
+      <PosItemNotesModal
+        item={notesModalItemId ? (cart.find(it => it.id === notesModalItemId) || null) : null}
+        isOpen={Boolean(notesModalItemId)}
+        onClose={() => setNotesModalItemId(null)}
+        onSaveNotes={(newNotes) => {
+          if (notesModalItemId) {
+            setCart(prev => prev.map(item => {
+              if (item.id === notesModalItemId) {
+                return {
+                  ...item,
+                  notes: newNotes,
+                };
+              }
+              return item;
+            }));
+            if (newNotes) {
+              notify({ title: 'Observação da cozinha salva', tone: 'info' });
+            } else {
+              notify({ title: 'Observação removida', tone: 'info' });
+            }
           }
         }}
       />
