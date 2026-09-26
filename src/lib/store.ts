@@ -33,6 +33,14 @@ import { inferDefaultSubcategory } from './recipe-helpers';
 import { getFallbackSubcategoryForCategory } from './subcategory-store';
 import { prepareCheckoutItems } from './checkout-production';
 import { getActiveCentralConfig, publishCentralConfig } from './central-config';
+import {
+  getOfflineSalesQueueSync,
+  enqueueOfflineSale as idbEnqueueOfflineSale,
+  updateOfflineSaleInQueue as idbUpdateOfflineSaleInQueue,
+  removeOfflineSaleFromQueue as idbRemoveOfflineSaleFromQueue,
+  saveOfflineSalesQueue as idbSaveOfflineSalesQueue,
+  initOfflineOutbox,
+} from './offline-outbox';
 
 // === DOMÍNIO MODULARIZADO (Frente 5.1 - Separação de Responsabilidades) ===
 export * from './store/types';
@@ -283,48 +291,25 @@ export function saveDeliveredPickupOverride(saleId: string, deliveryData: { deli
   } catch {}
 }
 
-// === FILA DE SINCRONIZAÇÃO OFFLINE RESILIENTE (QUANDO O BANCO DE DADOS CAI) ===
-const STORAGE_OFFLINE_SALES_KEY = 'hum_vicio_offline_sales_outbox';
-
+// === FILA DE SINCRONIZAÇÃO OFFLINE RESILIENTE (INDEXEDDB COM MIGRAÇÃO TRANSPARENTE) ===
 export function getOfflineSalesQueue(): Sale[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(STORAGE_OFFLINE_SALES_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return getOfflineSalesQueueSync();
 }
 
 export function saveOfflineSalesQueue(queue: Sale[]): void {
-  if (typeof window === 'undefined') return;
-  try {
-    localStorage.setItem(STORAGE_OFFLINE_SALES_KEY, JSON.stringify(queue));
-  } catch (err) {
-    console.error('Erro ao salvar fila offline:', err);
-    throw new Error('Não foi possível salvar o pedido neste aparelho. Libere espaço ou use outro terminal; o pedido não foi confirmado.');
-  }
+  void idbSaveOfflineSalesQueue(queue);
 }
 
 export function enqueueOfflineSale(sale: Sale): void {
-  const current = getOfflineSalesQueue();
-  const exists = current.some(s => s.id === sale.id);
-  if (!exists) {
-    current.push({ ...sale, syncStatus: 'pending', isOfflineSynced: false });
-    saveOfflineSalesQueue(current);
-  }
+  void idbEnqueueOfflineSale(sale);
 }
 
 export function updateOfflineSaleInQueue(saleId: string, updates: Partial<Sale>): void {
-  const current = getOfflineSalesQueue();
-  const updated = current.map(s => s.id === saleId ? { ...s, ...updates } : s);
-  saveOfflineSalesQueue(updated);
+  void idbUpdateOfflineSaleInQueue(saleId, updates);
 }
 
 export function removeOfflineSaleFromQueue(saleId: string): void {
-  const current = getOfflineSalesQueue();
-  const filtered = current.filter(s => s.id !== saleId);
-  saveOfflineSalesQueue(filtered);
+  void idbRemoveOfflineSaleFromQueue(saleId);
 }
 
 // Drena e sincroniza as vendas offline para o Supabase quando a conexão estiver restabelecida
@@ -3586,9 +3571,9 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
   const updateReopenedOrder = async (
     saleId: string, 
     updatedSaleData: Partial<Sale>
-  ): Promise<{ success: boolean; sale?: Sale; diff?: { added: SaleItem[]; removed: SaleItem[]; modified: { item: SaleItem; oldNotes?: string; newNotes?: string }[] } }> => {
+  ): Promise<{ success: boolean; sale?: Sale; diff?: { added: SaleItem[]; removed: SaleItem[]; modified: { item: SaleItem; oldNotes?: string; newNotes?: string }[] }; error?: string }> => {
     const existingSale = sales.find(s => s.id === saleId);
-    if (!existingSale) return { success: false };
+    if (!existingSale) return { success: false, error: 'Comanda não encontrada para edição.' };
 
     const oldItems: SaleItem[] = existingSale.originalItemsSnapshot || existingSale.items || [];
     const newItems: SaleItem[] = (updatedSaleData.items || []).map(i => ({
@@ -3596,155 +3581,129 @@ export function useInventory(scope: 'caixa' | 'cozinha' | 'admin' | 'all' = 'all
       notes: i.notes?.trim() ? i.notes.trim().toUpperCase() : undefined
     }));
 
-    // 1. Calcular Adicionados
-    const added: SaleItem[] = [];
-    newItems.forEach(newItem => {
-      const matchingOld = oldItems.find(o => o.productId === newItem.productId && (o.notes || '') === (newItem.notes || ''));
-      if (!matchingOld) {
-        added.push(newItem);
-      } else if (newItem.quantity > matchingOld.quantity) {
-        added.push({ ...newItem, quantity: newItem.quantity - matchingOld.quantity });
-      }
-    });
-
-    // 2. Calcular Removidos
-    const removed: SaleItem[] = [];
-    oldItems.forEach(oldItem => {
-      const matchingNew = newItems.find(n => n.productId === oldItem.productId && (n.notes || '') === (oldItem.notes || ''));
-      if (!matchingNew) {
-        removed.push(oldItem);
-      } else if (matchingNew.quantity < oldItem.quantity) {
-        removed.push({ ...oldItem, quantity: oldItem.quantity - matchingNew.quantity });
-      }
-    });
-
-    // 3. Calcular Modificados (ex: observação alterada no mesmo lanche)
-    const modified: { item: SaleItem; oldNotes?: string; newNotes?: string }[] = [];
-    newItems.forEach(newItem => {
-      const sameProductOld = oldItems.find(o => o.productId === newItem.productId);
-      if (sameProductOld && (sameProductOld.notes || '') !== (newItem.notes || '')) {
-        modified.push({
-          item: newItem,
-          oldNotes: sameProductOld.notes,
-          newNotes: newItem.notes
-        });
-      }
-    });
-
-    const orderDiff = { added, removed, modified };
-
-    const finalizedStatus = updatedSaleData.productionStatus || existingSale.productionStatus || 'em_espera';
-    const isCurrentlyCooking = existingSale.productionStatus === 'em_producao';
-    const hasDiff = added.length > 0 || removed.length > 0 || modified.length > 0;
-
-    const finalizedSale: Sale = {
-      ...existingSale,
-      ...updatedSaleData,
-      items: newItems,
-      orderDiff,
-      originalItemsSnapshot: newItems.map(i => ({ ...i })),
-      isModifiedInKitchen: isCurrentlyCooking && hasDiff,
-      productionStatus: finalizedStatus
-    };
-
-    setSales(prev => {
-      const updated = prev.map(s => s.id === saleId ? finalizedSale : s);
-      if (typeof window !== 'undefined') {
-        try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
-      }
-      return updated;
-    });
-
-    try {
-      const updatePayload: Record<string, any> = {
-        total: finalizedSale.total,
-        subtotal: finalizedSale.subtotal,
-        discount: finalizedSale.discount,
-        delivery_fee: finalizedSale.deliveryFee,
-        customer_name: finalizedSale.customerName,
-        order_type: finalizedSale.orderType,
-        production_status: finalizedStatus
-      };
-      if (isCurrentlyCooking && hasDiff) {
-        updatePayload.delay_notes = JSON.stringify({ tag: 'KITCHEN_DIFF', orderDiff });
-      }
-      await supabase.from('sales').update(updatePayload).eq('id', saleId);
-
-      // Re-sincronizar itens na tabela sale_items com estratégia in-place antifraude (sem DELETE físico) (V03)
-      if (newItems.length > 0) {
-        const saleItemsPayload = newItems.map(i => {
-          return {
-            sale_id: saleId,
-            product_id: i.productId,
-            product_name: i.productName,
-            quantity: i.quantity,
-            unit_price: i.unitPrice,
-            original_price: i.originalPrice,
-            is_gift: i.isGift || false,
-            gift_reason: i.giftReason,
-            gift_notes: i.giftNotes,
-            combo_id: i.comboId,
-            combo: i.combo,
-            combo_price: i.comboPrice,
-            meat_point: i.meatPoint,
-            removals: i.removals || [],
-            additionals: i.additionals || [],
-            notes: i.notes,
-            recipe_version: i.recipeVersion || 1,
-            production_snapshot: i.productionSnapshot
-          };
-        });
-
-        // 1. Buscar linhas já existentes deste pedido no Supabase
-        const { data: existingRows } = await supabase
-          .from('sale_items')
-          .select('id')
-          .eq('sale_id', saleId)
-          .order('created_at', { ascending: true });
-
-        if (existingRows && existingRows.length > 0) {
-          const reusableCount = Math.min(existingRows.length, saleItemsPayload.length);
-
-          // 2. Atualizar in-place as linhas já existentes no banco (evita duplicações e atende à regra antifraude)
-          for (let i = 0; i < reusableCount; i++) {
-            await supabase
-              .from('sale_items')
-              .update(saleItemsPayload[i])
-              .eq('id', existingRows[i].id);
-          }
-
-          // 3. Se houver novos itens adicionados a mais do que as linhas anteriores, inserir somente os novos
-          if (saleItemsPayload.length > existingRows.length) {
-            const extraPayloads = saleItemsPayload.slice(existingRows.length);
-            await supabase.from('sale_items').insert(extraPayloads);
-          }
-
-          // 4. Se itens foram removidos e sobraram linhas excedentes, desvincular do pedido (sale_id = null)
-          if (existingRows.length > saleItemsPayload.length) {
-            const unneededIds = existingRows.slice(saleItemsPayload.length).map(r => r.id);
-            await supabase
-              .from('sale_items')
-              .update({ sale_id: null })
-              .in('id', unneededIds);
-          }
-        } else {
-          // Nenhuma linha prévia encontrada, insere os novos itens
-          await supabase.from('sale_items').insert(saleItemsPayload);
+    // Suporte a modo treinamento (100% isolado no navegador)
+    if (isTrainingModeActive()) {
+      // 1. Calcular Adicionados
+      const added: SaleItem[] = [];
+      newItems.forEach(newItem => {
+        const matchingOld = oldItems.find(o => o.productId === newItem.productId && (o.notes || '') === (newItem.notes || ''));
+        if (!matchingOld) {
+          added.push(newItem);
+        } else if (newItem.quantity > matchingOld.quantity) {
+          added.push({ ...newItem, quantity: newItem.quantity - matchingOld.quantity });
         }
-      }
-    } catch (e) {
-      console.warn('Erro ao salvar alteração de venda no banco:', e);
+      });
+
+      // 2. Calcular Removidos
+      const removed: SaleItem[] = [];
+      oldItems.forEach(oldItem => {
+        const matchingNew = newItems.find(n => n.productId === oldItem.productId && (n.notes || '') === (oldItem.notes || ''));
+        if (!matchingNew) {
+          removed.push(oldItem);
+        } else if (matchingNew.quantity < oldItem.quantity) {
+          removed.push({ ...oldItem, quantity: oldItem.quantity - matchingNew.quantity });
+        }
+      });
+
+      // 3. Calcular Modificados (ex: observação alterada no mesmo lanche)
+      const modified: { item: SaleItem; oldNotes?: string; newNotes?: string }[] = [];
+      newItems.forEach(newItem => {
+        const sameProductOld = oldItems.find(o => o.productId === newItem.productId);
+        if (sameProductOld && (sameProductOld.notes || '') !== (newItem.notes || '')) {
+          modified.push({
+            item: newItem,
+            oldNotes: sameProductOld.notes,
+            newNotes: newItem.notes
+          });
+        }
+      });
+
+      const orderDiff = { added, removed, modified };
+      const finalizedStatus = updatedSaleData.productionStatus || existingSale.productionStatus || 'em_espera';
+      const isCurrentlyCooking = existingSale.productionStatus === 'em_producao';
+      const hasDiff = added.length > 0 || removed.length > 0 || modified.length > 0;
+
+      const finalizedSale: Sale = {
+        ...existingSale,
+        ...updatedSaleData,
+        items: newItems,
+        orderDiff,
+        originalItemsSnapshot: newItems.map(i => ({ ...i })),
+        isModifiedInKitchen: isCurrentlyCooking && hasDiff,
+        productionStatus: finalizedStatus
+      };
+
+      setSales(prev => {
+        const updated = prev.map(s => s.id === saleId ? finalizedSale : s);
+        return updated;
+      });
+
+      const currentTraining = getTrainingSales();
+      const updatedTraining = currentTraining.map(ts => ts.id === saleId ? finalizedSale : ts);
+      saveTrainingSales(updatedTraining);
+
+      return { success: true, sale: finalizedSale, diff: orderDiff };
     }
 
-    addAuditLog(
-      'ALTERACAO_PEDIDO',
-      `Pedido #${saleId.slice(0, 6).toUpperCase()} editado e sincronizado. Delta: +${added.length} adicionados, -${removed.length} removidos, *${modified.length} modificados. Total ajustado: R$ ${finalizedSale.total.toFixed(2)}.`,
-      existingSale.reopenedBy || 'Supervisor',
-      `R$ ${existingSale.total.toFixed(2)}`,
-      `R$ ${finalizedSale.total.toFixed(2)}`
-    );
+    // Persistência Transacional Segura via Endpoint Autoritativo (/api/sales/edit)
+    try {
+      const response = await fetch('/api/sales/edit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          saleId,
+          items: newItems.length > 0 ? newItems : existingSale.items,
+          customerName: updatedSaleData.customerName ?? existingSale.customerName,
+          orderType: updatedSaleData.orderType ?? existingSale.orderType,
+          channel: updatedSaleData.channel ?? existingSale.channel,
+          discount: updatedSaleData.discount ?? existingSale.discount ?? 0,
+          discountReason: updatedSaleData.discountReason ?? existingSale.discountReason,
+          deliveryFee: updatedSaleData.deliveryFee ?? existingSale.deliveryFee ?? 0,
+          subtotal: updatedSaleData.subtotal ?? existingSale.subtotal,
+          total: updatedSaleData.total ?? existingSale.total,
+          editReason: updatedSaleData.editReason || 'Ajuste de comanda pelo operador no caixa',
+          productionStatus: updatedSaleData.productionStatus ?? existingSale.productionStatus,
+          notes: updatedSaleData.notes ?? existingSale.notes,
+        }),
+      });
 
-    return { success: true, sale: finalizedSale, diff: orderDiff };
+      const result = await response.json();
+
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || `Erro ao salvar alteração da comanda (${response.status})`);
+      }
+
+      const returnedSale = result.sale;
+      const returnedDiff = result.diff;
+
+      const finalizedSale: Sale = {
+        ...existingSale,
+        ...returnedSale,
+        items: returnedSale.items || newItems,
+        orderDiff: returnedDiff,
+        originalItemsSnapshot: (returnedSale.items || newItems).map((i: any) => ({ ...i })),
+        isModifiedInKitchen: returnedSale.isModifiedInKitchen,
+      };
+
+      setSales(prev => {
+        const updated = prev.map(s => s.id === saleId ? finalizedSale : s);
+        if (typeof window !== 'undefined') {
+          try { localStorage.setItem('hum_vicio_cached_sales', JSON.stringify(updated.slice(0, 100))); } catch {}
+        }
+        return updated;
+      });
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hum_vicio_order_modified', { detail: { saleId, diff: returnedDiff } }));
+      }
+
+      return { success: true, sale: finalizedSale, diff: returnedDiff };
+    } catch (err: any) {
+      console.error('Falha ao atualizar pedido reaberto via API:', err);
+      return { success: false, error: err.message || 'Falha na comunicação com o servidor ao editar comanda.' };
+    }
   };
 
   const addMovement = async (mov: Omit<CashMovement, 'id' | 'date'>) => {

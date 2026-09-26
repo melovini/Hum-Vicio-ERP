@@ -32,7 +32,14 @@ export function canAccessData(role, table, method, rows = []) {
   if (table === 'sales' && role === 'cozinha') return method === 'PATCH' && only(productionFields);
   if (['waste_records', 'kitchen_checklists'].includes(table)) return method === 'POST' || (table === 'kitchen_checklists' && method === 'PATCH');
   if (role === 'caixa') {
-    if (['sales', 'sale_items', 'cash_sessions', 'sessao_caixa_salao', 'salao_mesa_instancia'].includes(table)) return method === 'POST' || method === 'PATCH';
+    const cashierAllowedSalePatchFields = [
+      'production_status', 'customer_name', 'delay_notes', 'target_prep_minutes',
+      'payment_status', 'paid_at', 'paid_method', 'delivered_at',
+      'is_reopened', 'reopened_at', 'reopened_by'
+    ];
+    if (table === 'sales' && method === 'PATCH') return only(cashierAllowedSalePatchFields);
+    if (table === 'sale_items') return false; // Edição de itens exige rota transacional /api/sales/edit
+    if (['sessao_caixa_salao', 'salao_mesa_instancia'].includes(table)) return method === 'POST' || method === 'PATCH';
     if (table === 'cash_movements') return method === 'POST';
   }
   return false;

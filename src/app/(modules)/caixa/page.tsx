@@ -728,9 +728,10 @@ export default function CaixaPage() {
       notify({ title: 'Informe a justificativa do desconto antes de finalizar.', tone: 'warning' });
       return;
     }
+    const isEditingPaidSale = Boolean(editingReopenedSale && editingReopenedSale.paymentStatus === 'pago');
     const isPickupPending = orderType === 'retirada' && pickupPaymentTiming === 'retirada' && saleChannel !== 'ifood';
     const cashChange = calculateCashChange(cashReceivedInput, cartTotal);
-    if (saleMethod === 'dinheiro' && !isPickupPending && !cashChange.isEnough) {
+    if (!isEditingPaidSale && saleMethod === 'dinheiro' && !isPickupPending && !cashChange.isEnough) {
       notify({
         title: 'Valor Insuficiente',
         description: `O valor recebido em dinheiro é menor que o total da venda. Faltam R$ ${cashChange.missing.toFixed(2)}.`,
@@ -747,6 +748,75 @@ export default function CaixaPage() {
         orderType === 'mesa' ? (selectedTable ? `Mesa ${selectedTable.numero}` : 'Mesa Salão') :
         orderType === 'retirada' ? 'Cliente Balcão' : 'Cliente Delivery'
       );
+
+      // Se estiver editando uma comanda reaberta, despacha para a rota autoritativa transacional de edição
+      if (editingReopenedSale) {
+        const editRes = await updateReopenedOrder(editingReopenedSale.id, {
+          items: normalizedCart,
+          customerName: finalCustomerName,
+          orderType,
+          channel: orderType === 'mesa' ? 'balcao' : saleChannel,
+          subtotal: cartSubtotal,
+          discount: discountAmount,
+          discountReason,
+          deliveryFee: orderType === 'delivery' ? deliveryFeeAmount : 0,
+          total: cartTotal,
+          editReason: 'Ajuste de comanda pelo operador no caixa',
+        });
+
+        if (!editRes.success) {
+          throw new Error(editRes.error || 'Não foi possível salvar as alterações da comanda.');
+        }
+
+        const updatedSale = editRes.sale || {
+          ...editingReopenedSale,
+          items: normalizedCart,
+          total: cartTotal,
+          subtotal: cartSubtotal,
+          discount: discountAmount,
+          customerName: finalCustomerName,
+        };
+
+        // Resetar comanda em edição e campos do PDV
+        setEditingReopenedSale(null);
+        setDiscountInput('');
+        setDiscountReason('');
+        setDeliveryFeeInput('');
+        setCashReceivedInput('');
+        setFiscalCpfInput('');
+        setSelectedTable(null);
+        setCreditCustomerInput('');
+        setHasStoreCoupon(false);
+        setStoreCouponInput('10.00');
+        setCart([]);
+        setCustomerName('');
+
+        setLastCompletedSale(updatedSale);
+        setShowSuccessModal(true);
+        setQuickPrintSuccess(false);
+
+        // Despacho de impressão automática se configurado
+        try {
+          const centralCfg = getActiveCentralConfig();
+          if (centralCfg.receiptTemplate?.autoPrintOnFinish) {
+            enqueuePrintJob({
+              sale: updatedSale,
+              ticketType: 'cozinha',
+              products,
+              inventoryItems: items,
+              operator: currentUserSession.userName || 'Caixa',
+            }).catch(err => console.warn('[AutoPrint] Erro na auto-impressão da comanda editada:', err));
+          }
+        } catch {}
+
+        notify({
+          title: 'Edição Salva com Sucesso!',
+          description: `Comanda #${updatedSale.id.slice(0, 6).toUpperCase()} atualizada • Total: R$ ${updatedSale.total.toFixed(2)}`,
+          tone: 'success',
+        });
+
+        return;
+      }
 
       // Simulação Fiscal se houver configuração
       let fiscalDataToAttach = {};
@@ -1349,7 +1419,14 @@ export default function CaixaPage() {
                     else setSelectedTable(null);
                   }}
                   editingReopenedSale={editingReopenedSale}
-                  onCancelEditingReopenedSale={() => setEditingReopenedSale(null)}
+                  onCancelEditingReopenedSale={() => {
+                    setEditingReopenedSale(null);
+                    setCart([]);
+                    setCustomerName('');
+                    setDiscountInput('');
+                    setDiscountReason('');
+                    setDeliveryFeeInput('');
+                  }}
                   onUpdateQty={handleUpdateCartQty}
                   onRemoveItem={handleRemoveCartItem}
                   onEditItem={handleEditCartItem}
@@ -1455,6 +1532,11 @@ export default function CaixaPage() {
               setEditingReopenedSale(sale);
               setCart(sale.items || []);
               setCustomerName(sale.customerName || '');
+              if (sale.orderType) setOrderType(sale.orderType);
+              if (sale.channel) setSaleChannel(sale.channel);
+              if (sale.discount) setDiscountInput(sale.discount.toFixed(2));
+              if (sale.discountReason) setDiscountReason(sale.discountReason);
+              if (sale.deliveryFee) setDeliveryFeeInput(sale.deliveryFee.toFixed(2));
               setActiveTab('pdv');
               notify({ title: `Pedido #${sale.id.slice(0, 6)} em edição no PDV`, tone: 'info' });
             }}
@@ -1509,6 +1591,11 @@ export default function CaixaPage() {
               setEditingReopenedSale(sale);
               setCart(sale.items || []);
               setCustomerName(sale.customerName || '');
+              if (sale.orderType) setOrderType(sale.orderType);
+              if (sale.channel) setSaleChannel(sale.channel);
+              if (sale.discount) setDiscountInput(sale.discount.toFixed(2));
+              if (sale.discountReason) setDiscountReason(sale.discountReason);
+              if (sale.deliveryFee) setDeliveryFeeInput(sale.deliveryFee.toFixed(2));
               setActiveTab('pdv');
               notify({ title: `Pedido #${sale.id.slice(0, 6)} em edição no PDV`, tone: 'info' });
             }}

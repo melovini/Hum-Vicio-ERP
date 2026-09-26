@@ -284,6 +284,8 @@ export interface Sale {
   syncStatus?: 'synced' | 'pending' | 'failed';
   syncError?: string;
   idempotencyKey?: string;
+  editReason?: string;
+  notes?: string;
 }
 
 // === CUSTOS FIXOS MENSAIS ===

@@ -122,10 +122,12 @@ export default function PosCheckoutZone({
 
   const effectiveCreditCustomer = creditCustomerInput.trim() || (customerName && customerName.trim()) || '';
 
+  const isEditingPaidSale = Boolean(editingReopenedSale && editingReopenedSale.paymentStatus === 'pago');
+
   const isCheckoutDisabled = 
     cart.length === 0 || 
     isSubmittingOrder || 
-    isCashInsufficient || 
+    (!isEditingPaidSale && isCashInsufficient) || 
     (saleMethod === 'consumo_funcionario' && !selectedCollaboratorId) ||
     (saleMethod === 'fiado_vip' && !effectiveCreditCustomer);
 
